@@ -501,12 +501,15 @@ def test_a_failed_starttls_closes_the_connection(wire, monkeypatch):
         ("utf-16", lambda text: text.encode("utf-16")),
     ],
 )
-def test_a_windows_saved_env_file_still_turns_email_on(tmp_path, label, encode):
+def test_a_windows_saved_env_file_still_turns_email_on(tmp_path, monkeypatch, label, encode):
     """Notepad and PowerShell add a byte-order mark or write UTF-16. With the
     BOM read as text, the first key became "\\ufeffEMAIL_ENABLED" and email
     stayed off while the file plainly said true."""
     from app.config import env_file_encoding
 
+    # A real environment variable outranks the file; CI sets EMAIL_ENABLED.
+    monkeypatch.delenv("EMAIL_ENABLED", raising=False)
+    monkeypatch.delenv("SMTP_PORT", raising=False)
     path = tmp_path / ".env"
     path.write_bytes(encode("EMAIL_ENABLED=true\r\nSMTP_PORT=465\r\n"))
     settings = Settings(_env_file=path, _env_file_encoding=env_file_encoding(path))
