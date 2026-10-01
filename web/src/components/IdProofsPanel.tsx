@@ -21,6 +21,7 @@ import {
   fetchIdProofs,
   revealIdProof,
 } from '@/lib/api';
+import { formatInstantDate } from '@/lib/time';
 import { ID_PROOF_LABELS, type IdProof, type IdProofType, type UserRow } from '@/types';
 
 /** How long a revealed number stays on screen before hiding itself again. */
@@ -88,7 +89,7 @@ function ProofRow({ proof, onDeleted }: { proof: IdProof; onDeleted: () => void 
           </div>
           <div className="text-xs text-text-subtle">
             Purged under the retention policy on{' '}
-            {new Date(`${proof.purged_at}Z`).toLocaleDateString()}
+            {formatInstantDate(proof.purged_at)}
           </div>
         </div>
         <Badge tone="neutral">Purged</Badge>

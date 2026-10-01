@@ -18,6 +18,7 @@ from datetime import date, datetime
 from sqlalchemy import Date, Enum as SAEnum, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core import clock
 from app.core.enums import IdProofType
 from app.database import Base
 from app.models.base import TenantMixin, TimestampMixin, UTCDateTime
@@ -85,7 +86,7 @@ class IdProof(Base, TenantMixin, TimestampMixin):
 
     @property
     def is_expired(self) -> bool:
-        return bool(self.expires_on and self.expires_on < date.today())
+        return bool(self.expires_on and self.expires_on < clock.local_today())
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<IdProof {self.id} {self.proof_type} user={self.user_id}>"

@@ -25,10 +25,15 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
+from app.core import clock
 from app.core.enums import (
     AuditAction,
+    NotificationChannel,
+    NotificationStatus,
     RequestStatus,
     RequestType,
+    Role,
     RoomSharingChoice,
     TravellerStatus,
     derive_request_status,
@@ -47,7 +52,7 @@ from app.schemas.request import (
     RevisionRead,
     TravellerRead,
 )
-from app.services import audit, conflicts, costay, locations
+from app.services import audit, conflicts, costay, locations, notifications
 from app.services.seed import OTHER_PROJECT_CODE
 
 # Human labels for the diff, so a revision reads as English rather than as column
@@ -62,6 +67,8 @@ FIELD_LABELS = {
     "destination_state": "destination state",
     "hotel_state": "hotel state",
     "destination": "destination",
+    "pickup_city": "pickup city",
+    "drop_city": "drop city",
     "start_at": "departure",
     "end_at": "arrival",
     "hotel_city": "city",
@@ -140,7 +147,7 @@ def travel_date_passed(request: TravelRequest, *, today: date | None = None) -> 
     before the date went by is EXPIRED, one that was decided is simply history.
     """
     ends = request.travel_ends_on
-    return ends is not None and ends < (today or date.today())
+    return ends is not None and ends < (today or clock.local_today())
 
 
 def status_of(request: TravelRequest) -> RequestStatus:
@@ -237,19 +244,22 @@ def canonicalise_places(db: Session, tenant_id: str, body: RequestBody) -> None:
     The form lets someone type a place under "Other" when the list does not
     have it. Conflict detection and co-stay matching compare places exactly, so
     a typed "hyd" has to become the listed "Hyderabad" before anything is saved
-    or checked. A cab's pickup and drop are street addresses inside one city,
-    not places on the list, so those are only tidied.
+    or checked. A cab's pickup and drop are street addresses, not places on the
+    list, so those are only tidied - but the city each is in is canonicalised
+    like any other.
     """
     if body.request_type is RequestType.LOCAL_CAB:
         body.origin = locations.tidy(body.origin)
         body.destination = locations.tidy(body.destination)
-        return
+        pairs = (("origin_state", "pickup_city"), ("destination_state", "drop_city"))
+    else:
+        pairs = (
+            ("origin_state", "origin"),
+            ("destination_state", "destination"),
+            ("hotel_state", "hotel_city"),
+        )
 
-    for state_field, place_field in (
-        ("origin_state", "origin"),
-        ("destination_state", "destination"),
-        ("hotel_state", "hotel_city"),
-    ):
+    for state_field, place_field in pairs:
         state, place = locations.canonical(
             db, tenant_id, getattr(body, state_field), getattr(body, place_field)
         )
@@ -383,6 +393,8 @@ def to_read(
         mode=request.mode,
         origin=request.origin,
         destination=request.destination,
+        pickup_city=request.pickup_city,
+        drop_city=request.drop_city,
         start_at=request.start_at,
         end_at=request.end_at,
         hotel_city=request.hotel_city,
@@ -458,8 +470,12 @@ def clear_stale_shares(request: TravelRequest, changes: dict) -> None:
 
 def record_submission(
     db: Session, *, request: TravelRequest, actor: User, tenant_id: str, http_request=None
-) -> None:
-    """Mark a request submitted and open its revision trail at 1."""
+) -> list[int]:
+    """Mark a request submitted, open its revision trail at 1, and tell the admins.
+
+    Returns the ids of the admin emails it queued, for the caller to send once
+    the response is on its way (`notifications.deliver_queued`).
+    """
     request.is_draft = False
     request.submitted_at = naive_utcnow()
     db.flush()
@@ -479,3 +495,81 @@ def record_submission(
         actor=actor,
         request=http_request,
     )
+    return notify_admins_of_submission(db, request=request, actor=actor, tenant_id=tenant_id)
+
+
+def trip_summary(request: TravelRequest) -> str:
+    """One line a person can act on: what, where, when."""
+    if request.request_type is RequestType.HOTEL:
+        where = ", ".join(p for p in (request.hotel_city, request.hotel_state) if p)
+        when = request.check_in.strftime("%d %b %Y") if request.check_in else "dates to be set"
+        if request.check_out:
+            when += f" to {request.check_out.strftime('%d %b %Y')}"
+        return f"Hotel in {where}, {when}"
+    kind = "Cab" if request.request_type is RequestType.LOCAL_CAB else str(request.mode or "Travel").title()
+    when = request.start_at.strftime("%d %b %Y, %H:%M") if request.start_at else "time to be set"
+    return f"{kind}: {request.route_label(' to ')}, {when}"
+
+
+def notify_admins_of_submission(
+    db: Session, *, request: TravelRequest, actor: User, tenant_id: str
+) -> list[int]:
+    """Tell every admin a request is waiting for a decision.
+
+    In app always; by email unless the admin has switched "New requests" off.
+    The admin who raised it is not told about their own request.
+    """
+    admins = (
+        db.execute(
+            select(User).where(
+                User.tenant_id == tenant_id,
+                User.role.in_((Role.ADMIN, Role.SYSTEM_ADMIN)),
+                User.is_active.is_(True),
+                User.id != actor.id,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not admins:
+        return []
+
+    summary = trip_summary(request)
+    names = ", ".join(t.user.full_name for t in request.travellers if t.user) or actor.full_name
+    campaign = f"{request.project.code} - {request.project.name}" if request.project else None
+    link = f"{get_settings().frontend_base_url.rstrip('/')}/approvals"
+
+    queued: list[int] = []
+    for admin in admins:
+        greeting = admin.full_name.split()[0] if admin.full_name else "there"
+        lines = [
+            f"Hello {greeting},",
+            "",
+            f"{actor.full_name} raised a travel request that needs a decision.",
+            "",
+            summary,
+            f"Travellers: {names}",
+        ]
+        if campaign:
+            lines.append(f"Campaign: {campaign}")
+        if request.travel_reason:
+            lines.append(f"Reason: {request.travel_reason}")
+        lines += ["", f"Review it: {link}"]
+
+        rows = notifications.notify(
+            db,
+            tenant_id=tenant_id,
+            user=admin,
+            kind="REQUEST_SUBMITTED",
+            title=f"New request from {actor.full_name}",
+            body=f"{summary} - for {names}.",
+            request_id=request.id,
+            email_subject=f"New travel request: {summary}"[:255],
+            email_body="\n".join(lines),
+            deliver_now=False,
+        )
+        queued += [
+            r.id for r in rows
+            if r.channel == NotificationChannel.EMAIL and r.status == NotificationStatus.QUEUED
+        ]
+    return queued

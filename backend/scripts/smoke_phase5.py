@@ -386,6 +386,7 @@ else:
 
 r = c.post("/requests", headers=RAVI, json={
     "request_type": "LOCAL_CAB", "project_id": project_id, "travel_reason": "Field survey coverage for the campaign",
+    "origin_state": "Maharashtra", "pickup_city": "Mumbai", "destination_state": "Maharashtra", "drop_city": "Mumbai",
     "origin": "Bandra", "destination": "Airport", "start_at": "2027-06-01T05:00",
 })
 junk = r.json()

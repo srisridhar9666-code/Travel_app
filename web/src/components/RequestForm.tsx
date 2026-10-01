@@ -40,6 +40,12 @@ interface FormState {
   destination_state: string;
   hotel_state: string;
   destination: string;
+  /** A cab's city or constituency, beside the street address. */
+  pickup_city: string;
+  drop_city: string;
+  /** Most cab rides start and end in one city, so the drop's state and city
+   *  follow the pickup's unless this is turned off. */
+  drop_same_city: boolean;
   start_at: string;
   end_at: string;
   hotel_city: string;
@@ -60,6 +66,9 @@ const BLANK: FormState = {
   destination_state: '',
   hotel_state: '',
   destination: '',
+  pickup_city: '',
+  drop_city: '',
+  drop_same_city: true,
   start_at: '',
   end_at: '',
   hotel_city: '',
@@ -83,6 +92,12 @@ function fromRequest(request: TravelRequest): FormState {
     destination_state: request.destination_state ?? '',
     hotel_state: request.hotel_state ?? '',
     destination: request.destination ?? '',
+    pickup_city: request.pickup_city ?? '',
+    drop_city: request.drop_city ?? '',
+    drop_same_city:
+      !request.drop_city ||
+      (request.drop_city === request.pickup_city &&
+        request.destination_state === request.origin_state),
     // <input type="datetime-local"> wants exactly "YYYY-MM-DDTHH:mm" and
     // silently shows nothing if handed the seconds the API returns.
     start_at: request.start_at ? request.start_at.slice(0, 16) : '',
@@ -116,16 +131,40 @@ function toPayload(form: FormState, isDraft: boolean): RequestPayload {
       check_out: form.check_out || null,
     };
   }
+  if (form.request_type === 'LOCAL_CAB') {
+    const drop = dropPlace(form);
+    return {
+      ...base,
+      mode: 'CAB',
+      origin: form.origin || null,
+      origin_state: form.origin_state || null,
+      pickup_city: form.pickup_city || null,
+      destination: form.destination || null,
+      destination_state: drop.state || null,
+      drop_city: drop.city || null,
+      start_at: form.start_at || null,
+      end_at: form.end_at || null,
+    };
+  }
   return {
     ...base,
-    mode: form.request_type === 'LOCAL_CAB' ? 'CAB' : form.mode,
+    mode: form.mode,
     origin: form.origin || null,
     origin_state: form.origin_state || null,
     destination_state: form.destination_state || null,
     destination: form.destination || null,
+    pickup_city: null,
+    drop_city: null,
     start_at: form.start_at || null,
     end_at: form.end_at || null,
   };
+}
+
+/** Where a cab drops: the pickup's state and city, unless told otherwise. */
+function dropPlace(form: FormState): { state: string; city: string } {
+  return form.drop_same_city
+    ? { state: form.origin_state, city: form.pickup_city }
+    : { state: form.destination_state, city: form.drop_city };
 }
 
 /** Code of the seeded fallback campaign. Requests that pick "Other" point at
@@ -136,9 +175,11 @@ const OTHER_CODE = 'OTHER';
 /** Enough filled in for a conflict check to mean anything. */
 function worthChecking(form: FormState): boolean {
   if (!form.project_id) return false;
-  return form.request_type === 'HOTEL'
-    ? Boolean(form.hotel_city && form.check_in)
-    : Boolean(form.origin && form.destination && form.start_at);
+  if (form.request_type === 'HOTEL') return Boolean(form.hotel_city && form.check_in);
+  const route = Boolean(form.origin && form.destination && form.start_at);
+  if (form.request_type !== 'LOCAL_CAB') return route;
+  const drop = dropPlace(form);
+  return route && Boolean(form.origin_state && form.pickup_city && drop.state && drop.city);
 }
 
 export function ConflictList({
@@ -448,34 +489,87 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
                 </Select>
               </Field>
             )}
-            {/* A cab's pickup and drop are addresses inside one city, not
-                cities - "Banjara Hills" is not somewhere a state picker can
-                offer. Long-distance legs are city to city, so those are
-                picked. */}
+            {/* A cab's pickup and drop are street addresses - "Banjara Hills"
+                is not something a state picker can offer - so those stay free
+                text. The state and city each one is in are picked from the
+                same list as a flight's, so cabs can be counted by place. */}
             {isCab ? (
               <>
-                <Field label="Pickup" htmlFor="origin" required>
+                <PlacePicker
+                  key="pickup"
+                  label="Pickup"
+                  id="pickup"
+                  required
+                  className="sm:col-span-2"
+                  state={form.origin_state}
+                  city={form.pickup_city}
+                  onChange={({ state, city }) =>
+                    setForm({ ...form, origin_state: state, pickup_city: city })
+                  }
+                />
+                <Field
+                  label="Pickup address"
+                  htmlFor="origin"
+                  required
+                  className="sm:col-span-2"
+                >
                   <Input
                     id="origin"
                     required
+                    maxLength={160}
                     value={form.origin}
                     onChange={(e) => setForm({ ...form, origin: e.target.value })}
-                    placeholder="Banjara Hills"
+                    placeholder="Road No. 12, Banjara Hills"
                   />
                 </Field>
-                <Field label="Drop" htmlFor="destination" required>
+                <label className="flex cursor-pointer items-center gap-2.5 text-sm sm:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={form.drop_same_city}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        drop_same_city: e.target.checked,
+                        // Start the separate drop from the pickup's place, which
+                        // is usually one field away from right.
+                        ...(!e.target.checked && !form.drop_city
+                          ? { destination_state: form.origin_state, drop_city: '' }
+                          : {}),
+                      })
+                    }
+                    className="h-4 w-4 accent-[rgb(var(--primary))]"
+                  />
+                  Drop is in the same city
+                </label>
+                {!form.drop_same_city && (
+                  <PlacePicker
+                    key="drop"
+                    label="Drop"
+                    id="drop"
+                    required
+                    className="sm:col-span-2"
+                    state={form.destination_state}
+                    city={form.drop_city}
+                    onChange={({ state, city }) =>
+                      setForm({ ...form, destination_state: state, drop_city: city })
+                    }
+                  />
+                )}
+                <Field label="Drop address" htmlFor="destination" required className="sm:col-span-2">
                   <Input
                     id="destination"
                     required
+                    maxLength={160}
                     value={form.destination}
                     onChange={(e) => setForm({ ...form, destination: e.target.value })}
-                    placeholder="RGIA Airport"
+                    placeholder="RGIA Airport, Terminal 1"
                   />
                 </Field>
               </>
             ) : (
               <>
                 <PlacePicker
+                  key="from"
                   label="From"
                   id="origin"
                   required
@@ -487,6 +581,7 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
                   }
                 />
                 <PlacePicker
+                  key="to"
                   label="To"
                   id="destination"
                   required

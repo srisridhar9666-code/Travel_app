@@ -26,6 +26,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core import clock
 from app.core.enums import RequestType, TravellerStatus
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
@@ -62,8 +63,8 @@ def _where(request: TravelRequest) -> str:
     """One readable line describing the movement, by type."""
     if request.request_type is RequestType.HOTEL:
         return request.hotel_city or "Hotel"
-    origin = request.origin or "?"
-    destination = request.destination or "?"
+    origin = request.origin_label or "?"
+    destination = request.destination_label or "?"
     return f"{origin} → {destination}"
 
 
@@ -77,7 +78,7 @@ def build(
     include_costs: bool = False,
 ) -> dict:
     """The timeline for one employee, newest movement first."""
-    window_start = since or (date.today() - timedelta(days=DEFAULT_LOOKBACK_DAYS))
+    window_start = since or (clock.local_today() - timedelta(days=DEFAULT_LOOKBACK_DAYS))
 
     rows = (
         db.execute(
@@ -175,6 +176,8 @@ def build(
                 "where": _where(request),
                 "origin": request.origin,
                 "destination": request.destination,
+                "pickup_city": request.pickup_city,
+                "drop_city": request.drop_city,
                 "hotel_city": request.hotel_city,
                 "started_on": started.isoformat() if started else None,
                 "start_at": request.start_at.isoformat() if request.start_at else None,
@@ -214,10 +217,11 @@ def build(
 
 def _summarise(entries: list[dict]) -> dict:
     """The headline numbers a profile shows above the timeline."""
+    # A cab's drop is a street address; its city is what counts as a place.
     cities = {
-        entry["hotel_city"] or entry["destination"]
+        entry["hotel_city"] or entry["drop_city"] or entry["destination"]
         for entry in entries
-        if entry["hotel_city"] or entry["destination"]
+        if entry["hotel_city"] or entry["drop_city"] or entry["destination"]
     }
     companions = {
         companion["user_id"] for entry in entries for companion in entry["companions"]

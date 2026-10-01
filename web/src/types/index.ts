@@ -321,6 +321,10 @@ export interface TravelRequest {
   origin_state: string | null;
   destination_state: string | null;
   hotel_state: string | null;
+  /** A cab's city or constituency, beside the street address in origin /
+   *  destination. Null on cabs raised before it was asked for. */
+  pickup_city: string | null;
+  drop_city: string | null;
   start_at: string | null;
   end_at: string | null;
 
@@ -553,7 +557,12 @@ export const TICKET_FIELD_LABELS: Record<string, string> = {
 
 // --- Phase 6 ---------------------------------------------------------------
 
-export type NotificationCategory = 'DECISIONS' | 'BOOKINGS' | 'ROOM_SHARING' | 'REMINDERS';
+export type NotificationCategory =
+  | 'DECISIONS'
+  | 'BOOKINGS'
+  | 'ROOM_SHARING'
+  | 'REMINDERS'
+  | 'NEW_REQUESTS';
 
 export interface NotificationPreferences {
   /** One entry per switchable category. DECISIONS is absent on purpose — being
@@ -587,6 +596,7 @@ export const CATEGORY_LABELS: Record<NotificationCategory, string> = {
   BOOKINGS: 'Tickets and confirmations',
   ROOM_SHARING: 'Room sharing requests',
   REMINDERS: 'Reminders and nudges',
+  NEW_REQUESTS: 'New requests to approve',
 };
 
 export const CATEGORY_HINTS: Record<NotificationCategory, string> = {
@@ -594,7 +604,58 @@ export const CATEGORY_HINTS: Record<NotificationCategory, string> = {
   BOOKINGS: 'Your ticket reference once an admin has confirmed it.',
   ROOM_SHARING: 'When a colleague asks to share your room.',
   REMINDERS: 'A nudge shortly before a trip you are booked on.',
+  NEW_REQUESTS: 'Admins only: an email each time someone raises a request.',
 };
+
+/** The .env file the API reads. Key names only - never values. */
+export interface EmailEnvFile {
+  path: string;
+  exists: boolean;
+  encoding: string | null;
+  modified_at: string | null;
+  keys: string[];
+  /** Keys the app does not read, mapped to the setting it probably meant. */
+  unknown_keys: Record<string, string | null>;
+}
+
+/** The email settings the running API is using. */
+export interface EmailSettings {
+  enabled: boolean;
+  host: string;
+  port: number;
+  security: 'SSL' | 'STARTTLS' | string;
+  username: string | null;
+  /** "set (16 characters)" or "not set" - the value itself never leaves the server. */
+  password: string;
+  password_looks_wrong: boolean;
+  from_address: string | null;
+  from_name: string;
+  allowlist: string[];
+  links_point_to: string;
+  env_file: EmailEnvFile;
+  /** Settings coming from real environment variables, which win over the file. */
+  from_environment: string[];
+  started_at: string;
+  /** The file was saved after the API started, so it is not in effect yet. */
+  restart_needed: boolean;
+}
+
+export interface EmailStatus {
+  problem: string | null;
+  settings: EmailSettings;
+}
+
+export interface EmailTestResult {
+  ok: boolean;
+  to: string;
+  /** How far it got. */
+  stage: 'config' | 'connect' | 'login' | 'send' | 'done' | string;
+  error: string | null;
+  hint: string | null;
+  /** False when EMAIL_ALLOWLIST holds back ordinary notices to this address. */
+  allowlisted: boolean;
+  settings: EmailSettings;
+}
 
 export const NOTIFICATION_STATUS_LABELS: Record<NotificationStatus, string> = {
   QUEUED: 'Queued',
@@ -773,6 +834,8 @@ export interface TravelLogEntry {
   origin_state: string | null;
   destination: string | null;
   destination_state: string | null;
+  pickup_city: string | null;
+  drop_city: string | null;
   hotel_city: string | null;
   hotel_state: string | null;
   started_on: string | null;
@@ -794,6 +857,10 @@ export interface TravelLog {
   since: string | null;
   until: string | null;
   total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+  /** More matches than this page holds. On an export, more than the cap. */
   truncated: boolean;
   summary: {
     movements: number;

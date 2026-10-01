@@ -53,19 +53,23 @@ def travel_logs(
     status: Annotated[list[TravellerStatus] | None, Query()] = None,
     state: Annotated[str | None, Query(max_length=80)] = None,
     search: Annotated[str | None, Query(max_length=120)] = None,
-    limit: Annotated[int, Query(ge=1, le=insights.MAX_LOG_ROWS)] = 500,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=insights.MAX_LOG_ROWS)] = 50,
 ) -> dict:
     """Every movement in a window, for one employee or all of them.
 
     Without a status filter, only movements that happened or are going to
     (pending, approved, booked) are listed - a rejected trip is not somewhere
     anyone went. Pass `status` to see rejected or cancelled ones too.
+
+    Paged; the summary counts every match. An export asks for one page of up
+    to MAX_LOG_ROWS.
     """
     filters = _filters(
         since, until, user_id, project_id, request_type,
         status or list(insights.TRAVELLED), state, search,
     )
-    return insights.travel_log(db, actor.tenant_id, filters, limit=limit)
+    return insights.travel_log(db, actor.tenant_id, filters, page=page, page_size=page_size)
 
 
 @router.get("/analytics/insights")

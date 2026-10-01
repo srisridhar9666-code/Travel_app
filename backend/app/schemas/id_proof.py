@@ -7,11 +7,12 @@ endpoint has written a VIEW_SENSITIVE audit row.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.enums import IdProofType
+from app.schemas.common import UTCInstant
 
 
 class IdProofCreate(BaseModel):
@@ -61,8 +62,8 @@ class IdProofRead(BaseModel):
 
     #: True once retention has emptied this record.
     is_purged: bool
-    purged_at: datetime | None = None
-    created_at: datetime
+    purged_at: UTCInstant | None = None
+    created_at: UTCInstant
 
 
 class IdProofReveal(BaseModel):

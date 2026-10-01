@@ -13,9 +13,13 @@
       // white flash on every load.
       (function () {
         try {
-          var stored = localStorage.getItem('travel-ops-theme');
-          var theme = stored && stored !== 'system'
-            ? stored
+          // The store saves {"state":{"preference":"dark"},...}, not a bare
+          // word; reading it as one set data-theme to that JSON, which is
+          // neither theme, until the app started.
+          var raw = localStorage.getItem('travel-ops-theme');
+          var preference = raw ? (JSON.parse(raw).state || {}).preference : null;
+          var theme = preference === 'light' || preference === 'dark'
+            ? preference
             : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
           document.documentElement.dataset.theme = theme;
         } catch (e) {

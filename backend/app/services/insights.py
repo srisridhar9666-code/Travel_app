@@ -21,6 +21,7 @@ from decimal import Decimal
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core import clock
 from app.core.enums import RequestType, TravellerStatus
 from app.models.project import Project
 from app.models.request import RequestTraveller, TravelRequest
@@ -67,13 +68,17 @@ def _destination(request: TravelRequest) -> tuple[str | None, str | None]:
     """Where the movement goes to: (state, place)."""
     if request.request_type is RequestType.HOTEL:
         return request.hotel_state, request.hotel_city
+    if request.request_type is RequestType.LOCAL_CAB:
+        # The drop's city, not its street address: "places visited" counts
+        # Hyderabad once, not every address in it.
+        return request.destination_state, request.drop_city or request.destination
     return request.destination_state, request.destination
 
 
 def _where(request: TravelRequest) -> str:
     if request.request_type is RequestType.HOTEL:
         return request.hotel_city or "Hotel"
-    return f"{request.origin or '?'} → {request.destination or '?'}"
+    return f"{request.origin_label or '?'} → {request.destination_label or '?'}"
 
 
 def _nights(request: TravelRequest) -> int | None:
@@ -161,6 +166,8 @@ def _haystack(row: RequestTraveller) -> str:
         row.user.employee_code if row.user and row.user.employee_code else "",
         request.origin or "",
         request.destination or "",
+        request.pickup_city or "",
+        request.drop_city or "",
         request.hotel_city or "",
         *(_states(request)),
         request.project.code if request.project else "",
@@ -195,6 +202,8 @@ def _log_entry(row: RequestTraveller, *, include_costs: bool) -> dict:
         "origin_state": request.origin_state,
         "destination": request.destination,
         "destination_state": request.destination_state,
+        "pickup_city": request.pickup_city,
+        "drop_city": request.drop_city,
         "hotel_city": request.hotel_city,
         "hotel_state": request.hotel_state,
         "started_on": started.isoformat() if started else None,
@@ -217,12 +226,28 @@ def _log_entry(row: RequestTraveller, *, include_costs: bool) -> dict:
 
 
 def travel_log(
-    db: Session, tenant_id: str, filters: Filters, *, limit: int = 500, include_costs: bool = True
+    db: Session,
+    tenant_id: str,
+    filters: Filters,
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    include_costs: bool = True,
 ) -> dict:
-    """Every movement matching the filters, with the totals a reader wants first."""
+    """One page of the movements matching the filters, with totals over all of them.
+
+    The summary always counts every match, not just the page on screen - "8
+    people travelled last month" must not change when someone pages on.
+    """
     rows = load(db, tenant_id, filters)
     total = len(rows)
-    shown = rows[: min(limit, MAX_LOG_ROWS)]
+    page_size = max(1, min(page_size, MAX_LOG_ROWS))
+    pages = max(1, -(-total // page_size))
+    # A page past the end - left in the address bar after narrowing the
+    # filters - shows the last page rather than an empty table.
+    page = max(1, min(page, pages))
+    start = (page - 1) * page_size
+    shown = rows[start : start + page_size]
 
     spent = Decimal("0.00")
     for row in rows:
@@ -233,7 +258,10 @@ def travel_log(
         "since": filters.since.isoformat() if filters.since else None,
         "until": filters.until.isoformat() if filters.until else None,
         "total": total,
-        "truncated": total > len(shown),
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
+        "truncated": start + len(shown) < total,
         "summary": {
             "movements": total,
             "people": len({row.user_id for row in rows}),
@@ -292,7 +320,7 @@ def dashboard(db: Session, tenant_id: str, filters: Filters) -> dict:
     Status is not pre-filtered: the breakdown by status is one of the things
     the dashboard is for. Everything else counts what the filters let through.
     """
-    today = date.today()
+    today = clock.local_today()
     since = filters.since or (today - timedelta(days=29))
     until = filters.until or today
     if until < since:

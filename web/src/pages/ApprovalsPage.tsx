@@ -35,6 +35,8 @@ import {
   fetchRequests,
   fetchRevisions,
 } from '@/lib/api';
+import { routeLabel } from '@/lib/places';
+import { formatInstant } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import {
   REQUEST_STATUS_LABELS,
@@ -109,9 +111,7 @@ function itinerary(request: TravelRequest): string {
       : dayMonth(request.check_in!);
     return `${request.hotel_city} · ${nights}`;
   }
-  return `${request.origin} → ${request.destination} · ${
-    request.start_at ? dayTime(request.start_at) : ''
-  }`;
+  return `${routeLabel(request)} · ${request.start_at ? dayTime(request.start_at) : ''}`;
 }
 
 function DecisionLog({ travellers }: { travellers: RequestTraveller[] }) {
@@ -144,7 +144,7 @@ function DecisionLog({ travellers }: { travellers: RequestTraveller[] }) {
             </Badge>
             <span className="text-2xs text-text-subtle">
               {traveller.decided_by_name ?? 'system'} ·{' '}
-              {traveller.decided_at ? new Date(traveller.decided_at).toLocaleString() : ''}
+              {formatInstant(traveller.decided_at)}
             </span>
           </div>
           {traveller.decision_reason && (
@@ -181,7 +181,7 @@ function RevisionHistory({ requestId }: { requestId: number }) {
               #{revision.revision_number} {revision.summary}
             </span>
             <span className="text-2xs text-text-subtle">
-              {revision.editor_name} · {new Date(revision.created_at).toLocaleString()}
+              {revision.editor_name} · {formatInstant(revision.created_at)}
             </span>
           </div>
           {revision.changes && (

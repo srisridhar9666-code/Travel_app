@@ -202,6 +202,7 @@ check("nothing clashes on an empty calendar", flight["conflicts"] == [], flight[
 # The airport cab on the same day must NOT warn - the rule the SOW got wrong.
 r = c.post("/requests/check", headers=RAVI, json={
     "request_type": "LOCAL_CAB", "project_id": project_id, "travel_reason": "Field survey coverage for the campaign",
+    "origin_state": "Telangana", "pickup_city": "Hyderabad", "destination_state": "Telangana", "drop_city": "Hyderabad",
     "origin": "Banjara Hills", "destination": "RGIA Airport",
     "start_at": at(TRIP_DAY, 4), "end_at": at(TRIP_DAY, 6),
 })
@@ -209,6 +210,7 @@ check("a cab to the airport for that flight does NOT warn", r.json()["conflicts"
 
 r = c.post("/requests", headers=RAVI, json={
     "request_type": "LOCAL_CAB", "project_id": project_id, "travel_reason": "Field survey coverage for the campaign",
+    "origin_state": "Telangana", "pickup_city": "Hyderabad", "destination_state": "Telangana", "drop_city": "Hyderabad",
     "origin": "Banjara Hills", "destination": "RGIA Airport",
     "start_at": at(TRIP_DAY, 4), "end_at": at(TRIP_DAY, 6),
 })

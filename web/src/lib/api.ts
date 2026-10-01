@@ -10,6 +10,8 @@ import type {
   Colleague,
   CoStayMatch,
   CostPreview,
+  EmailStatus,
+  EmailTestResult,
   FilterOptions,
   Insights,
   InsightFilters,
@@ -320,6 +322,9 @@ export interface RequestPayload {
   origin_state?: string | null;
   destination_state?: string | null;
   hotel_state?: string | null;
+  /** A cab's city or constituency; null for anything else. */
+  pickup_city?: string | null;
+  drop_city?: string | null;
   start_at?: string | null;
   end_at?: string | null;
   hotel_city?: string | null;
@@ -367,8 +372,10 @@ export const confirmShare = (id: number, travellerId: number) =>
     .post<TravelRequest>(`/requests/${id}/travellers/${travellerId}/confirm-share`)
     .then((r) => r.data);
 
+/** The signed-in person's own in-app notices. My requests reads the room-share
+ *  asks out of these. */
 export const fetchNotifications = () =>
-  api.get<AppNotification[]>('/requests/notifications').then((r) => r.data);
+  api.get<AppNotification[]>('/notifications/mine').then((r) => r.data);
 
 /** A thin colleague list for the co-traveller picker. Ground staff cannot read
  *  /users, and tagging someone does not need their whole employee record. */
@@ -453,6 +460,18 @@ export interface EmailHealthResponse {
 
 export const fetchEmailHealth = () =>
   api.get<EmailHealthResponse>('/health/email').then((r) => r.data);
+
+/** What the running API is using for email, and what is missing. No
+ *  connection to the mail server, so cheap to load. */
+export const fetchEmailStatus = () =>
+  api.get<EmailStatus>('/notifications/email/status').then((r) => r.data);
+
+/** Send one real message and report how far it got. Slow when the mail server
+ *  is unreachable: the server waits out its own connection timeout first. */
+export const sendTestEmail = (to?: string) =>
+  api
+    .post<EmailTestResult>('/notifications/email/test', { to: to || null }, { timeout: 60_000 })
+    .then((r) => r.data);
 
 // --- notifications: inbox, preferences, scheduler -------------------------
 
@@ -585,8 +604,16 @@ function repeatParams(params: Record<string, unknown>) {
   return search;
 }
 
+/** The most rows one request may ask for - what an export asks for. */
+export const MAX_LOG_ROWS = 5000;
+
 export const fetchTravelLogs = (
-  params: InsightFilters & { status?: TravellerStatus[]; search?: string; limit?: number },
+  params: InsightFilters & {
+    status?: TravellerStatus[];
+    search?: string;
+    page?: number;
+    page_size?: number;
+  },
 ) =>
   api
     .get<TravelLog>('/travel-logs', { params: repeatParams({ ...params }) })

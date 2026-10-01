@@ -47,6 +47,18 @@ _SEVERITY = {
 }
 
 
+class LocalTimeFormatter(logging.Formatter):
+    """The readable format, stamped in the app's zone (India time) rather than
+    the host's - which is UTC in a container, and made a console log read 5h30
+    behind the clock on the wall."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        from app.core.clock import app_tz   # late: settings load after logging
+
+        moment = datetime.fromtimestamp(record.created, tz=app_tz())
+        return f"{moment.strftime(datefmt or '%Y-%m-%d %H:%M:%S')},{int(record.msecs):03d}"
+
+
 class JsonFormatter(logging.Formatter):
     """One JSON object per line, shaped for Cloud Logging but useful anywhere."""
 
@@ -125,7 +137,7 @@ def configure(*, json_output: bool, level: str = "INFO") -> None:
         handler.setFormatter(JsonFormatter())
     else:
         handler.setFormatter(
-            logging.Formatter(
+            LocalTimeFormatter(
                 "%(asctime)s %(levelname)-8s %(name)s [%(request_id)s] | %(message)s"
             )
         )

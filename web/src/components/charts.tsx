@@ -52,15 +52,23 @@ export function StatTile({
   hint,
   tone = 'default',
   icon,
+  compact = false,
 }: {
   label: string;
   value: string;
   hint?: string;
   tone?: 'default' | 'warning';
   icon?: ReactNode;
+  /** A shorter tile, for a page that keeps its table in view below the totals. */
+  compact?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-surface px-4 py-4 shadow-sm sm:px-5">
+    <div
+      className={cn(
+        'rounded-xl border border-border bg-surface shadow-sm',
+        compact ? 'px-4 py-3' : 'px-4 py-4 sm:px-5',
+      )}
+    >
       <div className="flex items-center gap-2 text-xs font-medium text-text-muted">
         {icon && (
           <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-surface-sunken text-text-subtle">
@@ -76,7 +84,9 @@ export function StatTile({
           that align vertically - table rows and axis ticks. */}
       <p
         className={cn(
-          'mt-2 text-2xl font-semibold tracking-tight sm:text-[1.75rem] sm:leading-9',
+          compact
+            ? 'mt-1.5 text-xl font-semibold leading-7 tracking-tight'
+            : 'mt-2 text-2xl font-semibold tracking-tight sm:text-[1.75rem] sm:leading-9',
           tone === 'warning' && 'text-warning',
         )}
       >

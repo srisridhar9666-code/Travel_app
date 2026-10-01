@@ -20,6 +20,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import clock
 from app.core.enums import (
     NotificationStatus,
     RequestType,
@@ -57,7 +58,7 @@ def remind_travellers(db: Session, tenant_id: str, *, today: date | None = None)
     unticketed needs the admin chased, not themselves. Deliberately not covered:
     the return leg, which is a separate request and gets its own reminder.
     """
-    today = today or date.today()
+    today = today or clock.local_today()
     horizon = today + timedelta(days=TRAVEL_REMINDER_DAYS)
 
     rows = (
@@ -85,7 +86,7 @@ def remind_travellers(db: Session, tenant_id: str, *, today: date | None = None)
         where = (
             request.hotel_city
             if request.request_type is RequestType.HOTEL
-            else f"{request.origin} to {request.destination}"
+            else request.route_label(" to ")
         )
         when = (
             request.start_at.strftime("%d %b, %H:%M")
@@ -138,7 +139,7 @@ def remind_admins_of_stale_requests(
     not daily, because a daily repeat of the same line is how a team learns to
     filter the sender.
     """
-    today = today or date.today()
+    today = today or clock.local_today()
     cutoff = naive_utcnow() - timedelta(days=STALE_AFTER_DAYS)
 
     stale = (
@@ -185,7 +186,7 @@ def remind_admins_of_stale_requests(
         where = (
             request.hotel_city
             if request.request_type is RequestType.HOTEL
-            else f"{request.origin} to {request.destination}"
+            else request.route_label(" to ")
         )
         age = (naive_utcnow() - request.submitted_at).days
         for admin in admins:

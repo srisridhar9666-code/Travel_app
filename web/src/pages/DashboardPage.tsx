@@ -23,6 +23,7 @@ import {
   rangeFor,
   type DateRange,
 } from '@/components/DateRangePicker';
+import { EmailProblemBanner } from '@/components/EmailDeliveryCard';
 import { TravelHistoryPanel } from '@/components/TravelHistoryPanel';
 import { Columns, HorizontalBars, StatTile, formatMoney } from '@/components/charts';
 import { Button, Card, CardHeader, Field, PageHeader, Select, Skeleton } from '@/components/ui';
@@ -511,6 +512,7 @@ export default function DashboardPage() {
         }
       />
 
+      {isAdmin && <EmailProblemBanner />}
       {isAdmin && <AdminDashboard />}
 
       {/* Ground staff see their own movements. */}

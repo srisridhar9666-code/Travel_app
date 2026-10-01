@@ -16,6 +16,23 @@ PROJECT_ROOT = BACKEND_DIR.parent
 ENV_FILE = BACKEND_DIR / ".env"
 
 
+def env_file_encoding(path: Path = ENV_FILE) -> str:
+    """How to read the .env, judged from its first bytes.
+
+    Windows editors save "UTF-8" with a byte-order mark, and PowerShell 5's
+    `>` writes UTF-16. Read as plain UTF-8, the first turns the first key into
+    "\\ufeffEMAIL_ENABLED" - silently ignored, so a file that plainly says
+    EMAIL_ENABLED=true leaves email off - and the second will not load at all.
+    """
+    try:
+        head = path.read_bytes()[:2]
+    except OSError:
+        return "utf-8"
+    if head in (b"\xff\xfe", b"\xfe\xff"):
+        return "utf-16"
+    return "utf-8-sig"   # reads plain UTF-8 too; only strips a BOM if present
+
+
 class Settings(BaseSettings):
     app_name: str = "Field Logistics & Travel Management"
     environment: str = "development"
@@ -26,6 +43,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     database_url: str = "mysql+pymysql://root@127.0.0.1:3306/travel_ops?charset=utf8mb4"
+
+    #: The zone people read times in. Timestamps are stored and compared in
+    #: UTC; this decides how they are shown, and which date "today" is.
+    app_timezone: str = "Asia/Kolkata"
 
     secret_key: str = "insecure-development-key"
     access_token_expire_minutes: int = 480
@@ -105,7 +126,9 @@ class Settings(BaseSettings):
     #: addresses at a real domain.
     email_allowlist: str = ""
 
-    model_config = SettingsConfigDict(env_file=str(ENV_FILE), extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE), env_file_encoding=env_file_encoding(), extra="ignore"
+    )
 
     @field_validator("smtp_app_password")
     @classmethod

@@ -535,7 +535,7 @@ def _confirmation_body(ticket: TicketDocument, request: TravelRequest, name: str
         if request.check_out:
             lines.append(f"  Check out    {request.check_out}")
     else:
-        lines.append(f"Your travel from {request.origin} to {request.destination} is booked.")
+        lines.append(f"Your travel from {request.route_label(' to ')} is booked.")
         lines.append("")
         if ticket.carrier:
             lines.append(f"  Operator     {ticket.carrier}")
@@ -570,7 +570,7 @@ def _send_confirmation(
     where = (
         request.hotel_city
         if request.request_type is RequestType.HOTEL
-        else f"{request.origin} to {request.destination}"
+        else request.route_label(" to ")
     )
     rows = notifications.notify(
         db,

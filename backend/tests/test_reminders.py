@@ -6,11 +6,12 @@ every test here is about something the jobs must *decline* to do: repeat
 themselves, chase a trip that has already happened, nudge someone who is still
 waiting on a decision, or email a category the person switched off.
 """
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import create_engine, select
 
+from app.core import clock
 from app.core.enums import (
     NotificationCategory,
     NotificationChannel,
@@ -59,7 +60,7 @@ def make_trip(
     cancelled=False,
     draft=False,
 ):
-    start = date.today() + timedelta(days=days_out)
+    start = clock.local_today() + timedelta(days=days_out)
     row = TravelRequest(
         tenant_id=TENANT,
         request_type=RequestType.HOTEL,

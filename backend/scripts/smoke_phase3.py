@@ -259,6 +259,7 @@ overlap_id = clash["id"]
 
 r = c.post("/requests/check", headers=RAVI, json={
     "request_type": "LOCAL_CAB", "project_id": project_id, "travel_reason": "Field survey coverage for the campaign",
+    "origin_state": "Telangana", "pickup_city": "Hyderabad", "destination_state": "Telangana", "drop_city": "Hyderabad",
     "origin": "Banjara Hills", "destination": "RGIA Airport",
     "start_at": at(0, 8), "end_at": at(0, 10),
 })

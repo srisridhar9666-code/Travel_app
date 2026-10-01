@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
-import { Logo } from '@/components/Logo';
+import { Logo, LogoLockup } from '@/components/Logo';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button, Field, Input } from '@/components/ui';
 import { errorMessage, forgotPassword, login } from '@/lib/api';
@@ -57,7 +57,7 @@ export default function LoginPage() {
       {/* Form side */}
       <div className="flex flex-col px-6 py-8 sm:px-12">
         <div className="flex items-center justify-between">
-          <Logo variant="mark" className="h-8 w-8" />
+          <LogoLockup />
           <ThemeToggle />
         </div>
 
@@ -155,7 +155,7 @@ export default function LoginPage() {
         />
 
         <div className="relative flex h-full flex-col justify-between p-12">
-          <Logo className="h-24 w-auto" />
+          <Logo className="h-32 w-auto self-start" />
 
           <div className="max-w-md">
             <Plane size={22} className="mb-5 text-brand" strokeWidth={2} />

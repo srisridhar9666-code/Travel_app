@@ -1,11 +1,12 @@
 """Request and response bodies for user administration."""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.core.enums import Designation, Gender, Role
+from app.schemas.common import UTCInstant
 
 
 class UserCreate(BaseModel):
@@ -63,8 +64,8 @@ class UserRead(BaseModel):
     base_location: str | None = None
     is_active: bool
     exited_on: date | None = None
-    last_login_at: datetime | None = None
-    created_at: datetime
+    last_login_at: UTCInstant | None = None
+    created_at: UTCInstant
 
     #: False while an invite is outstanding, so the UI can show "Invited"
     #: rather than pretending the account is ready.
@@ -93,7 +94,7 @@ class AuditRead(BaseModel):
     changes: dict | None = None
     reason: str | None = None
     ip_address: str | None = None
-    created_at: datetime
+    created_at: UTCInstant
 
 
 class AuditListResponse(BaseModel):

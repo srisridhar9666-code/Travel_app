@@ -11,7 +11,9 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import toast from 'react-hot-toast';
+import { useSearchParams } from 'react-router-dom';
 
+import EmailDeliveryCard from '@/components/EmailDeliveryCard';
 import {
   Badge,
   Button,
@@ -33,6 +35,7 @@ import {
   runReminderJobs,
   setPreference,
 } from '@/lib/api';
+import { formatInstant } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
 import {
@@ -53,12 +56,7 @@ const STATUS_TONE: Record<NotificationStatus, 'neutral' | 'success' | 'danger' |
 };
 
 const when = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  formatInstant(iso, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 /** Everyone's own inbox. */
 function Inbox() {
@@ -258,6 +256,8 @@ function Ledger() {
 
   return (
     <div className="space-y-4">
+      <EmailDeliveryCard />
+
       <Card>
         <CardHeader
           title="Scheduled reminders"
@@ -335,7 +335,7 @@ function Ledger() {
       <Card>
         <CardHeader
           title={`${ledger.data?.total ?? 0} in the delivery ledger`}
-          description="Who was told what, on which channel, and whether it arrived."
+          description="Who was told what, on which channel, and whether it arrived. “Not sent” means email was off or held back by EMAIL_ALLOWLIST when it was due; those are never retried."
         />
 
         {summary && (
@@ -430,7 +430,7 @@ function Ledger() {
                         {NOTIFICATION_STATUS_LABELS[row.status]}
                       </Badge>
                       {row.last_error && (
-                        <div className="mt-0.5 max-w-64 truncate text-2xs text-text-subtle" title={row.last_error}>
+                        <div className="mt-1 max-w-80 whitespace-pre-wrap break-words text-2xs text-text-subtle">
                           {row.last_error}
                         </div>
                       )}
@@ -455,9 +455,17 @@ function Ledger() {
 export default function NotificationsPage() {
   const user = useAuth((s) => s.user);
   const isAdmin = user?.role === 'ADMIN' || user?.role === 'SYSTEM_ADMIN';
-  const [tab, setTab] = useState<'inbox' | 'settings' | 'ledger'>('inbox');
+  // The tab is in the address, so "Notifications > Delivery ledger" can be
+  // linked to directly.
+  const [params, setParams] = useSearchParams();
+  type Tab = 'inbox' | 'settings' | 'ledger';
+  const asked = params.get('tab') as Tab | null;
+  const tab: Tab =
+    asked === 'settings' || (asked === 'ledger' && isAdmin) ? asked : 'inbox';
+  const setTab = (next: Tab) =>
+    setParams(next === 'inbox' ? {} : { tab: next }, { replace: true });
 
-  const tabs: { key: typeof tab; label: string; icon: typeof Bell }[] = [
+  const tabs: { key: Tab; label: string; icon: typeof Bell }[] = [
     { key: 'inbox', label: 'Inbox', icon: Bell },
     { key: 'settings', label: 'Email settings', icon: Mail },
     ...(isAdmin ? [{ key: 'ledger' as const, label: 'Delivery ledger', icon: Send }] : []),

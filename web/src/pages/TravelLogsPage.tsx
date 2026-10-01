@@ -1,19 +1,24 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import {
   BedDouble,
   Car,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Download,
   History,
   MapPin,
   Moon,
   Plane,
   Search,
+  SlidersHorizontal,
   Train,
   Users,
   X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import toast from 'react-hot-toast';
 import { useSearchParams } from 'react-router-dom';
 
 import { Combobox } from '@/components/Combobox';
@@ -33,11 +38,13 @@ import {
   EmptyState,
   Field,
   Input,
-  PageHeader,
   Select,
   Skeleton,
 } from '@/components/ui';
-import { errorMessage, fetchFilterOptions, fetchTravelLogs } from '@/lib/api';
+import { MAX_LOG_ROWS, errorMessage, fetchFilterOptions, fetchTravelLogs } from '@/lib/api';
+import { routeLabel } from '@/lib/places';
+import { fileStamp } from '@/lib/time';
+import { cn } from '@/lib/utils';
 import {
   REQUEST_TYPE_LABELS,
   TRAVELLER_STATUS_LABELS,
@@ -60,6 +67,11 @@ const STATUS_CHOICES: Record<string, { label: string; statuses: TravellerStatus[
     statuses: ['PENDING', 'APPROVED', 'BOOKED', 'REJECTED', 'CANCELLED'],
   },
 };
+
+/** Rows per page. The server caps a page at MAX_LOG_ROWS; these are what a
+ *  person scrolls comfortably. */
+const PAGE_SIZES = [25, 50, 100, 200];
+const DEFAULT_PAGE_SIZE = 50;
 
 const STATUS_TONE: Record<TravellerStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
   BOOKED: 'success',
@@ -97,19 +109,23 @@ function place(entry: TravelLogEntry) {
   if (entry.request_type === 'HOTEL') {
     return [entry.hotel_city, entry.hotel_state].filter(Boolean).join(', ') || 'Hotel';
   }
-  return `${entry.origin ?? '?'} → ${entry.destination ?? '?'}`;
+  if (!entry.origin && !entry.destination) return '?';
+  return routeLabel(entry);
 }
 
-/** A spreadsheet of exactly what is on screen, for whoever asked. */
+/** Every row matching the filters - not just the page on screen - as a
+ *  spreadsheet. A cab's address and the city it is in are separate columns, so
+ *  the sheet can be sorted by city. */
 function exportCsv(entries: TravelLogEntry[], label: string) {
   const header = [
-    'Date', 'Employee', 'Employee code', 'Type', 'From', 'From state', 'To', 'To state',
-    'Hotel', 'Hotel state', 'Nights', 'Campaign', 'Status', 'PNR / booking ref',
-    'Travelled with', 'Cost (INR)', 'Reason',
+    'Date', 'Time', 'Employee', 'Employee code', 'Type', 'From', 'From city', 'From state',
+    'To', 'To city', 'To state', 'Hotel', 'Hotel state', 'Nights', 'Campaign', 'Status',
+    'PNR / booking ref', 'Travelled with', 'Cost (INR)', 'Reason',
   ];
   const rows = entries.map((e) => [
-    e.started_on ?? '', e.full_name, e.employee_code ?? '', kind(e), e.origin ?? '',
-    e.origin_state ?? '', e.destination ?? '', e.destination_state ?? '', e.hotel_city ?? '',
+    e.started_on ?? '', e.start_at ? e.start_at.slice(11, 16) : '', e.full_name,
+    e.employee_code ?? '', kind(e), e.origin ?? '', e.pickup_city ?? '', e.origin_state ?? '',
+    e.destination ?? '', e.drop_city ?? '', e.destination_state ?? '', e.hotel_city ?? '',
     e.hotel_state ?? '', e.nights ?? '', e.project_name ?? e.project_code ?? '',
     TRAVELLER_STATUS_LABELS[e.status], e.booking_reference ?? '', e.companions.join('; '),
     e.cost_amount ?? '', e.travel_reason ?? '',
@@ -122,9 +138,84 @@ function exportCsv(entries: TravelLogEntry[], label: string) {
   const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' }));
   const link = document.createElement('a');
   link.href = url;
-  link.download = `travel-log-${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.csv`;
+  const slug = label.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+  link.download = `travel-log-${slug}-${fileStamp()}.csv`;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function Pager({
+  page,
+  pages,
+  total,
+  pageSize,
+  shown,
+  busy,
+  onPage,
+  onPageSize,
+}: {
+  page: number;
+  pages: number;
+  total: number;
+  pageSize: number;
+  shown: number;
+  busy: boolean;
+  onPage: (page: number) => void;
+  onPageSize: (size: number) => void;
+}) {
+  const first = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const last = (page - 1) * pageSize + shown;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border px-4 py-3 sm:px-5">
+      <p className="text-sm text-text-muted tabular-nums" aria-live="polite">
+        Showing <span className="font-medium text-text">{first}–{last}</span> of{' '}
+        <span className="font-medium text-text">{total}</span>
+      </p>
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        <label className="flex items-center gap-2 text-sm text-text-muted">
+          <span className="hidden sm:inline">Rows per page</span>
+          <span className="sm:hidden">Rows</span>
+          <Select
+            aria-label="Rows per page"
+            value={String(pageSize)}
+            onChange={(e) => onPageSize(Number(e.target.value))}
+            className="h-9 w-20"
+          >
+            {PAGE_SIZES.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <span className="text-sm text-text-muted tabular-nums">
+          Page {page} of {pages}
+        </span>
+        <div className="flex gap-1.5">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={page <= 1 || busy}
+            onClick={() => onPage(page - 1)}
+            aria-label="Previous page"
+          >
+            <ChevronLeft size={16} />
+            <span className="hidden sm:inline">Previous</span>
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={page >= pages || busy}
+            onClick={() => onPage(page + 1)}
+            aria-label="Next page"
+          >
+            <span className="hidden sm:inline">Next</span>
+            <ChevronRight size={16} />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function TravelLogsPage() {
@@ -143,14 +234,22 @@ export default function TravelLogsPage() {
   const state = params.get('state') || '';
   const statusKey = params.get('status') || 'travelled';
   const search = params.get('q') || '';
+  const page = Math.max(1, Math.floor(Number(params.get('page'))) || 1);
+  const pageSize = PAGE_SIZES.includes(Number(params.get('size')))
+    ? Number(params.get('size'))
+    : DEFAULT_PAGE_SIZE;
   const [searchDraft, setSearchDraft] = useState(search);
+  const [showFilters, setShowFilters] = useState(false);
 
+  /** Any change but a page turn starts again from page 1: page 4 of the old
+   *  filters means nothing under the new ones. */
   const update = (changes: Record<string, string | undefined>) => {
     const next = new URLSearchParams(params);
     for (const [key, value] of Object.entries(changes)) {
       if (value) next.set(key, value);
       else next.delete(key);
     }
+    if (!('page' in changes)) next.delete('page');
     setParams(next, { replace: true });
   };
 
@@ -175,46 +274,107 @@ export default function TravelLogsPage() {
   }, [options.data]);
   const personLabel = [...people.entries()].find(([, id]) => id === userId)?.[0] ?? '';
 
+  const filters = {
+    since: range.since || undefined,
+    until: range.until || undefined,
+    user_id: userId,
+    project_id: projectId,
+    request_type: requestType,
+    state: state || undefined,
+    status: STATUS_CHOICES[statusKey]?.statuses,
+    search: search || undefined,
+  };
+
+  // A new page, size or filter starts at the top of the table, not wherever
+  // the last one was scrolled to.
+  const scroller = useRef<HTMLDivElement>(null);
+  const viewKey = JSON.stringify([filters, page, pageSize]);
+  useEffect(() => {
+    scroller.current?.scrollTo({ top: 0 });
+  }, [viewKey]);
+
   const log = useQuery({
-    queryKey: ['travel-logs', range.since, range.until, userId, projectId, requestType, state, statusKey, search],
-    queryFn: () =>
-      fetchTravelLogs({
-        since: range.since || undefined,
-        until: range.until || undefined,
-        user_id: userId,
-        project_id: projectId,
-        request_type: requestType,
-        state: state || undefined,
-        status: STATUS_CHOICES[statusKey]?.statuses,
-        search: search || undefined,
-        limit: 5000,
-      }),
+    queryKey: ['travel-logs', filters, page, pageSize],
+    queryFn: () => fetchTravelLogs({ ...filters, page, page_size: pageSize }),
     placeholderData: keepPreviousData,
   });
 
-  const filtersActive = Boolean(userId || projectId || requestType || state || search || statusKey !== 'travelled');
+  const activeCount = [userId, projectId, requestType, state, search, statusKey !== 'travelled'].filter(
+    Boolean,
+  ).length;
+  const filtersActive = activeCount > 0;
   const rangeLabel = describeRange(range);
   const heading = personLabel ? `${personLabel.replace(/ \(.*\)$/, '')} · ${rangeLabel}` : rangeLabel;
 
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Travel logs"
-        description="Where every employee went and when. Pick a person and a month, or search the whole team."
-        actions={
-          <Button
-            variant="secondary"
-            disabled={!log.data || log.data.entries.length === 0}
-            onClick={() => log.data && exportCsv(log.data.entries, heading)}
-          >
-            <Download size={16} />
-            Export CSV
-          </Button>
-        }
-      />
+  // The export is every match, fetched afresh, not the page on screen.
+  const exporting = useMutation({
+    mutationFn: () => fetchTravelLogs({ ...filters, page: 1, page_size: MAX_LOG_ROWS }),
+    onSuccess: (all) => {
+      exportCsv(all.entries, heading);
+      if (all.truncated) {
+        toast(`Exported the newest ${all.entries.length} of ${all.total}. Narrow the dates for the rest.`);
+      } else {
+        toast.success(`Exported ${all.entries.length} ${all.entries.length === 1 ? 'row' : 'rows'}`);
+      }
+    },
+    onError: (err) => toast.error(errorMessage(err, 'Could not export the log.')),
+  });
 
-      <Card className="p-4 sm:p-5">
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+  const data = log.data;
+  const total = data?.total ?? 0;
+  const stats = [
+    { label: 'Movements', value: data ? String(data.summary.movements) : '—', icon: <History size={14} /> },
+    { label: 'People', value: data ? String(data.summary.people) : '—', icon: <Users size={14} /> },
+    { label: 'Places', value: data ? String(data.summary.places) : '—', icon: <MapPin size={14} /> },
+    { label: 'Hotel nights', value: data ? String(data.summary.nights) : '—', icon: <Moon size={14} /> },
+    {
+      label: 'Booked spend',
+      value: data?.summary.spent ? formatMoney(data.summary.spent) : '—',
+      icon: <span className="text-xs font-semibold leading-none">₹</span>,
+    },
+  ];
+
+  return (
+    // From lg up the page is pinned to the window: the filters and totals stay
+    // put and only the table scrolls. Below that there is not the height for
+    // it, so the page scrolls and the table keeps its own bounded scroll.
+    <div className="flex flex-col gap-5 lg:h-[calc(100dvh-8rem-1px)] lg:min-h-[38rem] lg:gap-4">
+      {/* Shorter than the usual page header from lg up: every line here is a
+          line of table that does not fit. */}
+      <div className="shrink-0">
+        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl lg:text-2xl">Travel logs</h1>
+        <p className="mt-1.5 max-w-2xl text-sm text-text-muted lg:mt-1 lg:max-w-none">
+          Where every employee went and when. Pick a person and a month, or search the whole team.
+        </p>
+      </div>
+
+      <Card className="shrink-0 p-4 sm:p-5 lg:p-4">
+        {/* Seven filters stacked on a phone are a screen of form before the
+            first row of results, so below lg they fold away. */}
+        <button
+          type="button"
+          onClick={() => setShowFilters((open) => !open)}
+          aria-expanded={showFilters}
+          aria-controls="log-filters"
+          className="flex w-full items-center justify-between gap-3 text-left lg:hidden"
+        >
+          <span className="flex items-center gap-2 text-sm font-semibold">
+            <SlidersHorizontal size={16} className="text-text-subtle" />
+            Filters
+            {activeCount > 0 && <Badge tone="info">{activeCount} on</Badge>}
+          </span>
+          <span className="flex items-center gap-1.5 text-sm text-text-muted">
+            {rangeLabel}
+            <ChevronDown size={16} className={cn('transition-transform', showFilters && 'rotate-180')} />
+          </span>
+        </button>
+        <div
+          id="log-filters"
+          className={cn(
+            'grid gap-4 sm:grid-cols-2 lg:grid lg:grid-cols-4 lg:gap-x-4 lg:gap-y-3',
+            showFilters ? 'mt-4 lg:mt-0' : 'hidden',
+          )}
+        >
           <Field label="Employee" htmlFor="log-person">
             <Combobox
               id="log-person"
@@ -310,7 +470,13 @@ export default function TravelLogsPage() {
                 variant="ghost"
                 onClick={() => {
                   setSearchDraft('');
-                  setParams(new URLSearchParams({ range: preset }), { replace: true });
+                  // Filters only: the date range and rows per page stay as chosen.
+                  const kept = new URLSearchParams({ range: preset });
+                  for (const key of ['since', 'until', 'size']) {
+                    const value = params.get(key);
+                    if (value) kept.set(key, value);
+                  }
+                  setParams(kept, { replace: true });
                 }}
               >
                 <X size={16} />
@@ -321,24 +487,53 @@ export default function TravelLogsPage() {
         </div>
       </Card>
 
-      <div>
-        <h2 className="mb-3 text-base font-semibold tracking-tight">{heading}</h2>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-          <StatTile label="Movements" value={log.data ? String(log.data.summary.movements) : '—'} icon={<History size={15} />} />
-          <StatTile label="People" value={log.data ? String(log.data.summary.people) : '—'} icon={<Users size={15} />} />
-          <StatTile label="Places" value={log.data ? String(log.data.summary.places) : '—'} icon={<MapPin size={15} />} />
-          <StatTile label="Hotel nights" value={log.data ? String(log.data.summary.nights) : '—'} icon={<Moon size={15} />} />
-          <div className="col-span-2 lg:col-span-1">
-            <StatTile
-              label="Booked spend"
-              value={log.data?.summary.spent ? formatMoney(log.data.summary.spent) : '—'}
-              icon={<span className="text-xs font-semibold">₹</span>}
-            />
+      {/* Phones and tablets get tiles; from lg the same figures sit in the
+          table's header, so the rows get the height. */}
+      <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:hidden">
+        {stats.map((stat, index) => (
+          <div key={stat.label} className={cn(index === stats.length - 1 && 'col-span-2 sm:col-span-1')}>
+            <StatTile compact label={stat.label} value={stat.value} icon={stat.icon} />
           </div>
-        </div>
+        ))}
       </div>
 
-      <Card className="overflow-hidden">
+      {/* No min-h-0 here: the card may not shrink below the scroller's floor,
+          so on a short window the page scrolls a little rather than the table
+          collapsing to nothing and the pager being cut off. */}
+      <Card className="flex flex-col overflow-hidden lg:flex-1">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3 border-b border-border px-4 py-3.5 sm:px-5">
+          <div className="mr-auto min-w-0">
+            <h2 className="text-base font-semibold tracking-tight">{heading}</h2>
+            <p className="mt-0.5 text-xs text-text-muted">
+              {data
+                ? `${total} ${total === 1 ? 'movement' : 'movements'}${filtersActive ? ' matching the filters' : ''}`
+                : 'Loading…'}
+            </p>
+          </div>
+          <dl className="hidden items-center gap-x-6 lg:flex">
+            {stats.slice(1).map((stat) => (
+              <div key={stat.label} className="min-w-0">
+                <dt className="flex items-center gap-1.5 text-xs text-text-muted">
+                  <span className="text-text-subtle">{stat.icon}</span>
+                  {stat.label}
+                </dt>
+                <dd className="mt-0.5 text-lg font-semibold leading-6 tracking-tight">{stat.value}</dd>
+              </div>
+            ))}
+          </dl>
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={exporting.isPending}
+            disabled={!data || total === 0}
+            onClick={() => exporting.mutate()}
+            title="Download every matching row, not just this page"
+          >
+            {!exporting.isPending && <Download size={15} />}
+            Export CSV
+          </Button>
+        </div>
+
         {log.isPending ? (
           <div className="space-y-2 p-5">
             {Array.from({ length: 5 }).map((_, i) => (
@@ -347,7 +542,7 @@ export default function TravelLogsPage() {
           </div>
         ) : log.isError ? (
           <EmptyState icon={<History size={28} />} title="Could not load the log" description={errorMessage(log.error)} />
-        ) : log.data.entries.length === 0 ? (
+        ) : data!.entries.length === 0 ? (
           <EmptyState
             icon={<MapPin size={28} />}
             title="No travel in this period"
@@ -355,58 +550,72 @@ export default function TravelLogsPage() {
           />
         ) : (
           <>
-            {/* Phones get cards; a nine-column table does not fit a hand. */}
-            <ul className="divide-y divide-border md:hidden">
-              {log.data.entries.map((entry) => (
-                <li key={entry.traveller_id} className="space-y-1.5 px-4 py-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <button
-                      type="button"
-                      className="text-left text-sm font-semibold hover:underline"
-                      onClick={() => update({ user: String(entry.user_id) })}
-                    >
-                      {entry.full_name}
-                    </button>
-                    <Badge tone={STATUS_TONE[entry.status]}>{TRAVELLER_STATUS_LABELS[entry.status]}</Badge>
-                  </div>
-                  <p className="flex items-center gap-2 text-sm">
-                    <span className="text-text-subtle"><TypeIcon entry={entry} /></span>
-                    {place(entry)}
-                  </p>
-                  <p className="text-xs text-text-muted">
-                    {when(entry)} · {kind(entry)}
-                    {entry.nights != null && ` · ${entry.nights} night${entry.nights === 1 ? '' : 's'}`}
-                  </p>
-                  <p className="text-xs text-text-subtle">
-                    {entry.project_name ?? entry.project_code}
-                    {entry.booking_reference && ` · PNR ${entry.booking_reference}`}
-                    {entry.cost_amount && ` · ${formatMoney(entry.cost_amount)}`}
-                  </p>
-                  {entry.companions.length > 0 && (
-                    <p className="text-xs text-text-subtle">With {entry.companions.join(', ')}</p>
-                  )}
-                </li>
-              ))}
-            </ul>
+            {/* The only scrolling part of the page from lg up. Below lg it is
+                bounded too, so a long page of rows cannot push the pager off
+                the bottom of a phone. */}
+            <div
+              className={cn(
+                'max-h-[70dvh] overflow-auto overscroll-contain lg:max-h-none lg:min-h-[12rem] lg:flex-1',
+                log.isPlaceholderData && 'opacity-60 transition-opacity',
+              )}
+              ref={scroller}
+              tabIndex={0}
+              aria-label="Travel log entries"
+            >
+              {/* Phones get cards; a seven-column table does not fit a hand. */}
+              <ul className="divide-y divide-border md:hidden">
+                {data!.entries.map((entry) => (
+                  <li key={entry.traveller_id} className="space-y-1.5 px-4 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <button
+                        type="button"
+                        className="text-left text-sm font-semibold hover:underline"
+                        onClick={() => update({ user: String(entry.user_id) })}
+                      >
+                        {entry.full_name}
+                      </button>
+                      <Badge tone={STATUS_TONE[entry.status]}>{TRAVELLER_STATUS_LABELS[entry.status]}</Badge>
+                    </div>
+                    <p className="flex items-center gap-2 text-sm">
+                      <span className="text-text-subtle"><TypeIcon entry={entry} /></span>
+                      {place(entry)}
+                    </p>
+                    <p className="text-xs text-text-muted">
+                      {when(entry)} · {kind(entry)}
+                      {entry.nights != null && ` · ${entry.nights} night${entry.nights === 1 ? '' : 's'}`}
+                    </p>
+                    <p className="text-xs text-text-subtle">
+                      {entry.project_name ?? entry.project_code}
+                      {entry.booking_reference && ` · PNR ${entry.booking_reference}`}
+                      {entry.cost_amount && ` · ${formatMoney(entry.cost_amount)}`}
+                    </p>
+                    {entry.companions.length > 0 && (
+                      <p className="text-xs text-text-subtle">With {entry.companions.join(', ')}</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
 
-            <div className="hidden overflow-x-auto md:block">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border bg-surface-sunken text-left text-xs font-medium text-text-muted">
-                    <th className="px-4 py-3 font-medium">Date</th>
-                    <th className="px-4 py-3 font-medium">Employee</th>
-                    <th className="px-4 py-3 font-medium">Where</th>
-                    <th className="px-4 py-3 font-medium">Type</th>
-                    <th className="px-4 py-3 font-medium">Campaign</th>
-                    <th className="px-4 py-3 font-medium">Status</th>
-                    <th className="px-4 py-3 text-right font-medium">Cost</th>
+              <table className="hidden w-full text-sm md:table">
+                {/* Sticky, so the column names stay in view while the rows
+                    scroll under them. The inset shadow is the bottom rule: a
+                    border on a sticky row scrolls away with the rows. */}
+                <thead className="sticky top-0 z-10 bg-surface-sunken shadow-[inset_0_-1px_0_rgb(var(--border))]">
+                  <tr className="text-left text-xs font-medium text-text-muted">
+                    <th className="px-4 py-2.5 font-medium">Date</th>
+                    <th className="px-4 py-2.5 font-medium">Employee</th>
+                    <th className="px-4 py-2.5 font-medium">Where</th>
+                    <th className="px-4 py-2.5 font-medium">Type</th>
+                    <th className="px-4 py-2.5 font-medium">Campaign</th>
+                    <th className="px-4 py-2.5 font-medium">Status</th>
+                    <th className="px-4 py-2.5 text-right font-medium">Cost</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {log.data.entries.map((entry) => (
+                  {data!.entries.map((entry) => (
                     <tr key={entry.traveller_id} className="align-top hover:bg-surface-sunken/60">
-                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-text-muted">{when(entry)}</td>
-                      <td className="px-4 py-3">
+                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-text-muted lg:py-2.5">{when(entry)}</td>
+                      <td className="px-4 py-3 lg:py-2.5">
                         <button
                           type="button"
                           className="text-left font-medium hover:underline"
@@ -419,13 +628,13 @@ export default function TravelLogsPage() {
                           <span className="block font-mono text-xs text-text-subtle">{entry.employee_code}</span>
                         )}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 lg:py-2.5">
                         <span className="block">{place(entry)}</span>
                         {entry.companions.length > 0 && (
                           <span className="block text-xs text-text-subtle">With {entry.companions.join(', ')}</span>
                         )}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-text-muted">
+                      <td className="whitespace-nowrap px-4 py-3 lg:py-2.5 text-text-muted">
                         <span className="inline-flex items-center gap-1.5">
                           <TypeIcon entry={entry} />
                           {kind(entry)}
@@ -436,17 +645,17 @@ export default function TravelLogsPage() {
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-text-muted">
+                      <td className="px-4 py-3 lg:py-2.5 text-text-muted">
                         <span className="font-mono text-xs">{entry.project_code}</span>
                         {entry.project_name && <span className="block text-xs text-text-subtle">{entry.project_name}</span>}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 lg:py-2.5">
                         <Badge tone={STATUS_TONE[entry.status]}>{TRAVELLER_STATUS_LABELS[entry.status]}</Badge>
                         {entry.booking_reference && (
                           <span className="mt-1 block font-mono text-xs text-text-subtle">PNR {entry.booking_reference}</span>
                         )}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                      <td className="whitespace-nowrap px-4 py-3 lg:py-2.5 text-right tabular-nums">
                         {entry.cost_amount ? formatMoney(entry.cost_amount) : <span className="text-text-subtle">—</span>}
                       </td>
                     </tr>
@@ -454,11 +663,21 @@ export default function TravelLogsPage() {
                 </tbody>
               </table>
             </div>
-            {log.data.truncated && (
-              <p className="border-t border-border px-4 py-3 text-xs text-text-subtle">
-                Showing the newest {log.data.entries.length} of {log.data.total}. Narrow the dates to see the rest.
-              </p>
-            )}
+
+            <div className="shrink-0">
+              <Pager
+                page={data!.page}
+                pages={data!.pages}
+                total={total}
+                pageSize={data!.page_size}
+                shown={data!.entries.length}
+                busy={log.isFetching}
+                onPage={(next) => update({ page: next > 1 ? String(next) : undefined })}
+                onPageSize={(size) =>
+                  update({ size: size === DEFAULT_PAGE_SIZE ? undefined : String(size) })
+                }
+              />
+            </div>
           </>
         )}
       </Card>
