@@ -64,3 +64,7 @@ class ImportResult(BaseModel):
     skipped: int
     invite_urls: dict[str, str]
     errors: list[str] = []
+    #: True when the invites are being emailed in the background. When false,
+    #: `email_detail` says why, and the links above are the only copy.
+    emailing: bool = False
+    email_detail: str | None = None

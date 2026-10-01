@@ -5,6 +5,7 @@ import {
   CalendarCheck,
   CheckSquare,
   FolderKanban,
+  History,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -18,7 +19,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { LogoLockup } from '@/components/Logo';
 import NotificationBell from '@/components/NotificationBell';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { Badge, Button } from '@/components/ui';
+import { Button } from '@/components/ui';
 import { logout, saveThemePreference } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
@@ -30,20 +31,25 @@ interface NavItem {
   label: string;
   icon: typeof LayoutDashboard;
   roles?: Role[];
-  /** Shown greyed with a "Soon" chip until the phase that builds it lands. */
-  phase?: number;
+  /** Which heading it sits under in the sidebar. */
+  group: 'Workspace' | 'Operations' | 'Admin';
 }
 
+const ADMINS: Role[] = ['ADMIN', 'SYSTEM_ADMIN'];
+
 const NAV: NavItem[] = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/requests', label: 'My requests', icon: CalendarCheck },
-  { to: '/approvals', label: 'Approvals', icon: CheckSquare, roles: ['ADMIN', 'SYSTEM_ADMIN'] },
-  { to: '/analytics', label: 'Cost analytics', icon: BarChart3, roles: ['ADMIN', 'SYSTEM_ADMIN'] },
-  { to: '/projects', label: 'Projects', icon: FolderKanban, roles: ['ADMIN', 'SYSTEM_ADMIN'] },
-  { to: '/team', label: 'Team', icon: Users, roles: ['ADMIN', 'SYSTEM_ADMIN'] },
-  { to: '/notifications', label: 'Notifications', icon: Bell },
-  { to: '/audit', label: 'Activity log', icon: ScrollText, roles: ['SYSTEM_ADMIN'] },
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, group: 'Workspace' },
+  { to: '/requests', label: 'My requests', icon: CalendarCheck, group: 'Workspace' },
+  { to: '/notifications', label: 'Notifications', icon: Bell, group: 'Workspace' },
+  { to: '/approvals', label: 'Approvals', icon: CheckSquare, roles: ADMINS, group: 'Operations' },
+  { to: '/travel-logs', label: 'Travel logs', icon: History, roles: ADMINS, group: 'Operations' },
+  { to: '/analytics', label: 'Cost analytics', icon: BarChart3, roles: ADMINS, group: 'Operations' },
+  { to: '/projects', label: 'Campaigns', icon: FolderKanban, roles: ADMINS, group: 'Admin' },
+  { to: '/team', label: 'Team', icon: Users, roles: ADMINS, group: 'Admin' },
+  { to: '/audit', label: 'Activity log', icon: ScrollText, roles: ['SYSTEM_ADMIN'], group: 'Admin' },
 ];
+
+const GROUPS: NavItem['group'][] = ['Workspace', 'Operations', 'Admin'];
 
 function initials(name: string) {
   return name
@@ -123,11 +129,11 @@ export default function AppShell() {
         // aria-hidden when closed: the same element is the desktop navigation,
         // and hiding it on that breakpoint would remove the nav entirely.
         className={cn(
-          'fixed inset-y-0 left-0 z-40 flex w-64 max-w-[85vw] flex-col border-r border-border bg-surface transition-transform duration-300 ease-out',
+          'fixed inset-y-0 left-0 z-40 flex w-72 max-w-[85vw] flex-col border-r border-border bg-surface transition-transform duration-300 ease-out lg:w-64',
           drawerOpen ? 'translate-x-0' : 'max-lg:-translate-x-full',
         )}
       >
-        <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
+        <div className="flex h-16 shrink-0 items-center justify-between border-b border-border px-4">
           <LogoLockup />
           <button
             type="button"
@@ -139,48 +145,60 @@ export default function AppShell() {
           </button>
         </div>
 
-        <nav aria-label="Main" className="flex-1 space-y-0.5 overflow-y-auto p-3">
-          {visible.map(({ to, label, icon: Icon, phase }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              className={({ isActive }) =>
-                cn(
-                  'group relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors',
-                  isActive
-                    ? 'bg-surface-sunken font-medium text-text'
-                    : 'text-text-muted hover:bg-surface-sunken hover:text-text',
-                )
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  {/* Brand red earns its place here: identity, not an action. */}
-                  {isActive && (
-                    <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-brand" />
-                  )}
-                  <Icon size={16} strokeWidth={2} className="shrink-0" />
-                  <span className="truncate">{label}</span>
-                  {phase && (
-                    <span className="ml-auto text-2xs font-medium text-text-subtle">
-                      Phase {phase}
-                    </span>
-                  )}
-                </>
-              )}
-            </NavLink>
-          ))}
+        <nav aria-label="Main" className="flex-1 space-y-5 overflow-y-auto px-3 py-4">
+          {GROUPS.map((group) => {
+            const items = visible.filter((item) => item.group === group);
+            if (items.length === 0) return null;
+            return (
+              <div key={group}>
+                {/* Ground staff see one short list, so a heading would only
+                    add noise there. */}
+                {visible.length > 3 && (
+                  <p className="mb-1.5 px-2.5 text-2xs font-semibold uppercase tracking-wider text-text-subtle">
+                    {group}
+                  </p>
+                )}
+                <div className="space-y-0.5">
+                  {items.map(({ to, label, icon: Icon }) => (
+                    <NavLink
+                      key={to}
+                      to={to}
+                      end={to === '/'}
+                      className={({ isActive }) =>
+                        cn(
+                          'group relative flex items-center gap-3 rounded-lg px-2.5 py-2.5 text-sm transition-colors',
+                          isActive
+                            ? 'bg-surface-sunken font-medium text-text'
+                            : 'text-text-muted hover:bg-surface-sunken hover:text-text',
+                        )
+                      }
+                    >
+                      {({ isActive }) => (
+                        <>
+                          {/* Brand red earns its place here: identity, not an action. */}
+                          {isActive && (
+                            <span className="absolute inset-y-2 left-0 w-[3px] rounded-full bg-brand" />
+                          )}
+                          <Icon size={18} strokeWidth={2} className="shrink-0" />
+                          <span className="truncate">{label}</span>
+                        </>
+                      )}
+                    </NavLink>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </nav>
 
         <div className="shrink-0 border-t border-border p-3">
           <div className="flex items-center gap-2.5 rounded-md px-2 py-2">
-            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-surface-sunken text-2xs font-semibold text-text-muted">
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand-soft text-xs font-semibold text-brand-strong">
               {user ? initials(user.full_name) : '?'}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-medium">{user?.full_name}</p>
-              <p className="truncate text-2xs text-text-subtle">
+              <p className="truncate text-sm font-medium">{user?.full_name}</p>
+              <p className="truncate text-xs text-text-subtle">
                 {user ? ROLE_LABELS[user.role] : ''}
               </p>
             </div>
@@ -199,22 +217,19 @@ export default function AppShell() {
       </aside>
 
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-surface/80 px-4 backdrop-blur-md sm:px-6">
+        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-border bg-surface/80 px-4 backdrop-blur-md sm:px-6 lg:px-8">
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
             className="rounded-md p-1.5 text-text-muted hover:bg-surface-sunken hover:text-text lg:hidden"
             aria-label="Open navigation"
           >
-            <Menu size={18} />
+            <Menu size={20} />
           </button>
 
-          <span className="text-sm font-medium">{currentLabel ?? 'Travel Ops'}</span>
+          <span className="truncate text-base font-semibold">{currentLabel ?? 'Travel Ops'}</span>
 
-          <div className="ml-auto flex items-center gap-3">
-            <Badge tone="neutral" className="hidden sm:inline-flex">
-              Phase 7
-            </Badge>
+          <div className="ml-auto flex items-center gap-2 sm:gap-3">
             <NotificationBell />
             <ThemeToggle />
           </div>
@@ -223,7 +238,7 @@ export default function AppShell() {
         <main
           id="main"
           tabIndex={-1}
-          className="mx-auto max-w-6xl animate-fade-in px-4 py-6 sm:px-6 sm:py-8 focus:outline-none"
+          className="mx-auto w-full max-w-7xl animate-fade-in px-4 py-6 sm:px-6 sm:py-8 lg:px-8 focus:outline-none"
         >
           <Outlet />
         </main>

@@ -65,12 +65,15 @@ jobs:
       # requirements.txt is generated from uv.lock, so the two drift the moment
       # someone edits one by hand. Regenerating and diffing is the only check
       # that stays true.
+      #
+      # Regenerated in place, with the same command the header records: uv
+      # writes the -o path into that header, so exporting anywhere else makes
+      # the files differ on every run.
       - name: requirements.txt matches the lockfile
         run: |
-          uv export --format requirements-txt --no-dev --no-hashes --no-emit-project -o /tmp/req.txt
-          uv export --format requirements-txt --no-hashes --no-emit-project -o /tmp/req-dev.txt
-          diff -u requirements.txt /tmp/req.txt
-          diff -u requirements-dev.txt /tmp/req-dev.txt
+          uv export --format requirements-txt --no-dev --no-hashes --no-emit-project -o requirements.txt
+          uv export --format requirements-txt --no-hashes --no-emit-project -o requirements-dev.txt
+          git diff --exit-code -- requirements.txt requirements-dev.txt
 
   migrations:
     name: Migrations apply cleanly

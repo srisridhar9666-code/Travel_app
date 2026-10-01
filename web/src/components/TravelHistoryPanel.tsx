@@ -10,7 +10,8 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 
-import { Badge, EmptyState, Select, Skeleton } from '@/components/ui';
+import { DateRangePicker, rangeFor, type DateRange } from '@/components/DateRangePicker';
+import { Badge, EmptyState, Skeleton } from '@/components/ui';
 import { errorMessage, fetchTravelHistory } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import {
@@ -19,20 +20,6 @@ import {
   type TravelMode,
   type TravelMovement,
 } from '@/types';
-
-/** §5 asks for "minimum 2+ months". We keep everything and let the view widen. */
-const WINDOWS = [
-  { days: 90, label: 'Last 90 days' },
-  { days: 180, label: 'Last 6 months' },
-  { days: 365, label: 'Last year' },
-  { days: 3650, label: 'Everything' },
-];
-
-function sinceDate(days: number) {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10);
-}
 
 function MovementIcon({ type, mode }: { type: RequestType; mode: TravelMode | null }) {
   const size = 14;
@@ -149,12 +136,31 @@ interface TravelHistoryPanelProps {
  * the whole point of asking "where has this person been".
  */
 export function TravelHistoryPanel({ userId, compact = false }: TravelHistoryPanelProps) {
-  const [days, setDays] = useState(90);
+  // §5 asks for "minimum 2+ months". We keep everything and let the view
+  // move: last month is the question an admin asks most.
+  const [range, setRange] = useState<DateRange>(() => rangeFor('last_90'));
 
   const history = useQuery({
-    queryKey: ['travel-history', userId, days],
-    queryFn: () => fetchTravelHistory(userId, { since: sinceDate(days) }),
+    queryKey: ['travel-history', userId, range.since, range.until],
+    queryFn: () =>
+      fetchTravelHistory(userId, {
+        // The endpoint defaults an empty start to 90 days back; "all time"
+        // has to say so explicitly.
+        since: range.since || '2000-01-01',
+        until: range.until || undefined,
+      }),
+    placeholderData: (previous) => previous,
   });
+
+  const picker = (
+    <DateRangePicker
+      id={`history-range-${userId}`}
+      value={range}
+      onChange={setRange}
+      presets={['this_month', 'last_month', 'last_30', 'last_90', 'this_year', 'all', 'custom']}
+      className="ml-auto"
+    />
+  );
 
   if (history.isPending) {
     return (
@@ -168,11 +174,14 @@ export function TravelHistoryPanel({ userId, compact = false }: TravelHistoryPan
 
   if (history.isError) {
     return (
-      <EmptyState
-        icon={<CalendarRange size={28} />}
-        title="Could not load the timeline"
-        description={errorMessage(history.error)}
-      />
+      <div>
+        <div className="mb-4 flex justify-end">{picker}</div>
+        <EmptyState
+          icon={<CalendarRange size={28} />}
+          title="Could not load the timeline"
+          description={errorMessage(history.error)}
+        />
+      </div>
     );
   }
 
@@ -203,25 +212,14 @@ export function TravelHistoryPanel({ userId, compact = false }: TravelHistoryPan
             </span>
           </div>
         )}
-        <Select
-          value={String(days)}
-          onChange={(e) => setDays(Number(e.target.value))}
-          aria-label="How far back"
-          className="ml-auto w-40"
-        >
-          {WINDOWS.map((w) => (
-            <option key={w.days} value={w.days}>
-              {w.label}
-            </option>
-          ))}
-        </Select>
+        {picker}
       </div>
 
       {entries.length === 0 ? (
         <EmptyState
           icon={<MapPin size={28} />}
           title="No movements in this period"
-          description="Try a longer window, or this person has not travelled yet."
+          description="Try a different date range, or this person has not travelled in it."
         />
       ) : (
         // overflow-hidden clips the spine below the final marker.

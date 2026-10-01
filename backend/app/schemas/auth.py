@@ -78,10 +78,17 @@ class MessageResponse(BaseModel):
 class InviteLinkResponse(BaseModel):
     """Returned to an admin after creating or re-inviting a user.
 
-    Email delivery arrives in Phase 6; until then the admin copies this link.
-    The raw token appears here exactly once and is not stored.
+    The link is emailed to the person, and also returned here so the admin can
+    pass it on when mail is off or bounced. The raw token appears here exactly
+    once and is not stored.
     """
 
     detail: str
     invite_url: str | None = None
     expires_at: datetime | None = None
+    #: Whether the link reached the mail server. None on the forgot-password
+    #: answer, which must not reveal anything about the account.
+    email_sent: bool | None = None
+    #: Why it did not, when it did not - "EMAIL_ENABLED is not true", an SMTP
+    #: authentication error - so the admin can fix the cause, not just retry.
+    email_detail: str | None = None

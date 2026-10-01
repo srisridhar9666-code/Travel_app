@@ -23,6 +23,7 @@ from app.schemas.project import (
     ProjectUpdate,
 )
 from app.services import audit
+from app.services.seed import ensure_other_project
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -61,6 +62,12 @@ def list_projects(
 ) -> ProjectListResponse:
     """Every signed-in user can read the campaign list - ground staff need it to
     tag a request. Only admins can change it."""
+    # The "Other" campaign is normally created at startup, but that step can
+    # fail on a server that started before its migration ran. Making sure of
+    # it here means the request form's "Other" option cannot silently vanish.
+    ensure_other_project(db, user.tenant_id)
+    db.commit()
+
     filters = [Project.tenant_id == user.tenant_id]
 
     if search:

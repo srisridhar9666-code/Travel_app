@@ -19,6 +19,7 @@ from app.routers import analytics as analytics_router
 from app.routers import audit as audit_router
 from app.routers import auth as auth_router
 from app.routers import id_proofs as id_proofs_router
+from app.routers import insights as insights_router
 from app.routers import internal as internal_router
 from app.routers import locations as locations_router
 from app.routers import notifications as notifications_router
@@ -49,17 +50,32 @@ async def lifespan(app: FastAPI):
 
     # Schema comes from Alembic, never from create_all. If the tables are not
     # there yet the app should say so loudly rather than invent them.
-    db = SessionLocal()
-    try:
-        ensure_bootstrap_admin(db)
-        ensure_other_project(db, settings.default_tenant)
-        location_service.seed(db, settings.default_tenant)
-        db.commit()
-    except Exception:
-        logger.exception("Bootstrap admin check failed - have migrations been run?")
-        db.rollback()
-    finally:
-        db.close()
+    #
+    # Each step commits on its own. They used to share one transaction, so a
+    # missing `locations` table also rolled back the "Other" campaign and the
+    # form lost both. The two reference-data steps are repeated on first use
+    # as well (see `ensure_seeded` and the projects list), because nothing
+    # re-runs this block after a migration lands on a server already running.
+    for step, run in (
+        ("bootstrap admin", lambda db: ensure_bootstrap_admin(db)),
+        ("'Other' campaign", lambda db: ensure_other_project(db, settings.default_tenant)),
+        ("place list", lambda db: location_service.seed(db, settings.default_tenant)),
+    ):
+        db = SessionLocal()
+        try:
+            run(db)
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Startup step failed: %s. Have migrations been run? "
+                "(cd backend && alembic upgrade head)",
+                step,
+            )
+            db.rollback()
+        finally:
+            db.close()
+
+    email_service.log_configuration()
 
     scheduler.start()
 
@@ -98,6 +114,7 @@ app.include_router(requests_router.router)
 app.include_router(tickets_router.router)
 app.include_router(notifications_router.router)
 app.include_router(analytics_router.router)
+app.include_router(insights_router.router)
 app.include_router(id_proofs_router.router)
 app.include_router(audit_router.router)
 app.include_router(locations_router.router)

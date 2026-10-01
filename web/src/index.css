@@ -66,7 +66,7 @@
     --danger:        200 30 30;   --danger-soft:  254 226 226;
     --info:          29 78 216;   --info-soft:    219 234 254;
 
-    --radius: 0.625rem;
+    --radius: 0.75rem;
 
     --shadow-sm: 0 1px 2px 0 rgb(14 15 18 / 0.05);
     --shadow-md: 0 4px 12px -2px rgb(14 15 18 / 0.08), 0 2px 4px -2px rgb(14 15 18 / 0.04);
@@ -126,12 +126,21 @@
 
   html {
     -webkit-text-size-adjust: 100%;
+    scroll-padding-top: 4.5rem;
   }
 
   body {
     margin: 0;
     min-height: 100dvh;
     background-color: rgb(var(--canvas));
+    /* A faint wash at the top of the canvas, so the page has some depth
+       behind the cards without competing with them. */
+    background-image: radial-gradient(
+      ellipse 80% 40% at 50% -10%,
+      rgb(var(--chart-1) / 0.07),
+      transparent 70%
+    );
+    background-attachment: fixed;
     color: rgb(var(--text));
     font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';

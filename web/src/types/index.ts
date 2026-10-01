@@ -57,6 +57,10 @@ export interface InviteLink {
   detail: string;
   invite_url: string | null;
   expires_at: string | null;
+  /** Whether the link reached the mail server. */
+  email_sent?: boolean | null;
+  /** Why it did not, in words an admin can act on. */
+  email_detail?: string | null;
 }
 
 export interface TokenPreview {
@@ -184,6 +188,9 @@ export interface ImportResult {
   skipped: number;
   invite_urls: Record<string, string>;
   errors: string[];
+  /** True when the invites are being emailed in the background. */
+  emailing?: boolean;
+  email_detail?: string | null;
 }
 
 export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
@@ -738,4 +745,117 @@ export interface TravelHistory {
     travelled_with: number;
     by_type: Record<string, number>;
   };
+}
+
+// --- travel logs and the dashboard ------------------------------------------
+
+export interface InsightFilters {
+  since?: string;
+  until?: string;
+  user_id?: number;
+  project_id?: number;
+  request_type?: RequestType;
+  state?: string;
+}
+
+export interface TravelLogEntry {
+  traveller_id: number;
+  request_id: number;
+  user_id: number;
+  full_name: string;
+  employee_code: string | null;
+  designation: Designation | null;
+  request_type: RequestType;
+  mode: TravelMode | null;
+  status: TravellerStatus;
+  where: string;
+  origin: string | null;
+  origin_state: string | null;
+  destination: string | null;
+  destination_state: string | null;
+  hotel_city: string | null;
+  hotel_state: string | null;
+  started_on: string | null;
+  start_at: string | null;
+  end_at: string | null;
+  check_in: string | null;
+  check_out: string | null;
+  nights: number | null;
+  project_id: number;
+  project_code: string | null;
+  project_name: string | null;
+  travel_reason: string | null;
+  booking_reference: string | null;
+  companions: string[];
+  cost_amount: string | null;
+}
+
+export interface TravelLog {
+  since: string | null;
+  until: string | null;
+  total: number;
+  truncated: boolean;
+  summary: {
+    movements: number;
+    people: number;
+    requests: number;
+    nights: number;
+    places: number;
+    spent: string | null;
+  };
+  entries: TravelLogEntry[];
+}
+
+export interface CountRow {
+  label: string;
+  count: number;
+}
+
+export interface Insights {
+  since: string;
+  until: string;
+  grain: 'day' | 'week' | 'month';
+  currency: string;
+  kpis: {
+    movements: number;
+    requests: number;
+    people: number;
+    nights: number;
+    pending: number;
+    approved: number;
+    booked: number;
+    rejected: number;
+    cancelled: number;
+    spent: string;
+    committed: string;
+    uncosted: number;
+    average_per_booking: string;
+  };
+  trend: { period: string; movements: number; people: number; spent: string }[];
+  by_status: { status: TravellerStatus; count: number }[];
+  by_type: { request_type: RequestType; count: number; spent: string }[];
+  by_mode: CountRow[];
+  top_states: CountRow[];
+  top_places: CountRow[];
+  by_campaign: {
+    project_id: number;
+    code: string;
+    name: string;
+    count: number;
+    people: number;
+    spent: string;
+  }[];
+  top_travellers: {
+    user_id: number;
+    full_name: string;
+    count: number;
+    nights: number;
+    spent: string;
+  }[];
+}
+
+export interface FilterOptions {
+  projects: { id: number; code: string; name: string; status: ProjectStatus }[];
+  people: { id: number; full_name: string; employee_code: string | null; is_active: boolean }[];
+  states: string[];
 }

@@ -47,7 +47,7 @@ from app.schemas.request import (
     RevisionRead,
     TravellerRead,
 )
-from app.services import audit, conflicts, costay
+from app.services import audit, conflicts, costay, locations
 from app.services.seed import OTHER_PROJECT_CODE
 
 # Human labels for the diff, so a revision reads as English rather than as column
@@ -229,6 +229,32 @@ def resolve_travellers(
         people.extend(sorted(found, key=lambda u: u.full_name))
 
     return people
+
+
+def canonicalise_places(db: Session, tenant_id: str, body: RequestBody) -> None:
+    """Settle every picked or typed place on the body to the stored spelling.
+
+    The form lets someone type a place under "Other" when the list does not
+    have it. Conflict detection and co-stay matching compare places exactly, so
+    a typed "hyd" has to become the listed "Hyderabad" before anything is saved
+    or checked. A cab's pickup and drop are street addresses inside one city,
+    not places on the list, so those are only tidied.
+    """
+    if body.request_type is RequestType.LOCAL_CAB:
+        body.origin = locations.tidy(body.origin)
+        body.destination = locations.tidy(body.destination)
+        return
+
+    for state_field, place_field in (
+        ("origin_state", "origin"),
+        ("destination_state", "destination"),
+        ("hotel_state", "hotel_city"),
+    ):
+        state, place = locations.canonical(
+            db, tenant_id, getattr(body, state_field), getattr(body, place_field)
+        )
+        setattr(body, state_field, state)
+        setattr(body, place_field, place)
 
 
 def apply_body(request: TravelRequest, body: RequestBody) -> None:

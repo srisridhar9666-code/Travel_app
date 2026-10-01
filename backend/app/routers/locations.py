@@ -52,6 +52,8 @@ def list_locations(
     "given this state, which cities", and making the client regroup a flat list
     on every render is work for nothing.
     """
+    service.ensure_seeded(db, user.tenant_id)
+
     stmt = select(Location).where(Location.tenant_id == user.tenant_id)
     if not include_inactive:
         stmt = stmt.where(Location.is_active.is_(True))

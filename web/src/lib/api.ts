@@ -10,6 +10,11 @@ import type {
   Colleague,
   CoStayMatch,
   CostPreview,
+  FilterOptions,
+  Insights,
+  InsightFilters,
+  TravelLog,
+  TravellerStatus,
   IdProof,
   ImportPreview,
   ImportResult,
@@ -566,3 +571,29 @@ export const resolvePlace = (typed: string) =>
       { params: { typed } },
     )
     .then((r) => r.data);
+
+// --- travel logs and the dashboard ------------------------------------------
+
+/** Axios would send an array as `status[]=`; FastAPI wants the key repeated. */
+function repeatParams(params: Record<string, unknown>) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') continue;
+    if (Array.isArray(value)) value.forEach((v) => search.append(key, String(v)));
+    else search.append(key, String(value));
+  }
+  return search;
+}
+
+export const fetchTravelLogs = (
+  params: InsightFilters & { status?: TravellerStatus[]; search?: string; limit?: number },
+) =>
+  api
+    .get<TravelLog>('/travel-logs', { params: repeatParams({ ...params }) })
+    .then((r) => r.data);
+
+export const fetchInsights = (params: InsightFilters) =>
+  api.get<Insights>('/analytics/insights', { params: repeatParams({ ...params }) }).then((r) => r.data);
+
+export const fetchFilterOptions = () =>
+  api.get<FilterOptions>('/analytics/filter-options').then((r) => r.data);

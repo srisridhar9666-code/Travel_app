@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
 
@@ -60,23 +60,29 @@ export function StatTile({
   icon?: ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-border bg-surface px-4 py-3.5 shadow-sm">
-      <div className="flex items-center gap-1.5 text-2xs uppercase tracking-widest text-text-subtle">
-        {icon}
-        {label}
+    <div className="rounded-xl border border-border bg-surface px-4 py-4 shadow-sm sm:px-5">
+      <div className="flex items-center gap-2 text-xs font-medium text-text-muted">
+        {icon && (
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-surface-sunken text-text-subtle">
+            {icon}
+          </span>
+        )}
+        {/* Wraps rather than truncating: two tiles sit side by side on a
+            phone, and "Awaiting a de…" says nothing. */}
+        <span className="min-w-0 leading-snug">{label}</span>
       </div>
       {/* Proportional figures, not tabular-nums: equal-width digits make a
           standalone number look loose at display sizes. Tabular is for columns
           that align vertically - table rows and axis ticks. */}
       <p
         className={cn(
-          'mt-1.5 text-2xl font-semibold tracking-tight',
+          'mt-2 text-2xl font-semibold tracking-tight sm:text-[1.75rem] sm:leading-9',
           tone === 'warning' && 'text-warning',
         )}
       >
         {value}
       </p>
-      {hint && <p className="mt-0.5 text-2xs text-text-muted">{hint}</p>}
+      {hint && <p className="mt-1 text-xs text-text-muted">{hint}</p>}
     </div>
   );
 }
@@ -174,6 +180,21 @@ export function Columns({
 }) {
   const [hovered, setHovered] = useState<number | null>(null);
 
+  // Thirty daily columns fit a phone; thirty "12 Sep" labels do not. Label
+  // every nth column, with n chosen from the width actually available.
+  const plotRef = useRef<HTMLDivElement>(null);
+  const [plotWidth, setPlotWidth] = useState(0);
+  useEffect(() => {
+    const el = plotRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => setPlotWidth(entry.contentRect.width));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const longest = Math.max(...data.map((d) => d.label.length), 1);
+  const fits = plotWidth > 0 ? Math.max(1, Math.floor(plotWidth / (longest * 7 + 12))) : data.length;
+  const every = Math.max(1, Math.ceil(data.length / fits));
+
   const max = niceMax(Math.max(...data.map((d) => d.value), 0));
   const peak = data.reduce(
     (best, row, i) => (row.value > (data[best]?.value ?? -1) ? i : best),
@@ -191,7 +212,7 @@ export function Columns({
           ))}
         </div>
 
-        <div className="relative flex-1">
+        <div ref={plotRef} className="relative min-w-0 flex-1">
           {/* Hairline, solid, recessive. Never dashed. */}
           <div className="pointer-events-none absolute inset-0 flex flex-col justify-between">
             {ticks.map((tick) => (
@@ -206,7 +227,7 @@ export function Columns({
               return (
                 <div
                   key={row.label}
-                  className="group relative flex h-full flex-1 items-end justify-center"
+                  className="group relative flex h-full min-w-0 flex-1 items-end justify-center"
                   onMouseEnter={() => setHovered(index)}
                   onMouseLeave={() => setHovered(null)}
                   onFocus={() => setHovered(index)}
@@ -246,12 +267,13 @@ export function Columns({
           </div>
 
           <div className="mt-1.5 flex gap-0.5">
-            {data.map((row) => (
+            {data.map((row, index) => (
               <span
                 key={row.label}
-                className="flex-1 text-center text-2xs text-text-subtle"
+                aria-hidden
+                className="flex min-w-0 flex-1 justify-center whitespace-nowrap text-2xs text-text-subtle"
               >
-                {row.label}
+                {index % every === 0 ? row.label : ''}
               </span>
             ))}
           </div>
