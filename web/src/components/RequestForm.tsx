@@ -356,7 +356,7 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
                 </option>
               ))}
             {otherProject && (
-              <option value={otherProject.id}>Other — not listed here</option>
+              <option value={otherProject.id}>Other — type the campaign name</option>
             )}
           </Select>
         </Field>
@@ -408,7 +408,7 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
               className="sm:col-span-2"
               state={form.hotel_state}
               city={form.hotel_city}
-              hint="Picked, not typed — co-stay matching compares cities exactly."
+              hint="Colleagues staying in the same place are offered a shared room."
               onChange={({ state, city }) =>
                 setForm({ ...form, hotel_state: state, hotel_city: city })
               }

@@ -10,7 +10,17 @@ import logging
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import func, or_, select
 
 from app.config import get_settings
@@ -23,6 +33,7 @@ from app.schemas.auth import InviteLinkResponse
 from app.schemas.bulk import ImportPreview, ImportResult
 from app.schemas.user import UserCreate, UserListResponse, UserRead, UserUpdate
 from app.services import audit, bulk_import, history
+from app.services import email as email_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -156,14 +167,23 @@ def create_user(
     db.commit()
 
     invite_url = build_invite_url(raw)
-    logger.info("Invite issued for %s: %s", user.email, invite_url)
+    logger.info("Invite issued for %s", user.email)
+    sent = email_service.send_account_link(
+        user.email, user.full_name, invite_url, purpose="invite", valid_hours=INVITE_VALID_HOURS
+    )
 
-    # Returned to the inviting admin only, over an authenticated request, so
-    # they can relay it until Phase 6 wires email delivery.
+    # The link is also returned to the inviting admin, over an authenticated
+    # request, so they can pass it on themselves when the email did not go.
     return InviteLinkResponse(
-        detail=f"{user.full_name} invited. Send them this link to set a password.",
+        detail=(
+            f"{user.full_name} invited. The link has been emailed to {user.email}."
+            if sent.ok
+            else f"{user.full_name} invited, but the email was not sent. Send them this link."
+        ),
         invite_url=invite_url,
         expires_at=token.expires_at,
+        email_sent=sent.ok,
+        email_detail=None if sent.ok else sent.detail,
     )
 
 
@@ -204,6 +224,7 @@ async def import_commit(
     actor: AdminUser,
     request: Request,
     db: DbSession,
+    background: BackgroundTasks,
     file: Annotated[UploadFile, File()],
 ) -> ImportResult:
     """Create every importable row, each with an invitation link.
@@ -223,6 +244,7 @@ async def import_commit(
         )
 
     invite_urls: dict[str, str] = {}
+    names: dict[str, str] = {}
     errors: list[str] = []
     created = 0
 
@@ -252,6 +274,7 @@ async def import_commit(
             db, user, TokenPurpose.INVITE, valid_hours=INVITE_VALID_HOURS, created_by=actor
         )
         invite_urls[row.email] = build_invite_url(token_raw)
+        names[row.email] = row.full_name
         created += 1
 
     if created:
@@ -270,12 +293,28 @@ async def import_commit(
         )
     db.commit()
 
+    # Sent after the response, one by one: a hundred SMTP round trips inside
+    # the request would outlast the browser's patience. The links are in the
+    # response regardless, so nothing is lost if a message bounces.
+    problem = email_service.configuration_problem()
+    if created and problem is None:
+        background.add_task(_email_invites, invite_urls, names)
+
     return ImportResult(
         created=created,
         skipped=preview.skipped,
         invite_urls=invite_urls,
         errors=errors + preview.file_errors,
+        emailing=bool(created) and problem is None,
+        email_detail=problem,
     )
+
+
+def _email_invites(invite_urls: dict[str, str], names: dict[str, str]) -> None:
+    for address, url in invite_urls.items():
+        email_service.send_account_link(
+            address, names.get(address, ""), url, purpose="invite", valid_hours=INVITE_VALID_HOURS
+        )
 
 
 @router.get("/{user_id}", response_model=UserRead)
@@ -365,10 +404,24 @@ def reinvite(
     )
     db.commit()
 
+    url = build_invite_url(raw)
+    sent = email_service.send_account_link(
+        user.email,
+        user.full_name,
+        url,
+        purpose="invite" if purpose is TokenPurpose.INVITE else "reset",
+        valid_hours=INVITE_VALID_HOURS,
+    )
     return InviteLinkResponse(
-        detail=f"New link generated for {user.full_name}.",
-        invite_url=build_invite_url(raw),
+        detail=(
+            f"New link emailed to {user.email}."
+            if sent.ok
+            else f"New link generated for {user.full_name}, but the email was not sent."
+        ),
+        invite_url=url,
         expires_at=token.expires_at,
+        email_sent=sent.ok,
+        email_detail=None if sent.ok else sent.detail,
     )
 
 

@@ -22,17 +22,18 @@ const buttonStyles = cva(
   {
     variants: {
       variant: {
-        primary: 'bg-primary text-primary-fg hover:bg-primary-hover',
-        secondary: 'border border-border bg-surface text-text hover:bg-surface-sunken',
+        primary: 'bg-primary text-primary-fg shadow-sm hover:bg-primary-hover active:translate-y-px',
+        secondary:
+          'border border-border bg-surface text-text shadow-sm hover:border-border-strong hover:bg-surface-sunken',
         ghost: 'text-text-muted hover:bg-surface-sunken hover:text-text',
         danger: 'bg-danger text-white hover:opacity-90',
         link: 'text-brand-strong underline-offset-4 hover:underline',
       },
       size: {
-        sm: 'h-8 px-3 text-xs',
-        md: 'h-9 px-4 text-sm',
-        lg: 'h-11 px-6 text-sm',
-        icon: 'h-9 w-9',
+        sm: 'h-9 px-3.5 text-xs',
+        md: 'h-10 px-4 text-sm',
+        lg: 'h-12 px-6 text-sm',
+        icon: 'h-10 w-10',
       },
     },
     defaultVariants: { variant: 'primary', size: 'md' },
@@ -67,8 +68,9 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
     <input
       ref={ref}
       className={cn(
-        'h-9 w-full rounded-md border border-border bg-surface px-3 text-sm text-text transition-colors',
-        'placeholder:text-text-subtle hover:border-border-strong',
+        // 16px below sm: iOS zooms the page into any input smaller than that.
+        'h-10 w-full rounded-md border border-border bg-surface px-3 text-base text-text shadow-sm transition-colors sm:text-sm',
+        'placeholder:text-text-subtle hover:border-border-strong focus:border-border-strong',
         'disabled:cursor-not-allowed disabled:opacity-60',
         'aria-[invalid=true]:border-danger',
         className,
@@ -84,7 +86,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
     <select
       ref={ref}
       className={cn(
-        'h-9 w-full rounded-md border border-border bg-surface px-2.5 text-sm text-text transition-colors',
+        'h-10 w-full rounded-md border border-border bg-surface px-2.5 text-base text-text shadow-sm transition-colors sm:text-sm',
         'hover:border-border-strong disabled:cursor-not-allowed disabled:opacity-60',
         className,
       )}
@@ -109,7 +111,7 @@ interface FieldProps {
 export function Field({ label, htmlFor, hint, error, required, children, className }: FieldProps) {
   return (
     <div className={cn('space-y-1.5', className)}>
-      <label htmlFor={htmlFor} className="block text-xs font-medium text-text-muted">
+      <label htmlFor={htmlFor} className="block text-xs font-medium text-text">
         {label}
         {required && <span className="ml-0.5 text-danger">*</span>}
       </label>
@@ -127,7 +129,7 @@ export function Field({ label, htmlFor, hint, error, required, children, classNa
 
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
   return (
-    <div className={cn('rounded-lg border border-border bg-surface shadow-sm', className)}>
+    <div className={cn('rounded-xl border border-border bg-surface shadow-sm', className)}>
       {children}
     </div>
   );
@@ -139,7 +141,7 @@ export function CardHeader({ title, description, action }: {
   action?: ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-border px-4 py-4 sm:px-5">
       <div className="min-w-0">
         <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
         {description && <p className="mt-0.5 text-xs text-text-muted">{description}</p>}
@@ -209,6 +211,31 @@ export function EmptyState({
         <p className="mt-1 max-w-sm text-xs leading-relaxed text-text-muted">{description}</p>
       )}
       {action && <div className="mt-4">{action}</div>}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------
+   Page header — title, one line of context, and the page's own actions.
+   Stacks on a phone; sits in one row from sm up.
+   ------------------------------------------------------------------------- */
+
+export function PageHeader({
+  title,
+  description,
+  actions,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div className="min-w-0">
+        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{title}</h1>
+        {description && <p className="mt-1.5 max-w-2xl text-sm text-text-muted">{description}</p>}
+      </div>
+      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }

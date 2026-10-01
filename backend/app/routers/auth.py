@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from sqlalchemy import select
 
 from app.config import get_settings
@@ -46,6 +46,7 @@ from app.schemas.auth import (
     UserProfile,
 )
 from app.services import audit
+from app.services import email as email_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -379,7 +380,10 @@ def set_password(payload: SetPasswordRequest, request: Request, db: DbSession) -
 
 @router.post("/forgot-password", response_model=InviteLinkResponse)
 def forgot_password(
-    payload: ForgotPasswordRequest, request: Request, db: DbSession
+    payload: ForgotPasswordRequest,
+    request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
 ) -> InviteLinkResponse:
     """Always answers the same way, whether or not the address is real.
 
@@ -387,9 +391,10 @@ def forgot_password(
     unauthenticated endpoint that sends mail is a way to use this server to
     harass someone.
 
-    Until Phase 6 wires email, the link is written to the server log for the
-    admin to relay - never into the response, which would turn this endpoint
-    into an account-takeover primitive for anyone who can guess an address.
+    The link is emailed to the account's own address, after the response has
+    gone, so the answer takes the same time whether or not the account exists.
+    It never goes into the response, which would turn this endpoint into an
+    account-takeover primitive for anyone who can guess an address.
     """
     # Both tiers are charged outright here, unlike sign-in. This endpoint
     # answers identically whether or not the address exists and can send mail
@@ -424,9 +429,13 @@ def forgot_password(
     )
     db.commit()
 
-    logger.warning(
-        "PASSWORD RESET for %s (email delivery lands in Phase 6): %s",
+    logger.info("Password reset link issued for %s", user.email)
+    background.add_task(
+        email_service.send_account_link,
         user.email,
+        user.full_name,
         build_invite_url(raw),
+        purpose="reset",
+        valid_hours=RESET_VALID_HOURS,
     )
     return generic

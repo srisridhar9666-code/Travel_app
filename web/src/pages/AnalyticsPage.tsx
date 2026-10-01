@@ -116,19 +116,19 @@ export default function AnalyticsPage() {
           label="Spent"
           value={formatMoney(overview.spent)}
           hint={`${overview.booked_travellers} booked traveller${overview.booked_travellers === 1 ? '' : 's'}`}
-          icon={<IndianRupee size={11} />}
+          icon={<IndianRupee size={15} />}
         />
         <StatTile
           label="Committed"
           value={formatMoney(overview.committed)}
           hint="Approved, not yet ticketed"
-          icon={<CalendarRange size={11} />}
+          icon={<CalendarRange size={15} />}
         />
         <StatTile
           label="Average per traveller"
           value={formatMoney(overview.average_per_traveller)}
           hint="Costed bookings only"
-          icon={<Plane size={11} />}
+          icon={<Plane size={15} />}
         />
         <StatTile
           label="Missing a cost"
@@ -139,7 +139,7 @@ export default function AnalyticsPage() {
               : 'These figures understate the real spend'
           }
           tone={overview.uncosted > 0 ? 'warning' : 'default'}
-          icon={<AlertTriangle size={11} />}
+          icon={<AlertTriangle size={15} />}
         />
       </div>
 

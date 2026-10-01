@@ -1,68 +1,56 @@
 """
-The seed list of Indian states and cities, and the matching that keeps old
-free-text values usable.
+The seed list of Indian states and places, and the matching that keeps old and
+typed values usable.
 
-The list is a starting point, not an authority. It covers the places field teams
-actually go; anything missing is added by an admin through the API rather than
-by editing this file.
+The list lives in `app/data/india_places.json`: every state and union territory,
+with its major cities, its districts and its assembly constituencies. Field
+campaigns are planned constituency by constituency, so a list of only the big
+cities left most real destinations off the picker. Anything still missing is
+added by an admin through the API, or typed under "Other" on the form.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
+import unicodedata
+from functools import lru_cache
+from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.location import Location
 
 logger = logging.getLogger(__name__)
 
-#: States and union territories, with the cities field teams are most likely to
-#: travel to. Deliberately not exhaustive - admins add what they need.
-SEED: dict[str, list[str]] = {
-    "Andhra Pradesh": ["Visakhapatnam", "Vijayawada", "Guntur", "Nellore", "Kurnool", "Tirupati", "Rajahmundry", "Kakinada"],
-    "Arunachal Pradesh": ["Itanagar", "Naharlagun", "Pasighat"],
-    "Assam": ["Guwahati", "Silchar", "Dibrugarh", "Jorhat", "Tezpur", "Nagaon"],
-    "Bihar": ["Patna", "Gaya", "Bhagalpur", "Muzaffarpur", "Darbhanga", "Purnia"],
-    "Chhattisgarh": ["Raipur", "Bhilai", "Bilaspur", "Korba", "Durg"],
-    "Goa": ["Panaji", "Margao", "Vasco da Gama", "Mapusa"],
-    "Gujarat": ["Ahmedabad", "Surat", "Vadodara", "Rajkot", "Bhavnagar", "Jamnagar", "Gandhinagar", "Anand"],
-    "Haryana": ["Gurugram", "Faridabad", "Panipat", "Ambala", "Hisar", "Karnal", "Rohtak"],
-    "Himachal Pradesh": ["Shimla", "Dharamshala", "Mandi", "Solan", "Kullu"],
-    "Jharkhand": ["Ranchi", "Jamshedpur", "Dhanbad", "Bokaro", "Hazaribagh"],
-    "Karnataka": ["Bengaluru", "Mysuru", "Hubballi", "Mangaluru", "Belagavi", "Davanagere", "Ballari", "Shivamogga"],
-    "Kerala": ["Thiruvananthapuram", "Kochi", "Kozhikode", "Thrissur", "Kollam", "Kannur", "Alappuzha"],
-    "Madhya Pradesh": ["Bhopal", "Indore", "Jabalpur", "Gwalior", "Ujjain", "Sagar", "Satna"],
-    "Maharashtra": ["Mumbai", "Pune", "Nagpur", "Nashik", "Thane", "Aurangabad", "Solapur", "Kolhapur", "Navi Mumbai"],
-    "Manipur": ["Imphal", "Thoubal"],
-    "Meghalaya": ["Shillong", "Tura"],
-    "Mizoram": ["Aizawl", "Lunglei"],
-    "Nagaland": ["Kohima", "Dimapur"],
-    "Odisha": ["Bhubaneswar", "Cuttack", "Rourkela", "Berhampur", "Sambalpur", "Puri"],
-    "Punjab": ["Ludhiana", "Amritsar", "Jalandhar", "Patiala", "Bathinda", "Mohali"],
-    "Rajasthan": ["Jaipur", "Jodhpur", "Udaipur", "Kota", "Ajmer", "Bikaner", "Alwar"],
-    "Sikkim": ["Gangtok", "Namchi"],
-    "Tamil Nadu": ["Chennai", "Coimbatore", "Madurai", "Tiruchirappalli", "Salem", "Tirunelveli", "Erode", "Vellore", "Tiruppur"],
-    "Telangana": ["Hyderabad", "Warangal", "Nizamabad", "Karimnagar", "Khammam", "Ramagundam"],
-    "Tripura": ["Agartala", "Udaipur (Tripura)"],
-    "Uttar Pradesh": ["Lucknow", "Kanpur", "Varanasi", "Agra", "Prayagraj", "Meerut", "Noida", "Ghaziabad", "Bareilly", "Gorakhpur"],
-    "Uttarakhand": ["Dehradun", "Haridwar", "Haldwani", "Rishikesh", "Roorkee"],
-    "West Bengal": ["Kolkata", "Howrah", "Durgapur", "Asansol", "Siliguri", "Darjeeling"],
-    # Union territories
-    "Andaman and Nicobar Islands": ["Port Blair"],
-    "Chandigarh": ["Chandigarh"],
-    "Dadra and Nagar Haveli and Daman and Diu": ["Silvassa", "Daman"],
-    "Delhi": ["New Delhi", "Delhi"],
-    "Jammu and Kashmir": ["Srinagar", "Jammu"],
-    "Ladakh": ["Leh", "Kargil"],
-    "Lakshadweep": ["Kavaratti"],
-    "Puducherry": ["Puducherry", "Karaikal"],
-}
+PLACES_FILE = Path(__file__).resolve().parent.parent / "data" / "india_places.json"
+
+#: The order places are taken from each state's entry. Earlier buckets win when
+#: two spell the same place, so "Hyderabad" the city is kept over "Hyderabad"
+#: the district.
+_BUCKETS = ("cities", "districts", "constituencies")
+
+
+@lru_cache
+def load_places() -> dict[str, list[str]]:
+    """Every seed place, grouped by state, de-duplicated and sorted."""
+    raw = json.loads(PLACES_FILE.read_text(encoding="utf-8"))["states"]
+    grouped: dict[str, list[str]] = {}
+    for state, buckets in raw.items():
+        seen: dict[str, str] = {}
+        for bucket in _BUCKETS:
+            for place in buckets.get(bucket, []):
+                place = " ".join(place.split())
+                if place and normalise(place) not in seen:
+                    seen[normalise(place)] = place
+        grouped[state] = sorted(seen.values(), key=str.lower)
+    return grouped
+
 
 #: Abbreviations and spellings that people actually type, mapped to the
-#: canonical city. Used to match historical free-text values, never to accept
-#: new input - new input comes from the picker.
+#: canonical city. Used to match historical free-text values and places typed
+#: under "Other", so a typed abbreviation still lands on the listed city.
 ALIASES: dict[str, str] = {
     "hyd": "Hyderabad",
     "blr": "Bengaluru",
@@ -91,30 +79,104 @@ ALIASES: dict[str, str] = {
 
 
 def normalise(value: str) -> str:
-    """Collapse a typed place name to a comparison key."""
-    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+    """Collapse a typed place name to a comparison key.
+
+    Accents are folded as well as case and punctuation, matching the column's
+    accent-insensitive collation - otherwise "Mahé" and "Mahe" look different
+    here and identical to the unique index, and the seed fails on the clash.
+    """
+    folded = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]", "", folded.lower())
 
 
 def seed(db: Session, tenant_id: str) -> int:
-    """Insert any seed location this tenant does not have. Idempotent."""
+    """Insert any seed place this tenant does not have. Idempotent.
+
+    Compared on the normalised name, so a place an admin already added as
+    "Kukatpally" is not added a second time as "KUKATPALLY", and one an admin
+    deactivated stays deactivated.
+    """
     existing = {
-        (state, city)
+        (state, normalise(city))
         for state, city in db.execute(
             select(Location.state, Location.city).where(Location.tenant_id == tenant_id)
         ).all()
     }
 
     added = 0
-    for state, cities in SEED.items():
-        for city in cities:
-            if (state, city) in existing:
+    for state, places in load_places().items():
+        for city in places:
+            if (state, normalise(city)) in existing:
                 continue
             db.add(Location(tenant_id=tenant_id, state=state, city=city))
+            existing.add((state, normalise(city)))
             added += 1
 
     if added:
+        db.flush()
         logger.info("Seeded %d location(s) for %s", added, tenant_id)
     return added
+
+
+def ensure_seeded(db: Session, tenant_id: str) -> None:
+    """Seed this tenant's places if it has none at all.
+
+    Startup normally does this, but startup seeding fails quietly when the API
+    comes up before `alembic upgrade head` has created the table, and nothing
+    retries it - the form then shows an empty state list until someone restarts
+    the server. Checking here, on the read that needs the list, means the first
+    request after the migration repairs it.
+    """
+    count = db.execute(
+        select(func.count(Location.id)).where(Location.tenant_id == tenant_id)
+    ).scalar_one()
+    if count == 0:
+        seed(db, tenant_id)
+        db.commit()
+
+
+def tidy(value: str | None) -> str | None:
+    """A typed place with its spacing collapsed, or None when it is blank."""
+    cleaned = " ".join((value or "").split())
+    return cleaned or None
+
+
+def canonical(db: Session, tenant_id: str, state: str | None, typed: str | None) -> tuple[str | None, str | None]:
+    """The (state, place) a request should store for what someone picked or typed.
+
+    A place picked from the list comes back unchanged. One typed under "Other"
+    is matched against the list first - "hyd" is Hyderabad, and storing it as
+    typed would hide a colleague in the same hotel from co-stay matching. Only
+    a place the list genuinely does not have is kept as typed, tidied.
+    """
+    place = tidy(typed)
+    state = tidy(state)
+    if place is None:
+        return state, None
+
+    rows = db.execute(
+        select(Location.state, Location.city).where(Location.tenant_id == tenant_id)
+    ).all()
+    key = normalise(place)
+
+    # Within the chosen state first, so "Aurangabad" stays in whichever of
+    # Bihar or Maharashtra the requester picked. Then anywhere, but only when
+    # exactly one state has that name - a guess between two would be worse
+    # than keeping what they typed.
+    for row_state, city in rows:
+        if row_state == state and normalise(city) == key:
+            return row_state, city
+    anywhere = [(row_state, city) for row_state, city in rows if normalise(city) == key]
+    if len(anywhere) == 1:
+        return anywhere[0]
+
+    aliased = ALIASES.get(key)
+    if aliased:
+        for row_state, city in rows:
+            if city == aliased:
+                return row_state, city
+
+    return state, place
 
 
 def match(db: Session, tenant_id: str, typed: str) -> Location | None:

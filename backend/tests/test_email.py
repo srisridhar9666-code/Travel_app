@@ -303,3 +303,61 @@ def test_the_real_settings_confine_development_to_one_address():
             "EMAIL_ENABLED is on with an empty EMAIL_ALLOWLIST - the smoke "
             "scripts would mail every invented @designboxed.com address"
         )
+
+
+# ---------------------------------------------------------------------------
+# Account links, and saying why mail is not going
+# ---------------------------------------------------------------------------
+
+
+def test_an_invite_link_is_emailed_to_the_person(outbox):
+    sent = email.send_account_link(
+        "ravi@example.com", "Ravi Kumar", "https://app/set-password?token=abc",
+        purpose="invite", valid_hours=72,
+    )
+    assert sent.ok
+    message = outbox.messages[-1]
+    assert message["to"] == "ravi@example.com"
+    assert "invited" in message["subject"]
+    assert "https://app/set-password?token=abc" in message["body"]
+    assert message["body"].startswith("Hi Ravi,")
+
+
+def test_a_reset_link_says_it_is_a_reset(outbox):
+    email.send_account_link("ravi@example.com", "Ravi", "https://x", purpose="reset", valid_hours=2)
+    assert "Reset" in outbox.messages[-1]["subject"]
+    assert "2 hours" in outbox.messages[-1]["body"]
+
+
+def test_the_problem_names_the_switch_when_mail_is_off(monkeypatch):
+    configure(monkeypatch, email_enabled=False)
+    monkeypatch.setattr(email, "ENV_FILE", type("P", (), {"exists": lambda self: True})())
+    assert "EMAIL_ENABLED" in email.configuration_problem()
+
+
+def test_the_problem_names_every_missing_setting(monkeypatch):
+    configure(monkeypatch, email_enabled=True, smtp_username="me@gmail.com")
+    monkeypatch.setattr(email, "ENV_FILE", type("P", (), {"exists": lambda self: True})())
+    problem = email.configuration_problem()
+    assert "SMTP_APP_PASSWORD" in problem and "EMAIL_FROM" in problem
+    assert "SMTP_USERNAME" not in problem
+
+
+def test_a_missing_env_file_is_named_first(monkeypatch):
+    configure(monkeypatch, email_enabled=True)
+    monkeypatch.setattr(email, "ENV_FILE", type("P", (), {"exists": lambda self: False})())
+    assert "backend/.env" in email.configuration_problem()
+
+
+def test_no_problem_when_configured(monkeypatch):
+    configure(
+        monkeypatch, email_enabled=True, smtp_username="me@gmail.com",
+        smtp_app_password="abcd efgh ijkl mnop", email_from="me@gmail.com",
+    )
+    monkeypatch.setattr(email, "ENV_FILE", type("P", (), {"exists": lambda self: True})())
+    assert email.configuration_problem() is None
+
+
+def test_an_app_password_pasted_with_spaces_signs_in_without_them():
+    settings = Settings(_env_file=None, smtp_app_password="abcd efgh ijkl mnop")
+    assert settings.smtp_app_password == "abcdefghijklmnop"

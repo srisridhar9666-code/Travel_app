@@ -8,11 +8,12 @@ test runner, or by a background worker.
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = BACKEND_DIR.parent
-_ENV_FILE = BACKEND_DIR / ".env"
+ENV_FILE = BACKEND_DIR / ".env"
 
 
 class Settings(BaseSettings):
@@ -104,7 +105,15 @@ class Settings(BaseSettings):
     #: addresses at a real domain.
     email_allowlist: str = ""
 
-    model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
+    model_config = SettingsConfigDict(env_file=str(ENV_FILE), extra="ignore")
+
+    @field_validator("smtp_app_password")
+    @classmethod
+    def _drop_spaces(cls, value: str) -> str:
+        # Google shows an App Password as "abcd efgh ijkl mnop" and people paste
+        # it that way. The password itself has no spaces, and SMTP sign-in with
+        # them fails with a message that never mentions spaces.
+        return "".join(value.split())
 
     @property
     def cors_origins(self) -> list[str]:

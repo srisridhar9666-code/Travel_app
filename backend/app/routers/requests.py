@@ -110,6 +110,7 @@ def check(payload: ConflictCheckRequest, user: CurrentUser, db: DbSession) -> Co
         project_id=payload.project_id,
         request_type=payload.request_type,
     )
+    svc.canonicalise_places(db, user.tenant_id, payload)
     svc.apply_body(probe, payload)
     probe.id = payload.request_id  # so an edit does not conflict with itself
     probe.travellers = [RequestTraveller(user_id=p.id) for p in people]
@@ -223,6 +224,7 @@ def create_request(
         project_id=payload.project_id,
         is_draft=payload.is_draft,
     )
+    svc.canonicalise_places(db, user.tenant_id, payload)
     svc.apply_body(row, payload)
     row.travellers = [
         RequestTraveller(user_id=p.id, status=TravellerStatus.PENDING) for p in people
@@ -363,6 +365,7 @@ def edit_request(
 
     was_draft = row.is_draft
     before = svc.snapshot(row)
+    svc.canonicalise_places(db, user.tenant_id, payload)
     svc.apply_body(row, payload)
     svc.sync_travellers(db, request=row, people=people)
     after = svc.snapshot(row)

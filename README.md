@@ -264,9 +264,28 @@ in `.env` and logs a warning. **Change that password immediately** — it is sit
 config file. The bootstrap is idempotent and never touches an existing account, so
 restarting cannot silently reset it.
 
-Everyone else is created from **Team**, which issues a single-use invite link. Email
-delivery lands in Phase 6; until then the inviting admin copies the link from the dialog
-and sends it themselves. Links are valid for 72 hours and can be used once.
+Everyone else is created from **Team**, which issues a single-use invite link. The link is
+emailed when email is turned on (below), and the dialog always shows it too, along with why
+it was not emailed if it was not. Links are valid for 72 hours and can be used once.
+
+### Turning email on
+
+Email is off until `backend/.env` says otherwise. It must be `backend/.env`: the API reads
+that file and only that file, and the `.env` beside `docker-compose.yml` holds database
+credentials for compose and nothing else.
+
+```dotenv
+EMAIL_ENABLED=true
+SMTP_USERNAME="you@gmail.com"
+SMTP_APP_PASSWORD="abcdefghijklmnop"   # a Gmail App Password, not your account password
+EMAIL_FROM="you@gmail.com"
+EMAIL_ALLOWLIST=""                      # empty, or only those addresses receive mail
+```
+
+Restart the API afterwards; settings are read once at start-up. The start-up log says in one
+line whether mail will go out and, if not, which setting is missing, and `GET /health/email`
+signs in to SMTP to prove the password works. A Gmail App Password needs 2-Step Verification
+on the account: Google Account, Security, App passwords.
 
 ---
 

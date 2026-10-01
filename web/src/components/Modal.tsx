@@ -106,14 +106,14 @@ export function Modal({
         aria-modal="true"
         aria-label={title}
         className={cn(
-          'relative z-10 max-h-[90dvh] w-full animate-slide-up overflow-y-auto rounded-t-lg border border-border bg-overlay shadow-lg sm:max-w-lg sm:rounded-lg',
+          'relative z-10 max-h-[92dvh] w-full animate-slide-up overflow-y-auto rounded-t-2xl border border-border bg-overlay shadow-lg sm:max-w-lg sm:rounded-xl',
           className,
         )}
       >
         <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
-            {description && <p className="mt-0.5 text-xs text-text-muted">{description}</p>}
+            <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+            {description && <p className="mt-0.5 text-sm text-text-muted">{description}</p>}
           </div>
           <button
             type="button"
@@ -121,14 +121,14 @@ export function Modal({
             aria-label="Close"
             className="-mr-1 -mt-1 rounded-md p-1.5 text-text-subtle hover:bg-surface-sunken hover:text-text"
           >
-            <X size={16} />
+            <X size={18} />
           </button>
         </div>
 
         <div className="px-5 py-4">{children}</div>
 
         {footer && (
-          <div className="flex justify-end gap-2 border-t border-border bg-surface-sunken px-5 py-3">
+          <div className="sticky bottom-0 flex flex-wrap justify-end gap-2 border-t border-border bg-surface-sunken px-5 py-3">
             {footer}
           </div>
         )}

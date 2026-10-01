@@ -103,7 +103,12 @@ export default function TeamPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [form, setForm] = useState<UserPayload>(BLANK);
   const [formError, setFormError] = useState<string | null>(null);
-  const [issuedLink, setIssuedLink] = useState<{ name: string; url: string } | null>(null);
+  const [issuedLink, setIssuedLink] = useState<{
+    name: string;
+    url: string;
+    emailed: boolean;
+    detail: string | null;
+  } | null>(null);
 
   const [importOpen, setImportOpen] = useState(false);
   const [docsUser, setDocsUser] = useState<UserRow | null>(null);
@@ -136,7 +141,13 @@ export default function TeamPage() {
       setForm(BLANK);
       setFormError(null);
       refresh();
-      if (result.invite_url) setIssuedLink({ name: form.full_name, url: result.invite_url });
+      if (result.invite_url)
+        setIssuedLink({
+          name: form.full_name,
+          url: result.invite_url,
+          emailed: Boolean(result.email_sent),
+          detail: result.email_detail ?? null,
+        });
     },
     onError: (err) => setFormError(errorMessage(err, 'Could not create this account.')),
   });
@@ -168,7 +179,13 @@ export default function TeamPage() {
     mutationFn: (user: UserRow) => reinviteUser(user.id),
     onSuccess: (result, user) => {
       refresh();
-      if (result.invite_url) setIssuedLink({ name: user.full_name, url: result.invite_url });
+      if (result.invite_url)
+        setIssuedLink({
+          name: user.full_name,
+          url: result.invite_url,
+          emailed: Boolean(result.email_sent),
+          detail: result.email_detail ?? null,
+        });
     },
     onError: (err) => toast.error(errorMessage(err)),
   });
@@ -720,12 +737,16 @@ export default function TeamPage() {
         </form>
       </Modal>
 
-      {/* The invite link, shown once. Email delivery lands in Phase 6. */}
+      {/* The invite link, shown once. It is emailed too; this is the fallback. */}
       <Modal
         open={Boolean(issuedLink)}
         onClose={() => setIssuedLink(null)}
-        title="Invitation link"
-        description="Email delivery arrives in Phase 6 — until then, send this to them yourself."
+        title={issuedLink?.emailed ? 'Invitation emailed' : 'Invitation link'}
+        description={
+          issuedLink?.emailed
+            ? 'They will get an email with this link. You can also send it yourself.'
+            : 'The email did not go out, so send this link to them yourself.'
+        }
         footer={
           <>
             <Button variant="secondary" onClick={() => setIssuedLink(null)}>
@@ -738,9 +759,15 @@ export default function TeamPage() {
           </>
         }
       >
+        {issuedLink && !issuedLink.emailed && issuedLink.detail && (
+          <p className="mb-3 rounded-md bg-warning-soft px-3 py-2 text-xs text-warning">
+            Email not sent: {issuedLink.detail}
+          </p>
+        )}
         <p className="text-sm text-text-muted">
-          Send this to <span className="font-medium text-text">{issuedLink?.name}</span>. It can be
-          used once and expires in 72 hours.
+          {issuedLink?.emailed ? 'Sent to' : 'Send this to'}{' '}
+          <span className="font-medium text-text">{issuedLink?.name}</span>. It can be used once and
+          expires in 72 hours.
         </p>
         <code className="mt-3 block max-h-32 overflow-auto break-all rounded-md bg-surface-sunken px-3 py-2.5 font-mono text-xs text-text-muted">
           {issuedLink?.url}

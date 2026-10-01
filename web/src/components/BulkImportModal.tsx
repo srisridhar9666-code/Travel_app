@@ -121,7 +121,9 @@ export function BulkImportModal({ open, onClose, onImported }: BulkImportModalPr
 
           <div>
             <p className="mb-2 text-xs text-text-muted">
-              Email delivery arrives in Phase 6. Until then, send each person their link.
+              {result.emailing
+                ? 'Each person is being emailed their link. The links are also here if anyone needs one resent.'
+                : `Emails were not sent${result.email_detail ? ` (${result.email_detail})` : ''}. Send each person their link.`}
             </p>
             <ul className="max-h-64 space-y-1.5 overflow-y-auto rounded-md bg-surface-sunken p-3">
               {Object.entries(result.invite_urls).map(([email, url]) => (
