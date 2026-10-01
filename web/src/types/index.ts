@@ -1,0 +1,741 @@
+export type Role = 'SYSTEM_ADMIN' | 'ADMIN' | 'GROUND_STAFF';
+export type Designation = 'EXECUTIVE' | 'TEAM_LEAD' | 'MANAGER';
+export type Gender = 'MALE' | 'FEMALE' | 'OTHER' | 'UNDISCLOSED';
+export type ThemePreference = 'light' | 'dark' | 'system';
+
+export interface UserProfile {
+  id: number;
+  email: string;
+  full_name: string;
+  employee_code: string | null;
+  role: Role;
+  designation: Designation | null;
+  gender: Gender;
+  phone: string | null;
+  base_location: string | null;
+  theme_preference: ThemePreference;
+  is_active: boolean;
+  last_login_at: string | null;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  expires_at: string;
+  user: UserProfile;
+}
+
+export interface UserRow {
+  id: number;
+  email: string;
+  full_name: string;
+  employee_code: string | null;
+  role: Role;
+  designation: Designation | null;
+  gender: Gender;
+  phone: string | null;
+  base_location: string | null;
+  is_active: boolean;
+  /** The day they left. Starts the 90-day clock on their identity documents.
+   *  Distinct from is_active: a suspension is not a departure. */
+  exited_on: string | null;
+  last_login_at: string | null;
+  created_at: string;
+  /** False while an invite is still outstanding. */
+  has_password: boolean;
+  is_locked: boolean;
+}
+
+export interface Paginated<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface InviteLink {
+  detail: string;
+  invite_url: string | null;
+  expires_at: string | null;
+}
+
+export interface TokenPreview {
+  full_name: string;
+  email: string;
+  purpose: 'INVITE' | 'PASSWORD_RESET';
+}
+
+export interface AuditRow {
+  id: number;
+  actor_email: string | null;
+  actor_name: string | null;
+  actor_role: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: number | null;
+  summary: string;
+  changes: Record<string, { from: unknown; to: unknown }> | null;
+  reason: string | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+export interface ChainVerification {
+  ok: boolean;
+  checked: number;
+  broken_at_id: number | null;
+  detail: string;
+}
+
+export const ROLE_LABELS: Record<Role, string> = {
+  SYSTEM_ADMIN: 'System admin',
+  ADMIN: 'Admin',
+  GROUND_STAFF: 'Ground staff',
+};
+
+export const DESIGNATION_LABELS: Record<Designation, string> = {
+  EXECUTIVE: 'Executive',
+  TEAM_LEAD: 'Team lead',
+  MANAGER: 'Manager',
+};
+
+export const GENDER_LABELS: Record<Gender, string> = {
+  MALE: 'Male',
+  FEMALE: 'Female',
+  OTHER: 'Other',
+  UNDISCLOSED: 'Prefer not to say',
+};
+
+// --- Phase 2 ---------------------------------------------------------------
+
+export type ProjectStatus = 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'ARCHIVED';
+
+export type IdProofType =
+  | 'AADHAAR'
+  | 'PAN'
+  | 'PASSPORT'
+  | 'DRIVING_LICENCE'
+  | 'VOTER_ID'
+  | 'OTHER';
+
+export interface Project {
+  id: number;
+  name: string;
+  code: string;
+  description: string | null;
+  client_name: string | null;
+  location: string | null;
+  status: ProjectStatus;
+  start_date: string | null;
+  end_date: string | null;
+  created_at: string;
+  /** Whether this campaign still appears in the request dropdowns. */
+  accepts_requests: boolean;
+}
+
+export interface IdProof {
+  id: number;
+  user_id: number;
+  proof_type: IdProofType;
+  label: string | null;
+  /** e.g. "XXXX XXXX 2109". The real number never arrives in a list. */
+  masked_number: string | null;
+  issued_on: string | null;
+  expires_on: string | null;
+  is_expired: boolean;
+  has_file: boolean;
+  file_name: string | null;
+  file_size: number | null;
+  is_purged: boolean;
+  purged_at: string | null;
+  created_at: string;
+}
+
+export interface RetentionStatus {
+  retention_days: number;
+  cutoff: string;
+  due_now: number;
+}
+
+export interface ImportRow {
+  line: number;
+  full_name: string | null;
+  email: string | null;
+  role: Role;
+  designation: Designation | null;
+  gender: Gender;
+  phone: string | null;
+  employee_code: string | null;
+  base_location: string | null;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface ImportPreview {
+  rows: ImportRow[];
+  total: number;
+  importable: number;
+  skipped: number;
+  file_errors: string[];
+}
+
+export interface ImportResult {
+  created: number;
+  skipped: number;
+  invite_urls: Record<string, string>;
+  errors: string[];
+}
+
+export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
+  ACTIVE: 'Active',
+  PAUSED: 'Paused',
+  COMPLETED: 'Completed',
+  ARCHIVED: 'Archived',
+};
+
+export const ID_PROOF_LABELS: Record<IdProofType, string> = {
+  AADHAAR: 'Aadhaar',
+  PAN: 'PAN',
+  PASSPORT: 'Passport',
+  DRIVING_LICENCE: 'Driving licence',
+  VOTER_ID: 'Voter ID',
+  OTHER: 'Other',
+};
+
+// --- Phase 3 ---------------------------------------------------------------
+
+export type RequestType = 'LONG_DISTANCE' | 'LOCAL_CAB' | 'HOTEL';
+export type TravelMode = 'FLIGHT' | 'TRAIN' | 'BUS' | 'CAB';
+
+export type RequestStatus =
+  | 'DRAFT'
+  | 'SUBMITTED'
+  | 'PARTIALLY_APPROVED'
+  | 'APPROVED'
+  | 'BOOKED'
+  | 'REJECTED'
+  | 'CANCELLED'
+  | 'EXPIRED';
+
+export type TravellerStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'BOOKED' | 'CANCELLED';
+
+export type RoomSharingChoice =
+  | 'NOT_OFFERED'
+  | 'SHARE_EXISTING'
+  | 'SEPARATE_ROOM'
+  | 'SEPARATE_HOTEL';
+
+export type ConflictKind = 'OVERLAPPING_TRAVEL' | 'OVERLAPPING_STAY' | 'DUPLICATE_REQUEST';
+
+export interface RequestTraveller {
+  id: number;
+  user_id: number;
+  full_name: string;
+  email: string;
+  designation: Designation | null;
+  status: TravellerStatus;
+  is_requester: boolean;
+  room_sharing: RoomSharingChoice;
+  share_with_user_id: number | null;
+  share_with_name: string | null;
+  /** A share is only real once an admin has signed it off — addendum C2. */
+  share_confirmed: boolean;
+
+  /** The admin decision, once one has been taken (Phase 4). */
+  decided_by_name: string | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  /** PNR, ticket number or hotel confirmation. */
+  booking_reference: string | null;
+
+  /** This person's share of the cost. Admin-only — null for ground staff
+   *  however they reach the request. Amounts are strings; see the note on
+   *  Overview. */
+  cost_amount: string | null;
+  cost_currency: string | null;
+  cost_note: string | null;
+  cost_entered_by_name: string | null;
+}
+
+export interface RequestConflict {
+  user_id: number;
+  user_name: string;
+  kind: ConflictKind;
+  /** Always WARNING in V1. Conflicts never block a submission — addendum B6. */
+  severity: 'WARNING' | 'BLOCKING';
+  message: string;
+  other_request_id: number | null;
+  other_request_type: RequestType | null;
+  other_summary: string | null;
+}
+
+export interface CoStayMatch {
+  user_id: number;
+  full_name: string;
+  designation: Designation | null;
+  request_id: number;
+  hotel_city: string;
+  check_in: string;
+  check_out: string | null;
+  overlapping_nights: number;
+  status: string;
+}
+
+export interface RequestRevision {
+  revision_number: number;
+  editor_name: string | null;
+  created_at: string;
+  summary: string;
+  changes: Record<string, { from: unknown; to: unknown }> | null;
+}
+
+export interface TravelRequest {
+  id: number;
+  request_type: RequestType;
+  status: RequestStatus;
+  /** False once any admin has decided on any traveller — addendum A1. */
+  is_editable: boolean;
+  is_draft: boolean;
+  is_cancelled: boolean;
+  cancel_reason: string | null;
+
+  project_id: number;
+  project_name: string;
+  project_code: string;
+
+  requester_id: number;
+  requester_name: string;
+
+  mode: TravelMode | null;
+  origin: string | null;
+  destination: string | null;
+  /** The state each place sits in, captured when it was picked. Null on rows
+   *  written before places were picked from a list. */
+  origin_state: string | null;
+  destination_state: string | null;
+  hotel_state: string | null;
+  start_at: string | null;
+  end_at: string | null;
+
+  hotel_city: string | null;
+  check_in: string | null;
+  check_out: string | null;
+
+  /** Why the trip is happening. Mandatory on anything raised from now on;
+   *  null on requests that predate the field. */
+  travel_reason: string | null;
+  /** Set when the requester picked "Other" and typed a campaign name. */
+  other_project_name: string | null;
+  notes: string | null;
+  submitted_at: string | null;
+  created_at: string;
+  updated_at: string;
+
+  travellers: RequestTraveller[];
+  /** Amendments since submission. The admin queue shows this as "edited N times". */
+  edit_count: number;
+  /** True once every traveller has been decided one way or the other. */
+  is_decided: boolean;
+  conflicts: RequestConflict[];
+  costay_matches: CoStayMatch[];
+}
+
+export interface AppNotification {
+  id: number;
+  kind: string;
+  title: string;
+  body: string;
+  request_id: number | null;
+  created_at: string;
+  read_at: string | null;
+}
+
+export const REQUEST_TYPE_LABELS: Record<RequestType, string> = {
+  LONG_DISTANCE: 'Flight, train or bus',
+  LOCAL_CAB: 'Local cab',
+  HOTEL: 'Hotel',
+};
+
+export const TRAVEL_MODE_LABELS: Record<TravelMode, string> = {
+  FLIGHT: 'Flight',
+  TRAIN: 'Train',
+  BUS: 'Bus',
+  CAB: 'Cab',
+};
+
+export const REQUEST_STATUS_LABELS: Record<RequestStatus, string> = {
+  DRAFT: 'Draft',
+  SUBMITTED: 'Submitted',
+  PARTIALLY_APPROVED: 'Partly approved',
+  APPROVED: 'Approved',
+  BOOKED: 'Booked',
+  REJECTED: 'Rejected',
+  CANCELLED: 'Cancelled',
+  EXPIRED: 'Expired',
+};
+
+export const TRAVELLER_STATUS_LABELS: Record<TravellerStatus, string> = {
+  PENDING: 'Pending',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
+  BOOKED: 'Booked',
+  CANCELLED: 'Cancelled',
+};
+
+export const ROOM_SHARING_LABELS: Record<RoomSharingChoice, string> = {
+  NOT_OFFERED: 'Not offered',
+  SHARE_EXISTING: 'Share a room',
+  SEPARATE_ROOM: 'Separate room',
+  SEPARATE_HOTEL: 'Separate hotel',
+};
+
+export interface Colleague {
+  id: number;
+  full_name: string;
+  designation: Designation | null;
+}
+
+// --- Phase 4 ---------------------------------------------------------------
+
+/** What an admin may do to a traveller row next. Mirrors
+ *  ALLOWED_TRAVELLER_TRANSITIONS on the server; the server is the authority. */
+export const NEXT_STATUSES: Record<TravellerStatus, TravellerStatus[]> = {
+  PENDING: ['APPROVED', 'REJECTED', 'CANCELLED'],
+  APPROVED: ['BOOKED', 'CANCELLED'],
+  BOOKED: ['CANCELLED'],
+  REJECTED: ['CANCELLED'],
+  CANCELLED: [],
+};
+
+export interface QueueCounts {
+  awaiting: number;
+  partially_approved: number;
+  approved: number;
+  booked: number;
+  rejected: number;
+  cancelled: number;
+  expired: number;
+  with_conflicts: number;
+  edited: number;
+}
+
+export interface DecisionBody {
+  to_status: TravellerStatus;
+  reason?: string | null;
+  booking_reference?: string | null;
+  /** Mandatory when approving someone with a live clash — addendum B6. */
+  conflict_override_reason?: string | null;
+  /** Suppresses the email only. The in-app notice and the ledger entry are
+   *  written regardless — the record is not optional, only the email is. */
+  notify_employee?: boolean;
+}
+
+export interface BatchDecisionItem extends DecisionBody {
+  traveller_id: number;
+}
+
+// --- Phase 5 ---------------------------------------------------------------
+
+export type TicketStatus =
+  | 'UPLOADED'
+  | 'EXTRACTING'
+  | 'EXTRACTED'
+  | 'CONFIRMED'
+  | 'FAILED'
+  | 'DISCARDED';
+
+export type NotificationChannel = 'EMAIL' | 'IN_APP';
+export type NotificationStatus = 'QUEUED' | 'SENT' | 'FAILED' | 'READ' | 'SUPPRESSED';
+
+/** Below this the review screen highlights a field. Mirrors REVIEW_THRESHOLD
+ *  in `app/services/extraction.py`. */
+export const REVIEW_THRESHOLD = 0.75;
+
+export interface Ticket {
+  id: number;
+  request_id: number;
+  traveller_id: number;
+  traveller_name: string;
+  status: TicketStatus;
+
+  file_name: string | null;
+  file_size: number | null;
+  content_type: string | null;
+  uploaded_by_name: string | null;
+  created_at: string;
+
+  booking_reference: string | null;
+  carrier: string | null;
+  service_number: string | null;
+  passenger_name: string | null;
+  origin: string | null;
+  destination: string | null;
+  depart_at: string | null;
+  arrive_at: string | null;
+  hotel_name: string | null;
+  check_in: string | null;
+  check_out: string | null;
+
+  confidence: Record<string, number> | null;
+  /** Fields the model was unsure of — read these before confirming. */
+  needs_review: string[];
+  model_id: string | null;
+  extraction_error: string | null;
+  extracted_at: string | null;
+
+  confirmed_by_name: string | null;
+  confirmed_at: string | null;
+  confirmed_reference: string | null;
+
+  /** Where the ticket disagrees with what was asked for. Advisory. */
+  mismatches: string[];
+}
+
+export interface LedgerRow {
+  id: number;
+  user_id: number;
+  user_name: string | null;
+  kind: string;
+  title: string;
+  body: string;
+  channel: NotificationChannel;
+  status: NotificationStatus;
+  to_address: string | null;
+  subject: string | null;
+  attempts: number;
+  sent_at: string | null;
+  last_error: string | null;
+  request_id: number | null;
+  /** In-app only. Nothing here can know whether an email was opened. */
+  read_at: string | null;
+  category: NotificationCategory;
+  created_at: string;
+}
+
+export interface NotificationLedger {
+  items: LedgerRow[];
+  total: number;
+  page: number;
+  page_size: number;
+  summary: { total: number; emails: number; by_status: Record<string, number> };
+}
+
+export const TICKET_STATUS_LABELS: Record<TicketStatus, string> = {
+  UPLOADED: 'Uploaded',
+  EXTRACTING: 'Reading',
+  EXTRACTED: 'Awaiting review',
+  CONFIRMED: 'Confirmed',
+  FAILED: 'Could not read',
+  DISCARDED: 'Discarded',
+};
+
+/** The extracted fields, in the order a reviewer reads them. */
+export const TICKET_FIELD_LABELS: Record<string, string> = {
+  booking_reference: 'Reference / PNR',
+  carrier: 'Operator',
+  service_number: 'Service',
+  passenger_name: 'Passenger',
+  origin: 'From',
+  destination: 'To',
+  depart_at: 'Departs',
+  arrive_at: 'Arrives',
+  hotel_name: 'Hotel',
+  check_in: 'Check in',
+  check_out: 'Check out',
+};
+
+// --- Phase 6 ---------------------------------------------------------------
+
+export type NotificationCategory = 'DECISIONS' | 'BOOKINGS' | 'ROOM_SHARING' | 'REMINDERS';
+
+export interface NotificationPreferences {
+  /** One entry per switchable category. DECISIONS is absent on purpose — being
+   *  told what happened to your own travel is not a subscription. */
+  email: Record<string, boolean>;
+  unread: number;
+}
+
+export interface JobResult {
+  job: string;
+  notified?: number | null;
+  considered?: number | null;
+  stale?: number | null;
+  attempted?: number | null;
+  sent?: number | null;
+  still_failing?: number | null;
+  error?: string | null;
+}
+
+export interface SchedulerStatus {
+  enabled: boolean;
+  running: boolean;
+  interval_minutes: number;
+  travel_reminder_days: number;
+  stale_after_days: number;
+  failed_email: number;
+}
+
+export const CATEGORY_LABELS: Record<NotificationCategory, string> = {
+  DECISIONS: 'Approvals and rejections',
+  BOOKINGS: 'Tickets and confirmations',
+  ROOM_SHARING: 'Room sharing requests',
+  REMINDERS: 'Reminders and nudges',
+};
+
+export const CATEGORY_HINTS: Record<NotificationCategory, string> = {
+  DECISIONS: 'Always on — this is how you find out what happened to your travel.',
+  BOOKINGS: 'Your ticket reference once an admin has confirmed it.',
+  ROOM_SHARING: 'When a colleague asks to share your room.',
+  REMINDERS: 'A nudge shortly before a trip you are booked on.',
+};
+
+export const NOTIFICATION_STATUS_LABELS: Record<NotificationStatus, string> = {
+  QUEUED: 'Queued',
+  SENT: 'Sent',
+  FAILED: 'Failed',
+  READ: 'Read',
+  SUPPRESSED: 'Not sent',
+};
+
+export const JOB_LABELS: Record<string, string> = {
+  remind_travellers: 'Travel reminders',
+  remind_admins_of_stale_requests: 'Stale request nudges',
+  retry_undelivered: 'Email retries',
+};
+
+// --- Phase 7 ---------------------------------------------------------------
+
+/** Amounts cross the wire as strings and are parsed only for display. A JSON
+ *  number is a float, and a float is how a report starts disagreeing with an
+ *  invoice. */
+export interface Overview {
+  window_days: number;
+  spent: string;
+  committed: string;
+  average_per_traveller: string;
+  booked_travellers: number;
+  pending_travellers: number;
+  /** Booked rows with no cost recorded — the honesty check on every other figure. */
+  uncosted: number;
+  people_travelling: number;
+  trips: number;
+  currency: string;
+}
+
+export interface CampaignSpend {
+  project_id: number;
+  code: string;
+  name: string;
+  status: string;
+  spent: string;
+  committed: string;
+  trips: number;
+  travellers: number;
+  uncosted: number;
+}
+
+export interface TypeSpend {
+  request_type: RequestType;
+  spent: string;
+  travellers: number;
+}
+
+export interface MonthSpend {
+  month: string;
+  spent: string;
+  travellers: number;
+}
+
+export interface DeploymentRow {
+  location: string;
+  people: number;
+  trips: number;
+}
+
+export interface UncostedRow {
+  traveller_id: number;
+  request_id: number;
+  traveller_name: string;
+  project_code: string;
+  request_type: RequestType;
+  booking_reference: string | null;
+  trip_date: string | null;
+}
+
+export interface AnalyticsBundle {
+  overview: Overview;
+  by_campaign: CampaignSpend[];
+  by_type: TypeSpend[];
+  by_month: MonthSpend[];
+  deployment: DeploymentRow[];
+  uncosted: UncostedRow[];
+}
+
+export interface CostPreviewRow {
+  traveller_id: number;
+  traveller_name: string;
+  amount: string;
+}
+
+export interface CostPreview {
+  total_amount: string;
+  rows: CostPreviewRow[];
+  /** Proof the apportionment is exact. Shown so the odd paisa never looks like a bug. */
+  sums_to_total: boolean;
+}
+
+// --- Travel history (SOW §5) ----------------------------------------------
+
+export interface HistoryCompanion {
+  user_id: number;
+  full_name: string;
+  designation: Designation | null;
+  status: TravellerStatus;
+}
+
+export interface TravelMovement {
+  request_id: number;
+  request_type: RequestType;
+  mode: TravelMode | null;
+  status: TravellerStatus;
+  /** One readable line: "Hyderabad → Indore", or the hotel city. */
+  where: string;
+  origin: string | null;
+  destination: string | null;
+  hotel_city: string | null;
+  started_on: string | null;
+  start_at: string | null;
+  end_at: string | null;
+  check_in: string | null;
+  check_out: string | null;
+  nights: number | null;
+  project_id: number;
+  project_name: string | null;
+  project_code: string | null;
+  booking_reference: string | null;
+  /** Everyone else on the same movement — the "cab companions" of §5. */
+  companions: HistoryCompanion[];
+  room_sharing: RoomSharingChoice;
+  share_with_name: string | null;
+  share_confirmed: boolean;
+  /** Admin-only; null when a user reads their own timeline. */
+  cost_amount: string | null;
+  cost_currency: string | null;
+}
+
+export interface TravelHistory {
+  user_id: number;
+  full_name: string;
+  email: string;
+  designation: Designation | null;
+  since: string;
+  until: string | null;
+  entries: TravelMovement[];
+  summary: {
+    movements: number;
+    nights_away: number;
+    cities: number;
+    travelled_with: number;
+    by_type: Record<string, number>;
+  };
+}

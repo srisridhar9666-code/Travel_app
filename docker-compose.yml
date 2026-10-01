@@ -1,0 +1,63 @@
+# ---------------------------------------------------------------------------
+# Production-shaped local stack: the API behind nginx, both as the containers
+# that will later be pushed to a registry.
+#
+# MySQL is NOT in here. It runs on your host already, so the API reaches it at
+# `host.docker.internal` - see DATABASE_URL below. Adding a second MySQL would
+# mean two databases and a very confusing afternoon.
+#
+#   docker compose up --build
+#   open http://localhost:8080
+#
+# Differences from `npm run dev` worth knowing: there is no hot reload, the SPA
+# is a production build served by nginx, and the API sits behind that nginx at
+# /api rather than being proxied by Vite. Everything else is identical.
+# ---------------------------------------------------------------------------
+
+services:
+  api:
+    build:
+      context: ./backend
+    env_file:
+      - ./backend/.env
+    environment:
+      # Overrides whatever backend/.env says, because inside a container
+      # 127.0.0.1 is the container itself, not your machine.
+      #
+      # The credentials come from a .env beside this file, which compose reads
+      # automatically and git ignores. They are NOT written here: a database
+      # password in a committed file is a password you have published.
+      # Percent-encode it - @ becomes %40, # becomes %23.
+      DATABASE_URL: "mysql+pymysql://${DB_USER:?set DB_USER in .env}:${DB_PASSWORD:?set DB_PASSWORD in .env}@host.docker.internal:3306/${DB_NAME:-travel_ops}?charset=utf8mb4"
+      # The browser talks to nginx on 8080; the API only ever sees same-origin
+      # proxied requests, so this is what CORS must allow.
+      BACKEND_CORS_ORIGINS: "http://localhost:8080"
+      FRONTEND_BASE_URL: "http://localhost:8080"
+      PORT: "8000"
+    # Linux does not resolve host.docker.internal on its own. Harmless on
+    # Docker Desktop, where it is already defined.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # ID scans and tickets. Without this they live inside the container and
+      # disappear with it - which is exactly the Cloud Run problem, and exactly
+      # why STORAGE_BACKEND=gcs exists.
+      - uploads:/app/uploads
+    restart: unless-stopped
+    # Not published. Only nginx needs to reach it, and an API bound to the host
+    # would bypass every header nginx adds.
+    expose:
+      - "8000"
+
+  web:
+    build:
+      context: ./web
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  uploads:

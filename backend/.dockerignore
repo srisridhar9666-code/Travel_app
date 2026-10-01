@@ -1,0 +1,24 @@
+# Secrets must never enter an image layer. Even a deleted file persists in the
+# layer it was added in, so this is the only place that keeps them out.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+gemini_credentials.json
+
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Uploaded ID scans and tickets. Baking real documents into an image would be a
+# data breach in a registry.
+uploads/
+
+tests/
+scripts/fixtures/
+*.log
+*.md

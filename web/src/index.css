@@ -1,0 +1,183 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+   Design tokens.
+
+   Three decisions here are deliberate and worth knowing before you change them:
+
+   1. Brand red (#FE0024) scores only 4.0:1 on white, under the 4.5:1 AA bar for
+      body text. So `--brand` is used for fills, the logo and active indicators,
+      while `--brand-strong` carries any brand-coloured *text* in light mode
+      (5.4:1). Dark mode uses a brighter tint for the same reason (6.1:1).
+
+   2. Brand red and "destructive" red would otherwise be the same colour in a
+      product whose main verbs are Approve and Reject. So red is handed to
+      destructive, and the interactive primary is ink - near-black in light,
+      near-white in dark. Brand red stays on the logo and the nav rail.
+
+   3. Every colour is an `R G B` triple so Tailwind's `/<alpha-value>` works.
+--------------------------------------------------------------------------- */
+
+@layer base {
+  /* Light tokens live under both selectors so a nested [data-theme='light']
+     island - a preview card, an embedded doc - really does go light while the
+     rest of the app stays dark. */
+  :root,
+  [data-theme='light'] {
+    /* Surfaces, from furthest back to closest */
+    --canvas:        250 250 251;
+    --surface:       255 255 255;
+    --surface-sunken:246 246 248;
+    --overlay:       255 255 255;
+
+    /* Text */
+    --text:          14 15 18;
+    --text-muted:    95 99 110;
+    /* 4.98:1 on surface, 4.61:1 on sunken. The previous value (138 143 154)
+       measured 3.24:1 and 3.00:1 - under the 4.5:1 AA bar for body text, and it
+       carries the *smallest* text in the product: hints, timestamps, metadata
+       at 10-11px. Darkened rather than enlarged, because the type scale is
+       doing its job and the colour was not. */
+    --text-subtle:   105 112 126;
+    --text-inverted: 255 255 255;
+
+    /* Lines */
+    --border:        228 229 234;
+    --border-strong: 205 207 214;
+    --ring:          14 15 18;
+
+    /* Brand - DesignBoxed red */
+    --brand:         254 0 36;
+    --brand-strong:  215 0 33;   /* AA-safe brand text on light surfaces */
+    --brand-soft:    255 235 238;
+
+    /* Interactive primary: ink, so it never competes with destructive red */
+    --primary:       14 15 18;
+    --primary-hover: 38 40 46;
+    --primary-fg:    255 255 255;
+
+    /* Status */
+    --success:       21 128 61;   --success-soft: 220 252 231;
+    --warning:       180 83 9;    --warning-soft: 254 243 199;
+    --danger:        200 30 30;   --danger-soft:  254 226 226;
+    --info:          29 78 216;   --info-soft:    219 234 254;
+
+    --radius: 0.625rem;
+
+    --shadow-sm: 0 1px 2px 0 rgb(14 15 18 / 0.05);
+    --shadow-md: 0 4px 12px -2px rgb(14 15 18 / 0.08), 0 2px 4px -2px rgb(14 15 18 / 0.04);
+    --shadow-lg: 0 16px 40px -8px rgb(14 15 18 / 0.14), 0 4px 10px -4px rgb(14 15 18 / 0.06);
+
+    /* Chart ink. A data series needs a hue that is not already spoken for:
+       brand red means identity, danger red means destructive, and ink is the
+       interactive primary. This blue is a sequential single hue - every chart
+       here compares magnitude, so none of them needs a categorical palette -
+       and both steps clear 3:1 against their own surface. */
+    --chart-1:       42 120 214;
+    --chart-grid:    228 229 234;
+  }
+
+  [data-theme='dark'] {
+    /* Stepped for the dark surface, not flipped: #3987e5 is the same hue chosen
+       against #131316 rather than #ffffff. */
+    --chart-1:       57 135 229;
+    --chart-grid:    39 39 45;
+
+    --canvas:        9 9 11;
+    --surface:       19 19 22;
+    --surface-sunken:13 13 16;
+    --overlay:       24 24 28;
+
+    --text:          250 250 250;
+    --text-muted:    161 161 170;
+    /* 5.08:1 on surface, 5.31:1 on sunken. Was 113 113 122 at 3.84:1. */
+    --text-subtle:   133 133 143;
+    --text-inverted: 14 15 18;
+
+    --border:        39 39 45;
+    --border-strong: 63 63 70;
+    --ring:          250 250 250;
+
+    --brand:         254 0 36;
+    --brand-strong:  255 77 99;  /* AA-safe brand text on dark surfaces */
+    --brand-soft:    46 12 18;
+
+    --primary:       250 250 250;
+    --primary-hover: 228 228 231;
+    --primary-fg:    14 15 18;
+
+    --success:       74 222 128;  --success-soft: 8 46 25;
+    --warning:       250 204 21;  --warning-soft: 52 36 5;
+    --danger:        248 113 113; --danger-soft:  61 16 16;
+    --info:          96 165 250;  --info-soft:    16 32 66;
+
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+    --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.5), 0 2px 4px -2px rgb(0 0 0 / 0.35);
+    --shadow-lg: 0 16px 40px -8px rgb(0 0 0 / 0.6), 0 4px 10px -4px rgb(0 0 0 / 0.4);
+  }
+
+  * {
+    border-color: rgb(var(--border));
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background-color: rgb(var(--canvas));
+    color: rgb(var(--text));
+    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* One focus treatment everywhere, and only for keyboard users. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--ring));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background-color: rgb(var(--brand) / 0.22);
+  }
+
+  /* Restrained scrollbars - the default Windows ones break the dark theme. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--border-strong)) transparent;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--border-strong));
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Theme swaps would otherwise flash every transitioning property at once. */
+  .theme-transition,
+  .theme-transition * {
+    transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+  }
+}

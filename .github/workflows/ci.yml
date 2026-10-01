@@ -1,0 +1,160 @@
+# ---------------------------------------------------------------------------
+# Continuous integration.
+#
+# Four jobs in parallel. Splitting them means a failure names its own cause:
+# "migrations" failing tells you something different from "api" failing, and
+# waiting for one to learn about the other wastes the loop.
+# ---------------------------------------------------------------------------
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    # The suite runs against real MySQL, not SQLite. The engines differ in
+    # exactly the places that matter here - fractional seconds, JSON columns,
+    # SELECT ... FOR UPDATE - and the worst defect this project has had was a
+    # MySQL-only truncation that no SQLite test could have caught.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          # Match the version that wrote uv.lock, as the Dockerfile does.
+          version: "0.10.8"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - run: uv sync --frozen
+
+      # conftest derives the scratch database name from this by appending
+      # "_test", and creates it on first use.
+      #
+      # EMAIL_ENABLED stays off, and conftest installs an outbox regardless, so
+      # CI cannot send mail even if something regresses.
+      - name: Run tests
+        run: uv run pytest -q
+        env:
+          ENVIRONMENT: development
+          EMAIL_ENABLED: "false"
+          DATABASE_URL: mysql+pymysql://root:ci-root-password@127.0.0.1:3306/travel_ops?charset=utf8mb4
+
+      # requirements.txt is generated from uv.lock, so the two drift the moment
+      # someone edits one by hand. Regenerating and diffing is the only check
+      # that stays true.
+      - name: requirements.txt matches the lockfile
+        run: |
+          uv export --format requirements-txt --no-dev --no-hashes --no-emit-project -o /tmp/req.txt
+          uv export --format requirements-txt --no-hashes --no-emit-project -o /tmp/req-dev.txt
+          diff -u requirements.txt /tmp/req.txt
+          diff -u requirements-dev.txt /tmp/req-dev.txt
+
+  migrations:
+    name: Migrations apply cleanly
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: travel_ops
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.10.8"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - run: uv sync --frozen
+
+      # A migration that only ever runs against an already-migrated developer
+      # database can be broken for months without anyone noticing. This applies
+      # the whole chain to an empty schema, which is what a new environment does.
+      - name: alembic upgrade head
+        run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: mysql+pymysql://root:ci-root-password@127.0.0.1:3306/travel_ops?charset=utf8mb4
+
+      # Models and migrations drifting apart is the usual way a deploy surprises
+      # you. If autogenerate still finds changes, someone edited a model without
+      # generating the migration.
+      - name: Check models and migrations agree
+        run: uv run alembic check
+        env:
+          DATABASE_URL: mysql+pymysql://root:ci-root-password@127.0.0.1:3306/travel_ops?charset=utf8mb4
+
+  web:
+    name: Web typecheck and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+  images:
+    name: Images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      # Built but not pushed. This catches a Dockerfile that broke weeks before
+      # anyone next deployed, which is exactly when it is cheapest to fix.
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

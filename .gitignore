@@ -1,0 +1,42 @@
+# --- Secrets ---------------------------------------------------------------
+# The service account holds a live GCP private key. .env holds the database
+# password, the token signing key, the PII encryption key and the SMTP password.
+gemini_credentials.json
+*.env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*-key.json
+service-account*.json
+
+# --- Python ----------------------------------------------------------------
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Uploaded ID scans and tickets. Real identity documents must never be
+# committed, and in production these live on a volume or in a bucket anyway.
+backend/uploads/
+
+# --- Node ------------------------------------------------------------------
+web/node_modules/
+web/dist/
+web/.vite/
+*.tsbuildinfo
+
+# --- Editors / OS ----------------------------------------------------------
+# .vscode/ is deliberately NOT ignored: tasks.json, launch.json, settings.json
+# and extensions.json are shared project setup, and committing them is how the
+# next person gets a working debugger without being told how. Only the
+# per-user files below are excluded.
+.vscode/*.local.json
+.history/
+.idea/
+Thumbs.db
+Desktop.ini
+*.log

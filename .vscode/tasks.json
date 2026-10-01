@@ -1,0 +1,76 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run everything",
+      "detail": "Start the API and the web app together",
+      "dependsOn": ["API: serve", "Web: dev server"],
+      "dependsOrder": "parallel",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "API: serve",
+      "type": "shell",
+      "command": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "args": ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
+      "options": { "cwd": "${workspaceFolder}/backend" },
+      "isBackground": true,
+      "presentation": { "group": "servers", "panel": "dedicated" },
+      "problemMatcher": {
+        "pattern": { "regexp": "^\s*File \"(.*)\", line (\d+)", "file": 1, "line": 2 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*Started server process.*",
+          "endsPattern": ".*Application startup complete.*"
+        }
+      }
+    },
+    {
+      "label": "Web: dev server",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "dev"],
+      "options": { "cwd": "${workspaceFolder}/web" },
+      "isBackground": true,
+      "presentation": { "group": "servers", "panel": "dedicated" },
+      "problemMatcher": {
+        "pattern": { "regexp": "^\s*(.*):(\d+):(\d+):\s+(error|warning):\s+(.*)$", "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5 },
+        "background": { "activeOnStart": true, "beginsPattern": ".*VITE.*", "endsPattern": ".*ready in.*" }
+      }
+    },
+    {
+      "label": "DB: apply migrations",
+      "type": "shell",
+      "command": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "args": ["-m", "alembic", "upgrade", "head"],
+      "options": { "cwd": "${workspaceFolder}/backend" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: backend unit tests",
+      "type": "shell",
+      "command": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "args": ["-m", "pytest", "-q"],
+      "options": { "cwd": "${workspaceFolder}/backend" },
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Web: production build",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "build"],
+      "options": { "cwd": "${workspaceFolder}/web" },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "Free port 8000",
+      "detail": "Kills a wedged uvicorn worker still holding the port",
+      "type": "shell",
+      "command": "powershell",
+      "args": ["-NoProfile", "-Command", "$c = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if ($c) { foreach ($x in $c) { taskkill /PID $x.OwningProcess /F /T } } else { Write-Output 'Port 8000 is already free.' }"],
+      "problemMatcher": []
+    }
+  ]
+}

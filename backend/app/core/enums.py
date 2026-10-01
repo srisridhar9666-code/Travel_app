@@ -1,0 +1,325 @@
+"""
+Domain vocabulary for the whole system.
+
+The SOW describes a single status per request, but selective approvals mean the
+real decision unit is the individual traveller. So status lives on the traveller
+row and the request-level value is derived from its travellers - see
+`derive_request_status` below.
+"""
+from enum import StrEnum
+
+
+class Role(StrEnum):
+    """What a user may do. Orthogonal to Designation."""
+
+    SYSTEM_ADMIN = "SYSTEM_ADMIN"   # user management, settings, audit log
+    ADMIN = "ADMIN"                 # fulfilment: approve, book, upload tickets
+    GROUND_STAFF = "GROUND_STAFF"   # raise and edit own requests
+
+
+class Designation(StrEnum):
+    """Where someone sits in the field hierarchy. Reporting only in V1;
+    approval routing on designation is explicitly out of scope."""
+
+    EXECUTIVE = "EXECUTIVE"
+    TEAM_LEAD = "TEAM_LEAD"
+    MANAGER = "MANAGER"
+
+
+class Gender(StrEnum):
+    """Drives the room-sharing policy. Anything that is not an exact match
+    between two people falls back to separate rooms."""
+
+    MALE = "MALE"
+    FEMALE = "FEMALE"
+    OTHER = "OTHER"
+    UNDISCLOSED = "UNDISCLOSED"
+
+
+class ProjectStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    PAUSED = "PAUSED"
+    COMPLETED = "COMPLETED"
+    ARCHIVED = "ARCHIVED"   # hidden from request dropdowns, history preserved
+
+
+class RequestType(StrEnum):
+    LONG_DISTANCE = "LONG_DISTANCE"   # flight / train / bus
+    LOCAL_CAB = "LOCAL_CAB"
+    HOTEL = "HOTEL"
+
+
+class TravelMode(StrEnum):
+    FLIGHT = "FLIGHT"
+    TRAIN = "TRAIN"
+    BUS = "BUS"
+    CAB = "CAB"
+
+
+class RequestStatus(StrEnum):
+    """Derived from the traveller rows; never set directly by a caller."""
+
+    DRAFT = "DRAFT"                             # not yet visible to admins
+    SUBMITTED = "SUBMITTED"                     # in the queue, still editable
+    PARTIALLY_APPROVED = "PARTIALLY_APPROVED"   # some travellers decided
+    APPROVED = "APPROVED"                       # all approved, no tickets yet
+    BOOKED = "BOOKED"                           # tickets attached and confirmed
+    REJECTED = "REJECTED"                       # every traveller rejected
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"                         # travel date passed while pending
+
+
+class TravellerStatus(StrEnum):
+    """The real decision unit. One row per person on a request."""
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    BOOKED = "BOOKED"
+    CANCELLED = "CANCELLED"
+
+
+#: Once any traveller leaves PENDING the request is locked against edits.
+#: This is the "editable until first admin action" rule.
+_DECIDED = {TravellerStatus.APPROVED, TravellerStatus.REJECTED, TravellerStatus.BOOKED}
+
+#: What an admin may do to a traveller row next. A decision is not undoable in
+#: V1 - correcting one goes through cancel-and-reraise, same as an edit after the
+#: lock - so every decided state leads only to CANCELLED.
+ALLOWED_TRAVELLER_TRANSITIONS: dict[TravellerStatus, set[TravellerStatus]] = {
+    TravellerStatus.PENDING: {
+        TravellerStatus.APPROVED,
+        TravellerStatus.REJECTED,
+        TravellerStatus.CANCELLED,
+    },
+    # Booking is a second step, deliberately: approved means the trip is
+    # sanctioned, booked means a ticket exists. See addendum B2.
+    TravellerStatus.APPROVED: {TravellerStatus.BOOKED, TravellerStatus.CANCELLED},
+    TravellerStatus.BOOKED: {TravellerStatus.CANCELLED},
+    TravellerStatus.REJECTED: {TravellerStatus.CANCELLED},
+    TravellerStatus.CANCELLED: set(),
+}
+
+
+#: Statuses that occupy a person's calendar for conflict detection.
+#: DRAFT and anything rejected or cancelled never blocks a new request.
+ACTIVE_TRAVELLER_STATUSES = {
+    TravellerStatus.PENDING,
+    TravellerStatus.APPROVED,
+    TravellerStatus.BOOKED,
+}
+
+
+class RoomSharingChoice(StrEnum):
+    """What the requester picked when the system offered a co-stay."""
+
+    NOT_OFFERED = "NOT_OFFERED"
+    SHARE_EXISTING = "SHARE_EXISTING"
+    SEPARATE_ROOM = "SEPARATE_ROOM"
+    SEPARATE_HOTEL = "SEPARATE_HOTEL"
+
+
+class ConflictKind(StrEnum):
+    OVERLAPPING_TRAVEL = "OVERLAPPING_TRAVEL"
+    OVERLAPPING_STAY = "OVERLAPPING_STAY"
+    DUPLICATE_REQUEST = "DUPLICATE_REQUEST"
+
+
+class ConflictSeverity(StrEnum):
+    """Conflicts warn rather than block. An admin may approve anyway, but only
+    with a typed reason that lands in the audit log."""
+
+    WARNING = "WARNING"
+    BLOCKING = "BLOCKING"
+
+
+class AuditAction(StrEnum):
+    CREATE = "CREATE"
+    UPDATE = "UPDATE"
+    DELETE = "DELETE"
+    LOGIN = "LOGIN"
+    LOGIN_FAILED = "LOGIN_FAILED"
+    LOGOUT = "LOGOUT"
+    SUBMIT = "SUBMIT"
+    APPROVE = "APPROVE"
+    REJECT = "REJECT"
+    CANCEL = "CANCEL"
+    BOOK = "BOOK"
+    UPLOAD = "UPLOAD"
+    EXTRACT = "EXTRACT"
+    NOTIFY = "NOTIFY"
+    OVERRIDE_CONFLICT = "OVERRIDE_CONFLICT"
+    VIEW_SENSITIVE = "VIEW_SENSITIVE"   # ID proof opened - PII access trail
+
+
+class IdProofType(StrEnum):
+    """Government identity documents ground staff travel on.
+
+    The number itself is encrypted at rest and only ever decrypted through an
+    endpoint that writes a VIEW_SENSITIVE audit row - see addendum B8.
+    """
+
+    AADHAAR = "AADHAAR"
+    PAN = "PAN"
+    PASSPORT = "PASSPORT"
+    DRIVING_LICENCE = "DRIVING_LICENCE"
+    VOTER_ID = "VOTER_ID"
+    OTHER = "OTHER"
+
+
+class TokenPurpose(StrEnum):
+    """Single-use token flavours. Both share one table and one redemption path."""
+
+    INVITE = "INVITE"                   # set your first password
+    PASSWORD_RESET = "PASSWORD_RESET"   # set a replacement password
+
+
+class NotificationChannel(StrEnum):
+    """How a notice reaches someone.
+
+    `IN_APP` is always written and always delivered - it is a row. Everything
+    else is a transport that can refuse. Adding SMS is a value here plus a sender
+    in `notifications.SENDERS`, which is what addendum C3 means by
+    channel-agnostic.
+    """
+
+    EMAIL = "EMAIL"
+    IN_APP = "IN_APP"
+
+
+class NotificationCategory(StrEnum):
+    """What a notice is *about*, so people can turn off the parts they do not
+    want without losing the parts they need.
+
+    Coarse on purpose. Per-event opt-outs would be a settings screen nobody
+    reads, and the four groups below are the ones staff actually distinguish.
+    """
+
+    DECISIONS = "DECISIONS"       # your request was approved or rejected
+    BOOKINGS = "BOOKINGS"         # tickets confirmed, references issued
+    ROOM_SHARING = "ROOM_SHARING"  # a colleague asked to share your room
+    REMINDERS = "REMINDERS"       # nudges: travel coming up, requests going stale
+
+
+#: Which category each notification kind belongs to. A kind that is missing here
+#: is treated as a DECISION - the safest default, because decisions are the
+#: notices someone would most regret not receiving.
+NOTIFICATION_CATEGORIES: dict[str, NotificationCategory] = {
+    "REQUEST_APPROVED": NotificationCategory.DECISIONS,
+    "REQUEST_REJECTED": NotificationCategory.DECISIONS,
+    "REQUEST_CANCELLED": NotificationCategory.DECISIONS,
+    "REQUEST_BOOKED": NotificationCategory.BOOKINGS,
+    "BOOKING_CONFIRMED": NotificationCategory.BOOKINGS,
+    "COSTAY_REQUESTED": NotificationCategory.ROOM_SHARING,
+    "TRAVEL_REMINDER": NotificationCategory.REMINDERS,
+    "REQUEST_STALE": NotificationCategory.REMINDERS,
+}
+
+
+def category_of(kind: str) -> NotificationCategory:
+    return NOTIFICATION_CATEGORIES.get(kind, NotificationCategory.DECISIONS)
+
+
+#: Categories a person may switch off for themselves. Decisions are deliberately
+#: absent: being told your own travel was rejected is not marketing, and an
+#: opt-out there would produce staff who turn up at airports.
+OPTIONAL_CATEGORIES = {
+    NotificationCategory.BOOKINGS,
+    NotificationCategory.ROOM_SHARING,
+    NotificationCategory.REMINDERS,
+}
+
+
+class NotificationStatus(StrEnum):
+    QUEUED = "QUEUED"
+    SENT = "SENT"
+    FAILED = "FAILED"
+    READ = "READ"
+    #: Deliberately not delivered - the channel is switched off, or the address
+    #: is outside the development allowlist. Distinct from FAILED, which means
+    #: we tried and the server said no.
+    SUPPRESSED = "SUPPRESSED"
+
+
+class TicketStatus(StrEnum):
+    """Where an uploaded ticket is in the extract-review-confirm flow.
+
+    The SOW has upload set a request to Booked immediately. One model misparse
+    would then book a wrong PNR and email it out, so a human sits in the middle -
+    see addendum B3. Nothing reaches a traveller before CONFIRMED.
+    """
+
+    UPLOADED = "UPLOADED"       # on disk, not yet read
+    EXTRACTING = "EXTRACTING"   # handed to the model
+    EXTRACTED = "EXTRACTED"     # fields proposed, awaiting a human
+    CONFIRMED = "CONFIRMED"     # an admin accepted it; the traveller is booked
+    FAILED = "FAILED"           # the model could not be reached or made no sense
+    DISCARDED = "DISCARDED"     # wrong file, replaced by another upload
+
+
+def derive_request_status(
+    traveller_statuses: list[TravellerStatus],
+    *,
+    is_draft: bool = False,
+    is_cancelled: bool = False,
+    travel_date_passed: bool = False,
+) -> RequestStatus:
+    """Collapse per-traveller statuses into the one value shown on a request.
+
+    Ordering matters: an explicit draft or cancellation wins over anything the
+    travellers say, then the fully-settled cases, then the mixed case.
+
+    `travel_date_passed` is the only input that is not a traveller status, and it
+    produces `EXPIRED` in exactly one situation: the date has gone and **nobody**
+    was decided. A request where some travellers were approved and one was missed
+    keeps `PARTIALLY_APPROVED`, because that says more about what happened than
+    "expired" does.
+    """
+    if is_draft:
+        return RequestStatus.DRAFT
+    if is_cancelled:
+        return RequestStatus.CANCELLED
+    if not traveller_statuses:
+        return RequestStatus.EXPIRED if travel_date_passed else RequestStatus.SUBMITTED
+
+    live = [s for s in traveller_statuses if s is not TravellerStatus.CANCELLED]
+    if not live:
+        return RequestStatus.CANCELLED
+    if travel_date_passed and all(s is TravellerStatus.PENDING for s in live):
+        return RequestStatus.EXPIRED
+    if all(s is TravellerStatus.REJECTED for s in live):
+        return RequestStatus.REJECTED
+    if all(s is TravellerStatus.BOOKED for s in live):
+        return RequestStatus.BOOKED
+
+    settled = [s for s in live if s is not TravellerStatus.PENDING]
+    if not settled:
+        return RequestStatus.SUBMITTED
+    if len(settled) < len(live):
+        return RequestStatus.PARTIALLY_APPROVED
+
+    # Everyone is decided: approved/booked mix, with rejections allowed.
+    if any(s is TravellerStatus.BOOKED for s in live):
+        return RequestStatus.PARTIALLY_APPROVED
+    return RequestStatus.APPROVED
+
+
+def is_editable(
+    traveller_statuses: list[TravellerStatus],
+    *,
+    is_draft: bool = False,
+    is_cancelled: bool = False,
+) -> bool:
+    """A request stays editable until an admin acts on any traveller.
+
+    A draft always is. A cancelled one never is - including the case where every
+    traveller has dropped out, which leaves nothing to edit even though no admin
+    ever approved or rejected anyone.
+    """
+    if is_cancelled:
+        return False
+    if is_draft:
+        return True
+    if traveller_statuses and all(s is TravellerStatus.CANCELLED for s in traveller_statuses):
+        return False
+    return not any(s in _DECIDED for s in traveller_statuses)

@@ -1,0 +1,66 @@
+"""
+Bulk import of the ground team from a CSV.
+
+Import is two calls, not one: `preview` parses and validates without writing
+anything, and `commit` applies it. Creating a hundred accounts - each with an
+invitation - is not something an admin should discover the shape of only after
+it has happened.
+"""
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+from app.core.enums import Designation, Gender, Role
+
+#: Accepted headers, in the order the template writes them.
+IMPORT_COLUMNS = [
+    "full_name",
+    "email",
+    "role",
+    "designation",
+    "gender",
+    "phone",
+    "employee_code",
+    "base_location",
+]
+
+REQUIRED_COLUMNS = {"full_name", "email"}
+
+
+class ImportRow(BaseModel):
+    """One parsed line, with whatever is wrong with it."""
+
+    line: int
+    full_name: str | None = None
+    email: str | None = None
+    role: Role = Role.GROUND_STAFF
+    designation: Designation | None = None
+    gender: Gender = Gender.UNDISCLOSED
+    phone: str | None = None
+    employee_code: str | None = None
+    base_location: str | None = None
+
+    #: Hard problems. A row with any of these is skipped on commit.
+    errors: list[str] = []
+    #: Worth knowing, but not disqualifying.
+    warnings: list[str] = []
+
+    @property
+    def importable(self) -> bool:
+        return not self.errors
+
+
+class ImportPreview(BaseModel):
+    rows: list[ImportRow]
+    total: int
+    importable: int
+    skipped: int
+    #: Problems with the file itself rather than any one row.
+    file_errors: list[str] = []
+
+
+class ImportResult(BaseModel):
+    created: int
+    skipped: int
+    invite_urls: dict[str, str]
+    errors: list[str] = []

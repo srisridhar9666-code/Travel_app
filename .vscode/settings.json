@@ -1,0 +1,40 @@
+{
+  // Point VS Code at the project's own venv so imports resolve and the test
+  // explorer works without anyone selecting an interpreter by hand.
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+  "python.terminal.activateEnvironment": true,
+
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": ["backend/tests"],
+  "python.testing.cwd": "${workspaceFolder}/backend",
+  "python.analysis.extraPaths": ["${workspaceFolder}/backend"],
+
+  // Tailwind's class strings live inside cn(...) and cva(...) helpers, which
+  // the extension does not recognise on its own.
+  "tailwindCSS.experimental.classRegex": [
+    ["cn\(([^)]*)\)", "[\"'`]([^\"'`]*)[\"'`]"],
+    ["cva\(([^)]*)\)", "[\"'`]([^\"'`]*)[\"'`]"]
+  ],
+  "tailwindCSS.includeLanguages": { "typescriptreact": "javascript" },
+
+  "typescript.tsdk": "web/node_modules/typescript/lib",
+  "editor.rulers": [92],
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+
+  "files.exclude": { "**/__pycache__": true, "**/.pytest_cache": true, "**/*.tsbuildinfo": true },
+  "search.exclude": {
+    "**/.venv": true,
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/backend/uploads": true,
+    "**/package-lock.json": true,
+    "**/uv.lock": true
+  },
+  "files.watcherExclude": {
+    "**/.venv/**": true,
+    "**/node_modules/**": true,
+    "**/backend/uploads/**": true
+  }
+}
