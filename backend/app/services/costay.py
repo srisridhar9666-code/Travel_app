@@ -212,6 +212,41 @@ def notify_share_request(
     )
 
 
+def confirm_refusal(
+    db: Session, *, request: TravelRequest, traveller: RequestTraveller
+) -> str | None:
+    """Why an admin may not confirm this traveller's shared room yet, or None.
+
+    The ask was checked when it was saved, but the confirmation can come days
+    later: a profile may have changed, and either stay may have been rejected,
+    cancelled or moved since. So both people are checked again here, against
+    the same rules the matcher used to offer the pairing in the first place.
+    """
+    colleague = traveller.share_with
+    if colleague is None:
+        return "The colleague this traveller asked to share with was not found."
+    if traveller.status not in ACTIVE_TRAVELLER_STATUSES:
+        return f"{traveller.user.full_name} is no longer travelling on this request."
+    if not may_share_room(traveller.user.gender, colleague.gender):
+        return "These two travellers cannot share a room."
+    # Not excluding this request: a colleague tagged onto the same stay is on
+    # the trip just as much as one with a stay of their own.
+    still_there = find_matches(
+        db,
+        tenant_id=request.tenant_id,
+        for_user=traveller.user,
+        city=request.hotel_city or "",
+        check_in=request.check_in,
+        check_out=request.check_out,
+    )
+    if not any(match.user_id == colleague.id for match in still_there):
+        return (
+            f"{colleague.full_name} no longer has a live hotel stay in "
+            f"{request.hotel_city} on any of these nights."
+        )
+    return None
+
+
 def clear_share(traveller: RequestTraveller) -> None:
     """Drop any share this traveller held, including an admin confirmation.
 

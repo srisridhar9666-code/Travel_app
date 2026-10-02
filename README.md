@@ -402,8 +402,10 @@ admins to ignore the warning. Nothing in that module can stop a submission.
 **A shared room is only ever a request until an admin confirms it.** Room sharing needs an
 *exact* `Gender` match between two people who stated a binary value; `OTHER` and
 `UNDISCLOSED` never share, even with an identical value, because identical labels are not
-consent. The requester is never told that a candidate was filtered out. See addendum C2 for
-the open question this is built against.
+consent. The requester is never told that a candidate was filtered out. Admins confirm from
+**Approvals**, and the confirmation checks both people again - the gender rule, and that each
+still has a live stay in that city on a shared night - because the ask may be days old by
+then; a refusal says which. See addendum C2 for the open question this is built against.
 
 **Moving a stay drops its room share, including an admin's confirmation.** A confirmation
 was given against particular dates in a particular city; carrying it silently onto different

@@ -14,6 +14,7 @@ import {
   Plane,
   Ticket,
   Gavel,
+  Users,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
@@ -35,6 +36,7 @@ import {
   Skeleton,
 } from '@/components/ui';
 import {
+  confirmShare,
   decideBatch,
   errorMessage,
   exportQueue,
@@ -428,6 +430,19 @@ function RevisionHistory({ requestId }: { requestId: number }) {
   );
 }
 
+const STILL_TRAVELLING: ReadonlySet<TravellerStatus> = new Set(['PENDING', 'APPROVED', 'BOOKED']);
+
+/** A requested shared room nobody has signed off yet (addendum C2). The server
+ *  refuses one for anyone no longer travelling, so it is not offered there;
+ *  what only the server can see, like the colleague's own stay, it explains. */
+const canConfirmShare = (request: TravelRequest, traveller: RequestTraveller) =>
+  request.request_type === 'HOTEL' &&
+  request.status !== 'CANCELLED' &&
+  STILL_TRAVELLING.has(traveller.status) &&
+  traveller.room_sharing === 'SHARE_EXISTING' &&
+  traveller.share_with_user_id !== null &&
+  !traveller.share_confirmed;
+
 /** What the admin is about to do, held until the reason (if one is needed) is typed. */
 interface PendingDecision {
   request: TravelRequest;
@@ -493,10 +508,12 @@ export default function ApprovalsPage() {
     queryClient.invalidateQueries({ queryKey: ['queue-counts'] });
     queryClient.invalidateQueries({ queryKey: ['requests'] });
     queryClient.invalidateQueries({ queryKey: ['tickets'] });
-    // A decision moves the dashboard, the travel log and cost analytics too.
+    // A decision moves the dashboard, the travel log and cost analytics too,
+    // and a decision or a confirmed share shows in each person's travel history.
     queryClient.invalidateQueries({ queryKey: ['insights'] });
     queryClient.invalidateQueries({ queryKey: ['travel-logs'] });
     queryClient.invalidateQueries({ queryKey: ['analytics'] });
+    queryClient.invalidateQueries({ queryKey: ['travel-history'] });
   };
 
   // Every row of the tab that matches the search and priority, fetched afresh,
@@ -555,6 +572,23 @@ export default function ApprovalsPage() {
       }
       close();
       toast.error(message);
+    },
+  });
+
+  const confirmingShare = useMutation({
+    mutationFn: (vars: { request: TravelRequest; traveller: RequestTraveller }) =>
+      confirmShare(vars.request.id, vars.traveller.id),
+    // A refusal - the colleague has left the trip, or the pair no longer meets
+    // the sharing policy - is the server's own sentence, shown by the global
+    // toast as it is.
+    meta: { errorFallback: 'Could not confirm this room share.' },
+    onSuccess: (_, vars) => {
+      toast.success(
+        `Room share confirmed: ${vars.traveller.full_name} with ${
+          vars.traveller.share_with_name ?? 'their colleague'
+        }`,
+      );
+      refresh();
     },
   });
 
@@ -845,6 +879,20 @@ export default function ApprovalsPage() {
                         <Badge tone={TRAVELLER_TONE[traveller.status]}>
                           {TRAVELLER_STATUS_LABELS[traveller.status]}
                         </Badge>
+                        {traveller.room_sharing === 'SHARE_EXISTING' &&
+                          traveller.share_with_user_id !== null && (
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 text-2xs',
+                                traveller.share_confirmed ? 'text-success' : 'text-info',
+                              )}
+                            >
+                              <Users size={11} />
+                              {traveller.share_confirmed
+                                ? `Sharing a room with ${traveller.share_with_name ?? 'a colleague'} ✓`
+                                : `Asked to share a room with ${traveller.share_with_name ?? 'a colleague'}`}
+                            </span>
+                          )}
                         {traveller.booking_reference && (
                           <span className="inline-flex items-center gap-1 text-2xs text-text-muted">
                             <Ticket size={11} />
@@ -863,6 +911,20 @@ export default function ApprovalsPage() {
                         )}
 
                         <div className="ml-auto flex gap-1.5">
+                          {canConfirmShare(request, traveller) && (
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              loading={
+                                confirmingShare.isPending &&
+                                confirmingShare.variables?.traveller.id === traveller.id
+                              }
+                              onClick={() => confirmingShare.mutate({ request, traveller })}
+                              title={`Nothing books ${traveller.full_name} into a shared room until this is confirmed`}
+                            >
+                              Confirm room share
+                            </Button>
+                          )}
                           {traveller.status === 'PENDING' && (
                             <>
                               <Button

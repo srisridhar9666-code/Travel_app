@@ -495,6 +495,9 @@ export const setRoomSharing = (
   body: { traveller_id: number; choice: RoomSharingChoice; share_with_user_id?: number | null },
 ) => api.post<TravelRequest>(`/requests/${id}/room-sharing`, body).then((r) => r.data);
 
+/** An admin signs off a requested shared room (addendum C2), from Approvals.
+ *  Refused, with the reason, if either person has left the trip since asking
+ *  or the pair no longer meets the sharing policy. */
 export const confirmShare = (id: number, travellerId: number) =>
   api
     .post<TravelRequest>(`/requests/${id}/travellers/${travellerId}/confirm-share`)

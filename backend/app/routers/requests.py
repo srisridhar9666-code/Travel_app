@@ -700,18 +700,21 @@ def confirm_share(
     Nothing books two people into one room until this happens. If the client
     decides the colleague must consent as well, their acceptance becomes a second
     precondition here rather than a new flow.
+
+    Both people must still be on the trip and still meet the gender policy -
+    see `costay.confirm_refusal` - because the ask may be days old by now.
     """
     row = _load(db, request_id, actor)
-    traveller = next((t for t in row.travellers if t.id == traveller_id), None)
-    if traveller is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="That traveller is not on this request."
-        )
+    _decidable(row)
+    traveller = _traveller_or_404(row, traveller_id)
     if traveller.room_sharing is not RoomSharingChoice.SHARE_EXISTING:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This traveller has not asked to share a room.",
         )
+    refusal = costay.confirm_refusal(db, request=row, traveller=traveller)
+    if refusal:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=refusal)
 
     traveller.share_confirmed_by_id = actor.id
     traveller.share_confirmed_at = naive_utcnow()
