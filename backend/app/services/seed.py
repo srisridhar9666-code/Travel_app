@@ -87,6 +87,14 @@ def ensure_other_project(db: Session, tenant_id: str) -> Project:
         )
     ).scalar_one_or_none()
     if existing is not None:
+        if existing.status is not ProjectStatus.ACTIVE:
+            # Pausing or archiving it is refused now, but a database where it
+            # happened before that guard would otherwise keep a request form
+            # with no "Other" option and nothing to say why.
+            logger.warning(
+                "Reopening the fallback %r campaign for %s", OTHER_PROJECT_CODE, tenant_id
+            )
+            existing.status = ProjectStatus.ACTIVE
         return existing
 
     project = Project(

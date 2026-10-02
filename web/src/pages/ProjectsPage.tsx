@@ -1,9 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArchiveRestore, FolderKanban, Pencil, Plus, Search } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  FolderKanban,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+} from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import toast from 'react-hot-toast';
 
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Modal } from '@/components/Modal';
+import { PlacePicker } from '@/components/PlacePicker';
 import {
   Badge,
   Button,
@@ -18,28 +28,52 @@ import {
 import {
   archiveProject,
   createProject,
+  deleteProject,
   errorMessage,
   fetchProjects,
   restoreProject,
   updateProject,
   type ProjectPayload,
 } from '@/lib/api';
+import { campaignPlace, suggestCampaignCode } from '@/lib/projects';
+import { cn } from '@/lib/utils';
 import {
+  PROJECT_STATUS_HELP,
   PROJECT_STATUS_LABELS,
   type Project,
   type ProjectStatus,
 } from '@/types';
 
-const BLANK: ProjectPayload = {
+/** Every field as the inputs hold it - strings, "" for blank. */
+interface FormState {
+  name: string;
+  code: string;
+  client_name: string;
+  state: string;
+  city: string;
+  status: ProjectStatus;
+  start_date: string;
+  end_date: string;
+  description: string;
+}
+
+const BLANK: FormState = {
   name: '',
   code: '',
   client_name: '',
-  location: '',
+  state: '',
+  city: '',
   status: 'ACTIVE',
   start_date: '',
   end_date: '',
   description: '',
 };
+
+const ALL_STATUSES = Object.keys(PROJECT_STATUS_LABELS) as ProjectStatus[];
+
+/** A new campaign is either open or on hold; finishing or putting one away
+ *  only makes sense once it has run. */
+const NEW_STATUSES: ProjectStatus[] = ['ACTIVE', 'PAUSED'];
 
 const STATUS_TONE: Record<ProjectStatus, 'success' | 'warning' | 'info' | 'neutral'> = {
   ACTIVE: 'success',
@@ -62,6 +96,10 @@ function formatRange(project: Project) {
   return '—';
 }
 
+function requestsLabel(count: number) {
+  return `${count} ${count === 1 ? 'request' : 'requests'}`;
+}
+
 export default function ProjectsPage() {
   const queryClient = useQueryClient();
 
@@ -69,8 +107,12 @@ export default function ProjectsPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [editing, setEditing] = useState<Project | null>(null);
   const [formOpen, setFormOpen] = useState(false);
-  const [form, setForm] = useState<ProjectPayload>(BLANK);
+  const [form, setForm] = useState<FormState>(BLANK);
   const [formError, setFormError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<{
+    kind: 'archive' | 'delete';
+    project: Project;
+  } | null>(null);
 
   const projects = useQuery({
     queryKey: ['projects', search, statusFilter],
@@ -86,20 +128,32 @@ export default function ProjectsPage() {
 
   const save = useMutation({
     mutationFn: () => {
-      // Blank date inputs come through as "" - send null so the API clears them
-      // rather than failing to parse an empty string as a date.
+      // Blanks go as null: a blank date clears it rather than failing to parse,
+      // and a blank code asks the server to make one.
       const payload: ProjectPayload = {
-        ...form,
+        name: form.name,
+        code: form.code.trim() || null,
+        client_name: form.client_name || null,
+        state: form.state || null,
+        city: form.city || null,
+        status: form.status,
         start_date: form.start_date || null,
         end_date: form.end_date || null,
-        client_name: form.client_name || null,
-        location: form.location || null,
         description: form.description || null,
       };
+      if (editing?.is_fallback) {
+        // Locked on the server; leaving them out keeps the save about what
+        // the admin could actually change.
+        delete payload.code;
+        delete payload.status;
+      }
       return editing ? updateProject(editing.id, payload) : createProject(payload);
     },
+    meta: { errorFallback: 'Could not save this campaign.' },
     onSuccess: (project) => {
-      toast.success(editing ? `${project.name} updated` : `${project.name} created`);
+      toast.success(
+        editing ? `${project.name} saved` : `${project.name} created (code ${project.code})`,
+      );
       setFormOpen(false);
       setEditing(null);
       setForm(BLANK);
@@ -114,13 +168,27 @@ export default function ProjectsPage() {
       project.status === 'ARCHIVED' ? restoreProject(project.id) : archiveProject(project.id),
     onSuccess: (updated) => {
       toast.success(
-        updated.status === 'ARCHIVED'
-          ? `${updated.name} archived — hidden from new requests`
-          : `${updated.name} restored`,
+        updated.status === 'ARCHIVED' ? `${updated.name} archived` : `${updated.name} restored`,
       );
+      setConfirming(null);
       refresh();
     },
-    onError: (err) => toast.error(errorMessage(err)),
+  });
+
+  const remove = useMutation({
+    mutationFn: (project: Project) => deleteProject(project.id),
+    meta: { errorFallback: 'Could not delete this campaign.' },
+    onSuccess: (_, project) => {
+      toast.success(`${project.name} deleted`);
+      setConfirming(null);
+      refresh();
+    },
+    // Most likely someone raised a request against it meanwhile. The toast says
+    // so; the refreshed row then offers Archive instead.
+    onError: () => {
+      setConfirming(null);
+      refresh();
+    },
   });
 
   const openCreate = () => {
@@ -136,7 +204,8 @@ export default function ProjectsPage() {
       name: project.name,
       code: project.code,
       client_name: project.client_name ?? '',
-      location: project.location ?? '',
+      state: project.state ?? '',
+      city: project.city ?? '',
       status: project.status,
       start_date: project.start_date ?? '',
       end_date: project.end_date ?? '',
@@ -149,19 +218,25 @@ export default function ProjectsPage() {
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setFormError(null);
+    if (form.start_date && form.end_date && form.end_date < form.start_date) {
+      setFormError("End date can't be before the start date.");
+      return;
+    }
     save.mutate();
   };
 
   const rows = projects.data?.items ?? [];
+  const statusChoices = editing ? ALL_STATUSES : NEW_STATUSES;
+  const codePreview = suggestCampaignCode(form.name, form.start_date) || 'MRA-26';
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Campaigns</h1>
           <p className="mt-1.5 max-w-2xl text-sm text-text-muted">
-            Every travel, cab and hotel request is tagged against a campaign. Archiving hides one
-            from new requests while keeping its history intact — campaigns are never deleted.
+            Every travel, cab and hotel request is tagged against a campaign. Archive hides one
+            from new requests and keeps its history. A campaign with no requests can be deleted.
           </p>
         </div>
         <Button onClick={openCreate}>
@@ -183,7 +258,7 @@ export default function ProjectsPage() {
                 <Input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search name, code or client"
+                  placeholder="Search name, code, client or place"
                   className="w-56 pl-8"
                   aria-label="Search campaigns"
                 />
@@ -195,7 +270,7 @@ export default function ProjectsPage() {
                 className="w-36"
               >
                 <option value="">All statuses</option>
-                {(Object.keys(PROJECT_STATUS_LABELS) as ProjectStatus[]).map((s) => (
+                {ALL_STATUSES.map((s) => (
                   <option key={s} value={s}>
                     {PROJECT_STATUS_LABELS[s]}
                   </option>
@@ -259,14 +334,23 @@ export default function ProjectsPage() {
                     }
                   >
                     <td className="px-5 py-3">
-                      <div className="font-medium">{project.name}</div>
-                      <div className="font-mono text-xs text-text-muted">{project.code}</div>
+                      <div className="flex flex-wrap items-center gap-2 font-medium">
+                        {project.name}
+                        {project.is_fallback && (
+                          <Badge tone="neutral">Built-in</Badge>
+                        )}
+                      </div>
+                      <div className="text-xs text-text-muted">
+                        <span className="font-mono">{project.code}</span>
+                        {' · '}
+                        {requestsLabel(project.request_count)}
+                      </div>
                     </td>
                     <td className="hidden px-5 py-3 text-text-muted md:table-cell">
                       {project.client_name || '—'}
                     </td>
                     <td className="hidden px-5 py-3 text-text-muted lg:table-cell">
-                      {project.location || '—'}
+                      {campaignPlace(project) || '—'}
                     </td>
                     <td className="hidden px-5 py-3 text-xs text-text-muted xl:table-cell">
                       {formatRange(project)}
@@ -282,25 +366,49 @@ export default function ProjectsPage() {
                           variant="ghost"
                           size="sm"
                           title="Edit"
+                          aria-label={`Edit ${project.name}`}
                           onClick={() => openEdit(project)}
                         >
                           <Pencil size={14} />
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          title={project.status === 'ARCHIVED' ? 'Restore' : 'Archive'}
-                          loading={
-                            toggleArchive.isPending && toggleArchive.variables?.id === project.id
-                          }
-                          onClick={() => toggleArchive.mutate(project)}
-                        >
-                          {project.status === 'ARCHIVED' ? (
-                            <ArchiveRestore size={14} />
+                        {!project.is_fallback &&
+                          (project.status === 'ARCHIVED' ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Restore (make Active again)"
+                              aria-label={`Restore ${project.name}`}
+                              loading={
+                                toggleArchive.isPending &&
+                                toggleArchive.variables?.id === project.id
+                              }
+                              onClick={() => toggleArchive.mutate(project)}
+                            >
+                              <ArchiveRestore size={14} />
+                            </Button>
                           ) : (
-                            <Archive size={14} />
-                          )}
-                        </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Archive (hide from new requests)"
+                              aria-label={`Archive ${project.name}`}
+                              onClick={() => setConfirming({ kind: 'archive', project })}
+                            >
+                              <Archive size={14} />
+                            </Button>
+                          ))}
+                        {!project.is_fallback && project.request_count === 0 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            title="Delete"
+                            aria-label={`Delete ${project.name}`}
+                            className="text-danger hover:text-danger"
+                            onClick={() => setConfirming({ kind: 'delete', project })}
+                          >
+                            <Trash2 size={14} />
+                          </Button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -310,6 +418,36 @@ export default function ProjectsPage() {
           </div>
         )}
       </Card>
+
+      <ConfirmDialog
+        open={confirming?.kind === 'archive'}
+        title={`Archive “${confirming?.project.name ?? ''}”?`}
+        tone="primary"
+        confirmLabel="Archive campaign"
+        loading={toggleArchive.isPending}
+        onConfirm={() => confirming && toggleArchive.mutate(confirming.project)}
+        onClose={() => setConfirming(null)}
+      >
+        <p>
+          Staff won't be able to pick it on new requests. Its{' '}
+          {requestsLabel(confirming?.project.request_count ?? 0)}, costs and history stay in
+          reports and the activity log.
+        </p>
+        <p>You can restore it any time.</p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={confirming?.kind === 'delete'}
+        title={`Delete “${confirming?.project.name ?? ''}”?`}
+        tone="danger"
+        confirmLabel="Delete campaign"
+        loading={remove.isPending}
+        onConfirm={() => confirming && remove.mutate(confirming.project)}
+        onClose={() => setConfirming(null)}
+      >
+        <p>This campaign has no requests, so nothing else is affected.</p>
+        <p>This can't be undone. The activity log keeps a record of it.</p>
+      </ConfirmDialog>
 
       <Modal
         open={formOpen}
@@ -321,7 +459,7 @@ export default function ProjectsPage() {
         description={
           editing
             ? 'Changes are recorded in the activity log.'
-            : 'Ground staff will tag their requests against this.'
+            : 'Ground staff will tag their requests against this. Only the name is required.'
         }
         footer={
           <>
@@ -342,72 +480,111 @@ export default function ProjectsPage() {
                 required
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Monsoon Field Survey"
+                placeholder="Monsoon Retail Audit"
               />
             </Field>
 
+            <fieldset className="space-y-1.5 sm:col-span-2">
+              <legend className="mb-1.5 block text-xs font-medium text-text">Status</legend>
+              {editing?.is_fallback ? (
+                <p className="text-xs text-text-subtle">
+                  Built-in, always Active. Requests for a campaign that isn't listed yet go
+                  here.
+                </p>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {statusChoices.map((s) => {
+                    const active = form.status === s;
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setForm({ ...form, status: s })}
+                        aria-pressed={active}
+                        className={cn(
+                          'rounded-md border px-3 py-2.5 text-left transition-colors',
+                          active
+                            ? 'border-primary bg-surface-sunken'
+                            : 'border-border hover:border-border-strong',
+                        )}
+                      >
+                        <span className="block text-sm font-semibold text-text">
+                          {PROJECT_STATUS_LABELS[s]}
+                        </span>
+                        <span className="mt-0.5 block text-xs text-text-muted">
+                          {PROJECT_STATUS_HELP[s]}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </fieldset>
+
             <Field
-              label="Code"
+              label="Short code (optional)"
               htmlFor="code"
-              required
-              hint="Stored uppercase. Must be unique."
+              hint={
+                editing?.is_fallback
+                  ? 'The built-in campaign keeps this code.'
+                  : "A short tag shown in request lists, emails and CSV exports. Leave it blank and it's made from the campaign's initials and start year (a number is added if it's taken)."
+              }
             >
               <Input
                 id="code"
-                required
                 value={form.code}
+                maxLength={40}
+                disabled={editing?.is_fallback}
                 onChange={(e) => setForm({ ...form, code: e.target.value })}
-                placeholder="MFS-2026"
+                placeholder={codePreview}
                 className="font-mono"
               />
             </Field>
 
-            <Field label="Status" htmlFor="status">
-              <Select
-                id="status"
-                value={form.status}
-                onChange={(e) => setForm({ ...form, status: e.target.value })}
-              >
-                {(Object.keys(PROJECT_STATUS_LABELS) as ProjectStatus[]).map((s) => (
-                  <option key={s} value={s}>
-                    {PROJECT_STATUS_LABELS[s]}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-
-            <Field label="Client" htmlFor="client_name">
+            <Field label="Client (optional)" htmlFor="client_name">
               <Input
                 id="client_name"
-                value={form.client_name ?? ''}
+                value={form.client_name}
                 onChange={(e) => setForm({ ...form, client_name: e.target.value })}
                 placeholder="Acme Retail"
               />
             </Field>
 
-            <Field label="Location" htmlFor="location" hint="Drives the deployment view.">
-              <Input
-                id="location"
-                value={form.location ?? ''}
-                onChange={(e) => setForm({ ...form, location: e.target.value })}
-                placeholder="Telangana"
+            <div className="sm:col-span-2">
+              <PlacePicker
+                label="Campaign"
+                id="project_place"
+                state={form.state}
+                city={form.city}
+                hint="Optional. Leave it blank if the campaign covers the whole state."
+                onChange={({ state, city }) => setForm({ ...form, state, city })}
               />
-            </Field>
+              {editing?.location && !form.state && (
+                <p className="mt-1.5 text-xs text-text-subtle">
+                  Previously typed as “{editing.location}”. Pick a state to replace it.
+                </p>
+              )}
+            </div>
 
-            <Field label="Start date" htmlFor="start_date">
+            <Field label="Start date (optional)" htmlFor="start_date">
               <Input
                 id="start_date"
                 type="date"
-                value={form.start_date ?? ''}
+                value={form.start_date}
                 onChange={(e) => setForm({ ...form, start_date: e.target.value })}
               />
             </Field>
 
-            <Field label="End date" htmlFor="end_date">
+            <Field
+              label="End date (optional)"
+              htmlFor="end_date"
+              hint="Leave blank if open-ended."
+            >
               <Input
                 id="end_date"
                 type="date"
-                value={form.end_date ?? ''}
+                value={form.end_date}
+                min={form.start_date || undefined}
                 onChange={(e) => setForm({ ...form, end_date: e.target.value })}
               />
             </Field>
