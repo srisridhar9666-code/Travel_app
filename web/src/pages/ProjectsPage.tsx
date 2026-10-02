@@ -124,7 +124,12 @@ export default function ProjectsPage() {
       }),
   });
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['projects'] });
+  // Campaign names and the list itself feed every report's filters and tables.
+  const refresh = () => {
+    for (const key of ['projects', 'filter-options', 'insights', 'travel-logs', 'analytics']) {
+      queryClient.invalidateQueries({ queryKey: [key] });
+    }
+  };
 
   const save = useMutation({
     mutationFn: () => {

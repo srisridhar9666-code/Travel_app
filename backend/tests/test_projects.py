@@ -56,6 +56,30 @@ def people(db):
     return admin, ravi
 
 
+@pytest.fixture
+def rival_row(engine):
+    """Commit a campaign from another connection, as a second admin would.
+
+    Requested before `client`, so it is cleaned up after the test's own
+    transaction has rolled back and released its locks.
+    """
+    made = []
+
+    def commit(**values):
+        with engine.begin() as conn:
+            conn.execute(Project.__table__.insert().values(
+                tenant_id=TENANT, status=ProjectStatus.ACTIVE.value, **values
+            ))
+        made.append(values["code"])
+
+    yield commit
+    if made:
+        with engine.begin() as conn:
+            conn.execute(Project.__table__.delete().where(
+                Project.tenant_id == TENANT, Project.code.in_(made)
+            ))
+
+
 def auth(user):
     token, _ = create_access_token(user_id=user.id, role=str(user.role), tenant_id=TENANT)
     return {"Authorization": f"Bearer {token}"}
@@ -121,6 +145,24 @@ class TestCreate:
         r = client.post(
             "/projects", headers=auth(admin), json={"name": "Monsoon Retail Audit", "code": "  "}
         )
+        assert r.status_code == 201, r.text
+        assert r.json()["code"] == f"MRA-{YY}-2"
+
+    def test_losing_the_race_for_a_code_takes_the_next_one(
+        self, rival_row, client, people, monkeypatch
+    ):
+        # Another admin commits MRA-YY after this request's snapshot was taken
+        # (the auth lookup), so the code SELECT cannot see it but the INSERT
+        # hits the unique index.
+        admin, _ = people
+        real_canonical = locations.canonical
+
+        def commit_a_rival(*args, **kwargs):
+            rival_row(name="Monsoon Retail Audit", code=f"MRA-{YY}")
+            return real_canonical(*args, **kwargs)
+
+        monkeypatch.setattr(locations, "canonical", commit_a_rival)
+        r = client.post("/projects", headers=auth(admin), json={"name": "Monsoon Retail Audit"})
         assert r.status_code == 201, r.text
         assert r.json()["code"] == f"MRA-{YY}-2"
 
@@ -342,6 +384,12 @@ class TestList:
 
         staff = client.get("/projects", headers=auth(ravi)).json()["items"]
         assert archived.id not in {i["id"] for i in staff}
+        # Not even by asking for them.
+        r = client.get("/projects", headers=auth(ravi), params={"status": "ARCHIVED"})
+        assert r.status_code == 200
+        assert r.json()["items"] == [] and r.json()["total"] == 0
+        r = client.get("/projects", headers=auth(admin), params={"status": "ARCHIVED"})
+        assert [i["id"] for i in r.json()["items"]] == [archived.id]
 
     def test_search_finds_by_place(self, client, people, db):
         admin, _ = people

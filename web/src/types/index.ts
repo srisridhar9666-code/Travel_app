@@ -537,6 +537,8 @@ export interface QueueCounts {
   edited: number;
   /** High-priority requests still waiting on a decision. */
   high_priority: number;
+  high_priority_awaiting: number;
+  high_priority_partial: number;
 }
 
 /** Every request in one admin queue tab, read as the admin (so with cost), for
@@ -885,6 +887,8 @@ export interface AnalyticsBundle {
   by_state: PlaceSpend[];
   by_city: PlaceSpend[];
   deployment: DeploymentRow[];
+  /** Distinct people across `deployment`; its rows overlap. */
+  deployed_people: number;
   uncosted: UncostedRow[];
 }
 

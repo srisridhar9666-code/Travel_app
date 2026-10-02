@@ -172,4 +172,7 @@ class AnalyticsBundle(BaseModel):
     by_state: list[PlaceSpend]
     by_city: list[PlaceSpend]
     deployment: list[DeploymentRow]
+    #: Distinct people across `deployment`; its rows overlap for anyone
+    #: heading to more than one place.
+    deployed_people: int
     uncosted: list[UncostedRow]

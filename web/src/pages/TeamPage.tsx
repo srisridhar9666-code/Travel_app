@@ -200,6 +200,8 @@ export default function TeamPage() {
     queryClient.invalidateQueries({ queryKey: ['users'] });
     queryClient.invalidateQueries({ queryKey: ['retention'] });
     queryClient.invalidateQueries({ queryKey: ['departments'] });
+    // The report filters list people by name.
+    queryClient.invalidateQueries({ queryKey: ['filter-options'] });
   };
 
   const invite = useMutation({
@@ -253,6 +255,8 @@ export default function TeamPage() {
       setEditForm(null);
       setEditError(null);
       refresh();
+      // Their own row: the shell and My profile read the signed-in profile.
+      if (updated.id === me?.id) queryClient.invalidateQueries({ queryKey: ['me'] });
     },
     onError: (err) => setEditError(errorMessage(err, 'Could not save these changes.')),
   });

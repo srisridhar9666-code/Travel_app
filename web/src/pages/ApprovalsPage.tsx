@@ -493,9 +493,10 @@ export default function ApprovalsPage() {
     queryClient.invalidateQueries({ queryKey: ['queue-counts'] });
     queryClient.invalidateQueries({ queryKey: ['requests'] });
     queryClient.invalidateQueries({ queryKey: ['tickets'] });
-    // A decision moves the dashboard and the travel log too.
+    // A decision moves the dashboard, the travel log and cost analytics too.
     queryClient.invalidateQueries({ queryKey: ['insights'] });
     queryClient.invalidateQueries({ queryKey: ['travel-logs'] });
+    queryClient.invalidateQueries({ queryKey: ['analytics'] });
   };
 
   // Every row of the tab that matches the search and priority, fetched afresh,
@@ -632,9 +633,16 @@ export default function ApprovalsPage() {
               <button
                 type="button"
                 onClick={() => {
-                  // Straight to the work: high only, on a tab that still
-                  // waits on a decision (awaiting, unless already partly approved).
-                  if (tab !== 'SUBMITTED' && tab !== 'PARTIALLY_APPROVED') setTab('SUBMITTED');
+                  // Straight to the work: high only, on the waiting tab that
+                  // holds some - the current one if it does, else awaiting,
+                  // else partly approved - and with no search hiding it.
+                  const here =
+                    (tab === 'SUBMITTED' && countData.high_priority_awaiting > 0) ||
+                    (tab === 'PARTIALLY_APPROVED' && countData.high_priority_partial > 0);
+                  if (!here) {
+                    setTab(countData.high_priority_awaiting > 0 ? 'SUBMITTED' : 'PARTIALLY_APPROVED');
+                  }
+                  setSearch('');
                   setPriority('HIGH');
                 }}
                 className="flex w-full items-center gap-2.5 px-4 py-3 text-left"

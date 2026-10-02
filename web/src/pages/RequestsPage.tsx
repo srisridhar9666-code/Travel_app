@@ -183,6 +183,11 @@ export default function RequestsPage() {
     queryClient.invalidateQueries({ queryKey: ['requests'] });
     queryClient.invalidateQueries({ queryKey: ['revisions'] });
     queryClient.invalidateQueries({ queryKey: ['request'] });
+    // An admin's own request sits in the queue and the reports as well.
+    queryClient.invalidateQueries({ queryKey: ['queue'] });
+    queryClient.invalidateQueries({ queryKey: ['queue-counts'] });
+    queryClient.invalidateQueries({ queryKey: ['insights'] });
+    queryClient.invalidateQueries({ queryKey: ['travel-logs'] });
   };
 
   const submit = useMutation({

@@ -387,6 +387,8 @@ def change_my_email(
 
     old_email = user.email
     user.email = new_email
+    # A link already sent to the old mailbox must not outlive the move.
+    accounts.burn_outstanding_tokens(db, user)
     audit.record(
         db,
         action=AuditAction.UPDATE,

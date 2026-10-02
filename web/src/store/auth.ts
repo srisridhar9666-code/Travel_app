@@ -119,6 +119,19 @@ export function useHasHydrated(): boolean {
   return hydrated;
 }
 
+// Another tab in this browser changed the session - a password change swapped
+// the token, or a sign-in or sign-out. Adopt it here at once: otherwise this
+// tab's next request carries the old token, 401s, and its sign-out is written
+// back to the shared storage, signing out the tab that changed the password.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key !== null && event.key !== useAuth.persist.getOptions().name) return;
+    void Promise.resolve(useAuth.persist.rehydrate()).then(() => {
+      setAccessToken(useAuth.getState().token);
+    });
+  });
+}
+
 // Any 401 from anywhere drops the session, so a revoked or expired token cannot
 // leave the UI showing a signed-in shell it can no longer populate. Every query
 // in flight fails at once, so the toast has a fixed id and shows once; and a

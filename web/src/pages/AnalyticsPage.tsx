@@ -78,7 +78,8 @@ export default function AnalyticsPage() {
         .filter((c) => c.city?.toLowerCase() === f.city.toLowerCase() && (!f.state || c.state === f.state))
         .map(cityKey)[0]
     : undefined;
-  const deployed = data?.deployment.reduce((sum, row) => sum + row.people, 0) ?? 0;
+  // Distinct people: summing the rows counts someone headed to two states twice.
+  const deployed = data?.deployed_people ?? 0;
   const placeBar = (row: PlaceSpend, id: string | null) => ({
     label: row.label,
     value: Number(row.spent),
@@ -180,8 +181,9 @@ export default function AnalyticsPage() {
                         {row.trip_date && ` · ${row.trip_date}`}
                       </li>
                     ))}
-                    {data.uncosted.length > 5 && (
-                      <li className="text-2xs text-text-subtle">and {data.uncosted.length - 5} more</li>
+                    {/* The list is capped; the count on the overview is the true one. */}
+                    {data.overview.uncosted > 5 && (
+                      <li className="text-2xs text-text-subtle">and {data.overview.uncosted - 5} more</li>
                     )}
                   </ul>
                 </div>

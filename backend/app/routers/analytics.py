@@ -260,6 +260,7 @@ def bundle(actor: AdminUser, db: DbSession, filters: ReportFilters) -> Analytics
         by_state=[PlaceSpend(**r) for r in analytics.by_state(db, tenant, rows=rows)],
         by_city=[PlaceSpend(**r) for r in analytics.by_city(db, tenant, rows=rows)],
         deployment=[DeploymentRow(**r) for r in analytics.deployment(db, tenant, rows=rows)],
+        deployed_people=analytics.deployed_people(db, tenant, rows=rows),
         uncosted=[UncostedRow(**r) for r in analytics.uncosted_bookings(db, tenant, rows=rows)],
     )
 

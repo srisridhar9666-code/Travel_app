@@ -228,6 +228,23 @@ class TestTheQueue:
         body = res.json()
         assert body["high_priority"] == 2
         assert body["awaiting"] == 2 and body["partially_approved"] == 1
+        # Split by tab, so the banner can open the one the work is on.
+        assert body["high_priority_awaiting"] == 1
+        assert body["high_priority_partial"] == 1
+
+    def test_partly_approved_urgent_work_is_counted_on_its_own_tab(self, client, db, world):
+        project, admin, ravi, meena = world
+        partly = make_row(db, project, ravi, priority=RequestPriority.HIGH)
+        partly.travellers.append(RequestTraveller(user_id=meena.id,
+                                                  status=TravellerStatus.APPROVED))
+        db.commit()
+
+        body = client.get("/requests/queue/counts", headers=auth(admin)).json()
+        assert (body["high_priority"], body["high_priority_awaiting"],
+                body["high_priority_partial"]) == (1, 0, 1)
+        res = client.get("/requests", headers=auth(admin), params={
+            "mine": "false", "status": "PARTIALLY_APPROVED", "priority": "HIGH"})
+        assert [r["id"] for r in res.json()["items"]] == [partly.id]
 
 
 class TestTheExport:

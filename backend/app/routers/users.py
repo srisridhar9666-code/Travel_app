@@ -504,6 +504,10 @@ def update_user(
     for key, value in updates.items():
         setattr(user, key, value)
     after = {key: getattr(user, key) for key in updates}
+    if user.email != old_email:
+        # Invite and reset links went to the old address; left live, whoever
+        # holds that mailbox could still set the password. Reinvite re-sends.
+        accounts.burn_outstanding_tokens(db, user)
 
     changes = audit.diff(before, after)
     if changes:

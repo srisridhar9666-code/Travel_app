@@ -114,7 +114,7 @@ arjun_id, ARJUN, arjun_email = make_staff("Arjun Nair")
 check("two ground-staff accounts created", bool(ravi_id and arjun_id))
 
 r = c.post("/projects", headers=AH, json={
-    "name": "Phase 5 Ticketing", "code": f"P5-{STAMP[:6].upper()}", "location": "Maharashtra",
+    "name": "Phase 5 Ticketing", "code": f"P5-{STAMP[:6].upper()}", "state": "Maharashtra",
 })
 project_id = r.json()["id"]
 check("campaign created", r.status_code == 201, r.status_code)

@@ -83,7 +83,7 @@ ravi_id, RAVI, ravi_email = make_staff("Ravi Kumar")
 check("a ground-staff account is created", bool(ravi_id))
 
 r = c.post("/projects", headers=AH, json={
-    "name": "Phase 6 Notifications", "code": f"P6-{STAMP[:6].upper()}", "location": "Kerala",
+    "name": "Phase 6 Notifications", "code": f"P6-{STAMP[:6].upper()}", "state": "Kerala",
 })
 project_id = r.json()["id"]
 check("campaign created", r.status_code == 201, r.status_code)

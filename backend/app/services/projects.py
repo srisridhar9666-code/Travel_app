@@ -52,12 +52,19 @@ def code_base(name: str, year: int) -> str:
 
 
 def unique_code(
-    db: Session, tenant_id: str, base: str, *, exclude_id: int | None = None
+    db: Session,
+    tenant_id: str,
+    base: str,
+    *,
+    exclude_id: int | None = None,
+    also_taken: set[str] | frozenset[str] = frozenset(),
 ) -> str:
     """`base`, or the first of BASE-2, BASE-3 ... not already taken.
 
     Compared case-insensitively, as the unique index is. 'OTHER' always counts
-    as taken: the built-in campaign is found by it.
+    as taken: the built-in campaign is found by it. `also_taken` names codes a
+    caller just lost an insert race for: its transaction's snapshot cannot see
+    the winner's row, so the SELECT alone would hand the same code back.
     """
     query = select(Project.code).where(
         Project.tenant_id == tenant_id, Project.code.like(f"{base}%")
@@ -66,6 +73,7 @@ def unique_code(
         query = query.where(Project.id != exclude_id)
     taken = {code.upper() for code in db.execute(query).scalars()}
     taken.add(OTHER_PROJECT_CODE)
+    taken.update(code.upper() for code in also_taken)
 
     if base.upper() not in taken:
         return base
@@ -82,9 +90,12 @@ def generate_code(
     start_date: date | None,
     *,
     exclude_id: int | None = None,
+    also_taken: set[str] | frozenset[str] = frozenset(),
 ) -> str:
     year = start_date.year if start_date else clock.local_today().year
-    return unique_code(db, tenant_id, code_base(name, year), exclude_id=exclude_id)
+    return unique_code(
+        db, tenant_id, code_base(name, year), exclude_id=exclude_id, also_taken=also_taken
+    )
 
 
 def is_fallback(project: Project) -> bool:

@@ -336,6 +336,18 @@ def trend(
     }
 
 
+def _deployed_rows(db, tenant_id, filters, rows, today):
+    """Approved or booked travellers whose trip is today or later."""
+    today = today or clock.local_today()
+    for row in _rows(db, tenant_id, filters, rows):
+        if row.status not in SPENT_STATUSES | COMMITTED_STATUSES:
+            continue
+        trip_on = movement_date(row.request)
+        if trip_on is None or trip_on < today:
+            continue   # deployment is a forward-looking question
+        yield row
+
+
 def deployment(
     db: Session,
     tenant_id: str,
@@ -353,15 +365,8 @@ def deployment(
     old free-text location.
     """
     buckets: dict[str, dict] = {}
-    today = today or clock.local_today()
 
-    for row in _rows(db, tenant_id, filters, rows):
-        if row.status not in SPENT_STATUSES | COMMITTED_STATUSES:
-            continue
-        trip_on = movement_date(row.request)
-        if trip_on is None or trip_on < today:
-            continue   # deployment is a forward-looking question
-
+    for row in _deployed_rows(db, tenant_id, filters, rows, today):
         project = row.request.project
         where = (
             insights.destination(row.request)[0]
@@ -379,6 +384,19 @@ def deployment(
     ]
     out.sort(key=lambda b: (-b["people"], b["location"]))
     return out
+
+
+def deployed_people(
+    db: Session,
+    tenant_id: str,
+    filters: Filters | None = None,
+    *,
+    rows=None,
+    today: date | None = None,
+) -> int:
+    """How many distinct people `deployment` covers. Not the sum of its rows:
+    someone with trips to two states is in both."""
+    return len({row.user_id for row in _deployed_rows(db, tenant_id, filters, rows, today)})
 
 
 def uncosted_bookings(

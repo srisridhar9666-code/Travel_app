@@ -344,12 +344,12 @@ def queue_counts(actor: AdminUser, db: DbSession) -> QueueCounts:
     tally = {s: 0 for s in RequestStatus}
     conflicted = 0
     edited = 0
-    urgent = 0
+    urgent = {s: 0 for s in WAITING}
     for row in rows:
         row_status = svc.status_of(row)
         tally[row_status] += 1
         if row.priority is RequestPriority.HIGH and row_status in WAITING:
-            urgent += 1
+            urgent[row_status] += 1
         if svc.edit_count(db, row.id) > 0:
             edited += 1
         # Only requests still awaiting a decision are worth flagging as clashing:
@@ -369,7 +369,9 @@ def queue_counts(actor: AdminUser, db: DbSession) -> QueueCounts:
         expired=tally[RequestStatus.EXPIRED],
         with_conflicts=conflicted,
         edited=edited,
-        high_priority=urgent,
+        high_priority=sum(urgent.values()),
+        high_priority_awaiting=urgent[RequestStatus.SUBMITTED],
+        high_priority_partial=urgent[RequestStatus.PARTIALLY_APPROVED],
     )
 
 

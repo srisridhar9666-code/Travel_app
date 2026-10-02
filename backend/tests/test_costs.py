@@ -571,3 +571,16 @@ def test_deployment_falls_back_to_the_campaign_state(db, world):
     monsoon.state = "Goa"
     trip(db, monsoon, [ravi], cost="500.00", days_out=5)
     assert [r["location"] for r in analytics.deployment(db, TENANT)] == ["Goa"]
+
+
+def test_deployed_people_counts_someone_in_two_states_once(db, world):
+    monsoon, coastal, ravi, meera = world
+    place(trip(db, coastal, [ravi], cost="500.00", days_out=5), state="Karnataka")
+    place(trip(db, monsoon, [ravi], status=TravellerStatus.APPROVED, cost=None, days_out=8),
+          state="Maharashtra")
+    trip(db, monsoon, [meera], cost="500.00", days_out=-3)   # already back: not deployed
+    db.commit()
+
+    rows = analytics.deployment(db, TENANT)
+    assert sum(r["people"] for r in rows) == 2
+    assert analytics.deployed_people(db, TENANT) == 1

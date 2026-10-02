@@ -156,7 +156,7 @@ check("the directory shows all of them plus the bootstrap admin", r.json()["tota
 # An invite is single use - the most important property of the whole flow.
 r = c.post("/users", headers=ADMIN, json={
     "email": f"once.{STAMP}@designboxed.com", "full_name": "Single Use",
-    "role": "GROUND_STAFF", "gender": "OTHER",
+    "role": "GROUND_STAFF", "gender": "FEMALE",
 })
 once_token = r.json()["invite_url"].rsplit("=", 1)[-1]
 first = c.post("/auth/set-password", json={"token": once_token, "password": PASSWORD})
@@ -174,7 +174,7 @@ check(
 
 r = c.post("/projects", headers=ADMIN, json={
     "name": "Central India Retail Audit", "code": f"CIR-{STAMP.upper()}",
-    "client_name": "Acme Retail", "location": "Maharashtra",
+    "client_name": "Acme Retail", "state": "Maharashtra",
     "start_date": date.today().isoformat(),
     "end_date": (date.today() + timedelta(days=120)).isoformat(),
 })

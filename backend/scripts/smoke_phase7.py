@@ -77,7 +77,7 @@ check("three ground-staff accounts created", all([ravi_id, arjun_id, deepak_id])
 
 code = f"P7-{STAMP[:6].upper()}"
 r = c.post("/projects", headers=AH, json={
-    "name": "Phase 7 Cost Run", "code": code, "location": f"Madhya Pradesh {STAMP[:4].upper()}",
+    "name": "Phase 7 Cost Run", "code": code, "state": f"Madhya Pradesh {STAMP[:4].upper()}",
 })
 project_id = r.json()["id"]
 check("campaign created", r.status_code == 201, r.status_code)
@@ -271,7 +271,8 @@ check("the analytics bundle loads", r.status_code == 200, r.text[:200])
 bundle = r.json()
 check(
     "it arrives in one round trip",
-    {"overview", "by_campaign", "by_type", "by_month", "deployment", "uncosted"} <= set(bundle),
+    {"overview", "trend", "by_campaign", "by_type", "by_person", "by_state", "by_city",
+     "deployment", "deployed_people", "uncosted"} <= set(bundle),
     list(bundle),
 )
 
@@ -284,14 +285,27 @@ by_type = {row["request_type"]: row for row in bundle["by_type"]}
 check("every request type appears, even at zero", len(by_type) == 3, list(by_type))
 check("hotel spend is separated out", money(by_type["HOTEL"]["spent"]) >= money("4500.00"), by_type["HOTEL"])
 
-months = bundle["by_month"]
-check("monthly spend covers a fixed window", len(months) == 6, len(months))
-check("oldest month first", months[0]["month"] <= months[-1]["month"], [m["month"] for m in months])
+
+
+
+def month_start(offset):
+    """The first day of the month `offset` months from this one."""
+    total = date.today().year * 12 + date.today().month - 1 + offset
+    return date(total // 12, total % 12 + 1, 1)
+
+
+# Seven whole months, three back and three ahead: long enough to chart by month.
+window = {"since": str(month_start(-3)), "until": str(month_start(4) - timedelta(days=1))}
+trend = c.get("/analytics", headers=AH, params=window).json()
+months = trend["trend"]
+check("a long window is charted by month", trend["grain"] == "month", trend["grain"])
+check("monthly spend covers the chosen window", len(months) == 7, len(months))
+check("oldest month first", months[0]["period"] <= months[-1]["period"], [m["period"] for m in months])
 this_month = f"{date.today().year:04d}-{date.today().month:02d}"
 check(
-    "the window is centred on today, so booked future travel is visible",
-    this_month in [m["month"] for m in months] and months[-1]["month"] > this_month,
-    [m["month"] for m in months],
+    "the window runs past today, so booked future travel is visible",
+    this_month in [m["period"] for m in months] and months[-1]["period"] > this_month,
+    [m["period"] for m in months],
 )
 check(
     "quiet months appear as zero rather than as gaps",

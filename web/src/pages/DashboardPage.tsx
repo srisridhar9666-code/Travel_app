@@ -104,13 +104,16 @@ function AdminDashboard() {
   const data = insights.data;
   const k = data?.kpis;
   const awaiting = data?.awaiting;
-  // The tile counts this slice; the queue's own total is every date. Say both
-  // when they differ, so "0" in a past window is not read as "nothing waiting".
+  // The tile counts this slice; the queue's own total is every campaign, person
+  // and date. Say both when they differ, so "0" in a past window is not read as
+  // "nothing waiting" - and only blame the dates when nothing else is filtered.
   const awaitingHint = awaiting
     ? [
         awaiting.with_conflicts > 0 && `${awaiting.with_conflicts} with a calendar clash`,
         awaiting.partly_approved > 0 && `+${awaiting.partly_approved} partly approved`,
-        queue.data && queue.data.awaiting !== awaiting.requests && `${queue.data.awaiting} across all dates`,
+        queue.data &&
+          queue.data.awaiting !== awaiting.requests &&
+          `${queue.data.awaiting} ${f.sliced ? 'in the whole queue' : 'across all dates'}`,
       ]
         .filter(Boolean)
         .join(' · ') || 'In this view'
@@ -135,7 +138,11 @@ function AdminDashboard() {
       />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Link to="/approvals" className="rounded-xl focus-visible:outline-offset-4">
+        <Link
+          to="/approvals"
+          title="Open the whole approvals queue"
+          className="rounded-xl focus-visible:outline-offset-4"
+        >
           <StatTile
             label="Awaiting a decision"
             value={awaiting ? String(awaiting.requests) : '—'}

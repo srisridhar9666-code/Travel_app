@@ -22,6 +22,7 @@ import {
   REQUEST_TYPE_LABELS,
   TRAVEL_MODE_LABELS,
   type CoStayMatch,
+  type Project,
   type RequestConflict,
   type RequestPriority,
   type RequestType,
@@ -272,6 +273,21 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
   }, [projects.data, editing, form.project_id]);
 
   const otherProject = (projects.data?.items ?? []).find(isFallbackCampaign);
+  // Names are not unique, so two campaigns that would read the same in the
+  // picker get their code added to tell them apart.
+  const campaignLabels = useMemo(() => {
+    const list = (projects.data?.items ?? []).filter((project) => !isFallbackCampaign(project));
+    const label = (project: Project) =>
+      project.state ? `${project.name} · ${project.state}` : project.name;
+    const seen = new Map<string, number>();
+    for (const project of list) seen.set(label(project), (seen.get(label(project)) ?? 0) + 1);
+    return new Map(
+      list.map((project) => [
+        project.id,
+        (seen.get(label(project)) ?? 0) > 1 ? `${label(project)} (${project.code})` : label(project),
+      ]),
+    );
+  }, [projects.data]);
   const isOther = Boolean(otherProject && form.project_id === String(otherProject.id));
 
   const payload = useMemo(() => toPayload(form, false), [form]);
@@ -415,7 +431,7 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
               .map((project) => (
                 // The name leads: staff should never need to decode a code.
                 <option key={project.id} value={project.id}>
-                  {project.state ? `${project.name} · ${project.state}` : project.name}
+                  {campaignLabels.get(project.id)}
                 </option>
               ))}
             {otherProject && (

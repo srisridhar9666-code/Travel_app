@@ -149,9 +149,9 @@ def list_projects(
         )
     if project_status is not None:
         filters.append(Project.status == project_status)
-    elif not user.is_admin:
-        # Ground staff never see archived campaigns; an archived campaign is one
-        # they must not be raising new requests against.
+    if not user.is_admin:
+        # Ground staff never see archived campaigns, even by asking for them;
+        # an archived campaign is one they must not be raising requests against.
         filters.append(Project.status != ProjectStatus.ARCHIVED)
 
     total = db.execute(select(func.count()).select_from(Project).where(*filters)).scalar_one()
@@ -187,12 +187,15 @@ def create_project(
     fields = payload.model_dump(exclude={"code", "state", "city"})
 
     project: Project | None = None
+    lost: set[str] = set()  # codes another request committed first
     for _ in range(_CODE_ATTEMPTS):
         candidate = Project(
             tenant_id=actor.tenant_id,
             created_by_id=actor.id,
             code=payload.code
-            or generate_code(db, actor.tenant_id, payload.name, payload.start_date),
+            or generate_code(
+                db, actor.tenant_id, payload.name, payload.start_date, also_taken=lost
+            ),
             state=state,
             city=city,
             **fields,
@@ -208,6 +211,7 @@ def create_project(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Code {payload.code} is already used by another campaign.",
                 ) from None
+            lost.add(candidate.code)
             continue
         project = candidate
         break

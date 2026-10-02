@@ -396,3 +396,6 @@ class QueueCounts(BaseModel):
     #: HIGH-priority requests still waiting on someone (awaiting or partly
     #: approved). The queue's banner, so urgent work is not lost in a long tab.
     high_priority: int = 0
+    #: The same, split by tab, so the banner opens the one the work is on.
+    high_priority_awaiting: int = 0
+    high_priority_partial: int = 0

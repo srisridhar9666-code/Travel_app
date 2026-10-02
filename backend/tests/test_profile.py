@@ -152,6 +152,20 @@ class TestEmail:
         assert [m["to"] for m in notices] == ["ravi@designboxed.com"]
         assert "ravi.new@designboxed.com" in notices[0]["body"]
 
+    def test_a_reset_link_sent_to_the_old_address_dies(self, client, db, people):
+        _, _, ravi = people
+        raw, _ = _issue_token(db, ravi, TokenPurpose.PASSWORD_RESET, valid_hours=2)
+        db.commit()
+        r = client.post("/auth/me/email", headers=auth(ravi), json={
+            "new_email": "ravi.new@designboxed.com", "current_password": PASSWORD,
+        })
+        assert r.status_code == 200
+        assert client.get(f"/auth/token/{raw}").status_code == 404
+        r = client.post("/auth/set-password", json={"token": raw, "password": "Brand-new-sky-77"})
+        assert r.status_code != 200
+        db.refresh(ravi)
+        assert verify_password(PASSWORD, ravi.password_hash)
+
     def test_an_address_in_use_is_409(self, client, people):
         _, admin, ravi = people
         r = client.post("/auth/me/email", headers=auth(ravi), json={
@@ -242,6 +256,31 @@ class TestAdminEditsEmail:
         notices = [m for m in outbox.messages if "sign-in email was changed" in m["subject"]]
         assert [m["to"] for m in notices] == ["ravi@designboxed.com"]
         assert "Changed by Priya Shah" in notices[0]["body"]
+
+    def test_an_invite_sent_to_the_old_address_dies(self, client, db, people):
+        _, admin, _ = people
+        typo = User(tenant_id=TENANT, email="typo@gmial.com", full_name="New Person",
+                    role=Role.ADMIN, gender=Gender.FEMALE)
+        db.add(typo)
+        db.commit()
+        raw, _ = _issue_token(db, typo, TokenPurpose.INVITE, valid_hours=72)
+        db.commit()
+        r = client.patch(f"/users/{typo.id}", headers=auth(admin),
+                         json={"email": "new.person@designboxed.com"})
+        assert r.status_code == 200
+        assert client.get(f"/auth/token/{raw}").status_code == 404
+        r = client.post("/auth/set-password", json={"token": raw, "password": "Brand-new-sky-77"})
+        assert r.status_code != 200
+        db.refresh(typo)
+        assert typo.password_hash is None
+
+    def test_a_name_edit_leaves_links_alone(self, client, db, people):
+        _, admin, ravi = people
+        raw, _ = _issue_token(db, ravi, TokenPurpose.PASSWORD_RESET, valid_hours=2)
+        db.commit()
+        r = client.patch(f"/users/{ravi.id}", headers=auth(admin), json={"full_name": "Ravi K"})
+        assert r.status_code == 200
+        assert client.get(f"/auth/token/{raw}").status_code == 200
 
     def test_a_duplicate_is_409(self, client, people):
         boss, _, ravi = people

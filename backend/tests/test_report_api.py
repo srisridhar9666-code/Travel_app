@@ -148,6 +148,7 @@ class TestCostAnalytics:
         assert [s["label"] for s in body["by_state"]] == ["Tamil Nadu"]
         assert [c["label"] for c in body["by_city"]] == ["Chennai"]
         assert "by_month" not in body
+        assert body["deployed_people"] == 0   # August is in the past
 
     def test_the_old_dropdown_params_are_ignored(self, client, people, august):
         admin, _ = people
