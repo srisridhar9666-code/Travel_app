@@ -112,9 +112,5 @@ class TicketDocument(Base, TenantMixin, TimestampMixin):
     uploaded_by = relationship("User", foreign_keys=[uploaded_by_id], lazy="joined")
     confirmed_by = relationship("User", foreign_keys=[confirmed_by_id], lazy="joined")
 
-    @property
-    def awaiting_review(self) -> bool:
-        return self.status is TicketStatus.EXTRACTED
-
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<TicketDocument {self.id} {self.status}>"

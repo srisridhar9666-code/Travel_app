@@ -26,6 +26,7 @@ import {
   exportAudit,
   fetchAudit,
   fetchAuditSummary,
+  fetchHealth,
   fetchLedgerGrants,
   verifyAuditChain,
 } from '@/lib/api';
@@ -142,6 +143,9 @@ export default function AuditPage() {
   // detectable, the database grant makes it impossible. Both are shown, because
   // either alone leaves a gap.
   const grants = useQuery({ queryKey: ['audit', 'grants'], queryFn: fetchLedgerGrants });
+  // The same probe the shell runs; only its environment is read here.
+  const health = useQuery({ queryKey: ['health'], queryFn: fetchHealth, staleTime: 5 * 60 * 1000 });
+  const production = health.data?.environment === 'production';
   const summary = useQuery({ queryKey: ['audit', 'summary'], queryFn: fetchAuditSummary });
 
   const download = useMutation({
@@ -225,10 +229,17 @@ export default function AuditPage() {
             </p>
             <p className="mt-0.5 text-xs text-text-muted">{grants.data.detail}</p>
             {!grants.data.append_only && (
-              <p className="mt-1 text-2xs text-text-subtle">
-                The hash chain still makes tampering <em>detectable</em>. The grant makes it
-                impossible — see addendum B9.
-              </p>
+              <>
+                <p className="mt-1.5 text-xs text-text-muted">
+                  {production
+                    ? 'Before relying on this log, run scripts/grant_append_only.py and point DATABASE_URL at the restricted database user it creates.'
+                    : 'Expected on a development database: the API signs in to MySQL as root, which can change any table. Nothing is wrong and nothing has been changed. Before going live, run scripts/grant_append_only.py and point DATABASE_URL at the restricted user it creates (README, "Before deploying").'}
+                </p>
+                <p className="mt-1 text-2xs text-text-subtle">
+                  The hash chain still makes tampering <em>detectable</em>. The grant makes it
+                  impossible — see addendum B9.
+                </p>
+              </>
             )}
           </div>
         </div>

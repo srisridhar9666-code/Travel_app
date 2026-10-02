@@ -36,6 +36,7 @@ from app.core.enums import (
     RequestType,
     Role,
     RoomSharingChoice,
+    TicketStatus,
     TravellerStatus,
     derive_request_status,
     is_editable,
@@ -43,6 +44,7 @@ from app.core.enums import (
 from app.models.base import naive_utcnow
 from app.models.project import Project
 from app.models.request import RequestRevision, RequestTraveller, TravelRequest
+from app.models.ticket import TicketDocument
 from app.models.user import User
 from app.schemas.request import (
     EDITABLE_FIELDS,
@@ -349,6 +351,30 @@ def check_costay(
     return [CoStayMatchRead(**vars(m)) for m in matches]
 
 
+def ticket_per_traveller(db: Session, request_id: int) -> dict[int, int]:
+    """The ticket document to show beside each traveller on a request.
+
+    The confirmed one when there is one - that is what was booked - else the
+    newest still being reviewed. A discarded ticket has no file left to show.
+    """
+    rows = db.execute(
+        select(TicketDocument.id, TicketDocument.traveller_id, TicketDocument.status)
+        .where(
+            TicketDocument.request_id == request_id,
+            TicketDocument.status != TicketStatus.DISCARDED,
+            TicketDocument.file_path.is_not(None),
+        )
+        .order_by(TicketDocument.id.desc())
+    ).all()
+    chosen: dict[int, tuple[bool, int]] = {}
+    for ticket_id, traveller_id, ticket_status in rows:
+        confirmed = ticket_status is TicketStatus.CONFIRMED
+        held = chosen.get(traveller_id)
+        if held is None or (confirmed and not held[0]):
+            chosen[traveller_id] = (confirmed, ticket_id)
+    return {traveller_id: ticket_id for traveller_id, (_, ticket_id) in chosen.items()}
+
+
 def to_read(
     db: Session,
     request: TravelRequest,
@@ -357,8 +383,12 @@ def to_read(
     viewer: User | None = None,
     with_conflicts: bool = False,
     with_costay: bool = True,
+    with_tickets: bool = False,
 ) -> RequestRead:
     show_cost = viewer is not None and viewer.is_admin
+    # Only the admin queue asks: ticket files are admin-only to fetch, and the
+    # export and single reads have no use for the extra query per request.
+    tickets = ticket_per_traveller(db, request.id) if with_tickets else {}
     travellers = [
         TravellerRead(
             id=t.id,
@@ -376,6 +406,7 @@ def to_read(
             decided_at=t.decided_at,
             decision_reason=t.decision_reason,
             booking_reference=t.booking_reference,
+            ticket_id=tickets.get(t.id),
             # Cost is admin-only. Ground staff seeing what a colleague's flight
             # cost is a personnel problem nobody asked for, and nothing in
             # section 6 needs it.

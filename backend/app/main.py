@@ -6,6 +6,7 @@ health probes, and the Phase 1 routers.
 """
 import logging
 from contextlib import asynccontextmanager
+from functools import cache
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,21 +40,38 @@ settings = get_settings()
 configure_logging(json_output=settings.json_logs, level=settings.log_level)
 logger = logging.getLogger("travel_ops")
 
+#: Bump with any change the web app depends on - a new route, or a new field it
+#: reads - and bump API_VERSION in web/src/lib/api.ts to match. The web app
+#: compares the two through /health and tells an admin when this process is
+#: older than the page calling it. The usual cause is an API that was not
+#: restarted after an update, which otherwise shows up as "Not Found", "Method
+#: Not Allowed" and pages with missing numbers.
+API_VERSION = "0.9.0"
+
+
+@cache
+def _wanted_heads() -> frozenset[str]:
+    """The migration heads this code expects. Read from disk once: the files
+    cannot change under a running process without a restart mattering anyway."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    config = Config()
+    config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    return frozenset(ScriptDirectory.from_config(config).get_heads())
+
 
 def schema_behind() -> str | None:
     """Say so when the database has not been migrated to match this code.
 
     A new column in a model makes every query on that table fail until
     `alembic upgrade head` has run, and the error a person sees ("Unknown
-    column") does not say what to do. This does, once, at start-up.
+    column") does not say what to do. This does: in the log at start-up, and
+    to admins in the web app through /health.
     """
-    from alembic.config import Config
     from alembic.runtime.migration import MigrationContext
-    from alembic.script import ScriptDirectory
 
-    config = Config()
-    config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
-    wanted = set(ScriptDirectory.from_config(config).get_heads())
+    wanted = _wanted_heads()
     with engine.connect() as connection:
         current = set(MigrationContext.configure(connection).get_current_heads())
     if current == wanted:
@@ -127,7 +145,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.8.0",
+    version=API_VERSION,
     description="Field logistics, travel requests and accommodation for ground staff.",
     lifespan=lifespan,
 )
@@ -163,7 +181,8 @@ app.include_router(internal_router.router)
 
 @app.get("/health", tags=["health"])
 def health() -> dict:
-    """Liveness plus a real database round-trip."""
+    """Liveness plus a real database round-trip, the code's version, and
+    whether the database still needs `alembic upgrade head`."""
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -172,11 +191,20 @@ def health() -> dict:
         logger.exception("Database health check failed")
         database = f"error: {type(exc).__name__}"
 
+    migrations_pending = False
+    if database == "ok":
+        try:
+            migrations_pending = schema_behind() is not None
+        except Exception:
+            logger.exception("Could not read the database's migration version")
+
     return {
         "status": "ok" if database == "ok" else "degraded",
         "app": settings.app_name,
+        "version": API_VERSION,
         "environment": settings.environment,
         "database": database,
+        "migrations_pending": migrations_pending,
     }
 
 

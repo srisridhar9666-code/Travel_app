@@ -13,7 +13,6 @@ them the same would make "did this person get told?" unanswerable.
 import smtplib
 
 import pytest
-from sqlalchemy import create_engine
 
 from app.config import Settings
 from app.core.enums import NotificationChannel, NotificationStatus, Role

@@ -21,6 +21,7 @@ from app.database import get_db
 from app.main import app
 from app.models.audit import AuditLog
 from app.models.base import naive_utcnow
+from app.models.department import Department
 from app.models.user import User
 from app.routers.auth import _issue_token
 
@@ -300,6 +301,41 @@ class TestAdminEditsEmail:
         assert r.status_code == 400
         r = client.patch(f"/users/{boss.id}", headers=auth(boss), json={"phone": "9876543210"})
         assert r.status_code == 200
+
+
+class TestAdminsOwnRecord:
+    """My profile saves an admin's own department, gender and base through
+    PATCH /users/{their id}: they are the people who set those for everyone."""
+
+    @pytest.mark.parametrize("who", [0, 1])  # system admin, admin
+    def test_an_admin_sets_their_own_department_gender_and_base(self, client, db, people, who):
+        me = people[who]
+        dept = Department(tenant_id=TENANT, name="Field Operations")
+        db.add(dept)
+        db.commit()
+
+        r = client.patch(f"/users/{me.id}", headers=auth(me), json={
+            "department_id": dept.id, "gender": "FEMALE", "designation": "MANAGER",
+            "base_state": "Telangana", "base_location": "Hyderabad", "employee_code": "DB-001",
+        })
+        assert r.status_code == 200, r.text
+
+        r = client.get("/auth/me", headers=auth(me))
+        body = r.json()
+        assert body["department_name"] == "Field Operations"
+        assert (body["gender"], body["designation"]) == ("FEMALE", "MANAGER")
+        assert (body["base_state"], body["base_location"]) == ("Telangana", "Hyderabad")
+        assert body["employee_code"] == "DB-001"
+
+        [row] = audit_rows(db, me, AuditAction.UPDATE)
+        assert row.actor_user_id == me.id and "department_id" in row.changes
+
+    def test_ground_staff_cannot_reach_their_own_record_that_way(self, client, db, people):
+        _, _, ravi = people
+        r = client.patch(f"/users/{ravi.id}", headers=auth(ravi), json={"gender": "FEMALE"})
+        assert r.status_code == 403
+        db.refresh(ravi)
+        assert ravi.gender is Gender.MALE
 
 
 class TestResetLink:

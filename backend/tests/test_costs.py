@@ -10,7 +10,6 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine
 
 from app.core import clock
 from app.core.enums import ProjectStatus, RequestType, Role, TravellerStatus
@@ -107,11 +106,6 @@ def test_a_missing_amount_is_an_error_not_a_zero():
     how an unrecorded fare becomes a free trip in a report."""
     with pytest.raises(ValueError):
         costs.to_money(None)
-
-
-def test_totalling_skips_missing_values_without_inventing_zeroes():
-    assert costs.total_of(["10.50", None, "4.50"]) == Decimal("15.00")
-    assert costs.total_of([]) == Decimal("0.00")
 
 
 # ---------------------------------------------------------------------------

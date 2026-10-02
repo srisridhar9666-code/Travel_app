@@ -6,8 +6,6 @@ exit. Suspending someone for a fortnight must never start a deletion clock.
 """
 from datetime import date, timedelta
 
-import pytest
-from sqlalchemy import create_engine
 
 from app.core import clock
 from app.core import pii

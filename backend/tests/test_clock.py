@@ -12,7 +12,8 @@ from zoneinfo import ZoneInfo
 
 from app.core import clock
 from app.core.logging import LocalTimeFormatter
-from app.schemas.request import NotificationRead, RequestBody
+from app.schemas.request import RequestBody
+from app.schemas.ticket import NotificationRow
 from app.schemas.user import AuditRead
 
 
@@ -74,9 +75,10 @@ class TestInstantsAreMarkedUtc:
         assert clock.to_utc_naive(ist) == datetime(2026, 10, 1, 19, 0)
 
     def test_response_schemas_send_recorded_times_as_utc(self):
-        notice = NotificationRead(
-            id=1, kind="TEST", title="t", body="b", request_id=None,
-            created_at=datetime(2026, 10, 1, 12, 0, 0, 123456), read_at=None,
+        notice = NotificationRow(
+            id=1, user_id=1, kind="TEST", category="BOOKINGS", title="t", body="b",
+            channel="IN_APP", status="SENT", attempts=0,
+            created_at=datetime(2026, 10, 1, 12, 0, 0, 123456),
         )
         assert '"created_at":"2026-10-01T12:00:00.123456Z"' in notice.model_dump_json()
 
@@ -93,9 +95,10 @@ class TestInstantsAreMarkedUtc:
     def test_python_side_values_stay_datetimes(self):
         """Only the JSON is a string; code that reads the model still gets a
         datetime to compare with."""
-        notice = NotificationRead(
-            id=1, kind="TEST", title="t", body="b", request_id=None,
-            created_at=datetime(2026, 10, 1, 12, 0), read_at=None,
+        notice = NotificationRow(
+            id=1, user_id=1, kind="TEST", category="BOOKINGS", title="t", body="b",
+            channel="IN_APP", status="SENT", attempts=0,
+            created_at=datetime(2026, 10, 1, 12, 0),
         )
         assert isinstance(notice.model_dump()["created_at"], datetime)
 

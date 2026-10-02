@@ -76,15 +76,6 @@ def split_evenly(total, shares: int) -> list[Decimal]:
     return [base + (PAISA if i < extra_paise else Decimal("0.00")) for i in range(shares)]
 
 
-def total_of(amounts) -> Decimal:
-    """Sum a column of money without leaving Decimal."""
-    out = Decimal("0.00")
-    for amount in amounts:
-        if amount is not None:
-            out += to_money(amount)
-    return out
-
-
 # Currency *formatting* deliberately lives on the frontend, not here.
 # `Intl.NumberFormat('en-IN')` already does Indian digit grouping - 12,34,567.89
 # rather than 1,234,567.89 - and keeping the rupee symbol out of Python avoids a

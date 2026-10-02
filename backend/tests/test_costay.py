@@ -9,7 +9,6 @@ anything that matters.
 from datetime import date
 
 import pytest
-from sqlalchemy import create_engine
 
 from app.core.enums import Designation, Gender, RequestType, Role, TravellerStatus
 from app.models.project import Project

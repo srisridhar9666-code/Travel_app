@@ -18,6 +18,7 @@ from app.core.enums import (
     RequestPriority,
     RequestType,
     Role,
+    TicketStatus,
     TravellerStatus,
     UserStatus,
 )
@@ -27,6 +28,7 @@ from app.main import app
 from app.models.base import naive_utcnow
 from app.models.project import Project
 from app.models.request import RequestRevision, RequestTraveller, TravelRequest
+from app.models.ticket import TicketDocument
 from app.models.user import User
 from app.services import notifications
 from app.services import requests as svc
@@ -245,6 +247,81 @@ class TestTheQueue:
         res = client.get("/requests", headers=auth(admin), params={
             "mine": "false", "status": "PARTIALLY_APPROVED", "priority": "HIGH"})
         assert [r["id"] for r in res.json()["items"]] == [partly.id]
+
+    def test_tab_counts_follow_the_priority_and_search(self, client, db, world):
+        """The tab labels must agree with the filtered list under them."""
+        project, admin, ravi, _ = world
+        make_row(db, project, ravi, priority=RequestPriority.HIGH)
+        make_row(db, project, ravi, priority=RequestPriority.LOW)
+        make_row(db, project, ravi, priority=RequestPriority.HIGH,
+                 traveller_status=TravellerStatus.BOOKED)
+        make_row(db, project, ravi, priority=RequestPriority.LOW,
+                 traveller_status=TravellerStatus.BOOKED)
+        make_row(db, project, ravi, priority=RequestPriority.LOW,
+                 traveller_status=TravellerStatus.BOOKED)
+        db.commit()
+
+        def counts(**params):
+            res = client.get("/requests/queue/counts", params=params, headers=auth(admin))
+            assert res.status_code == 200, res.text
+            return res.json()
+
+        everything = counts()
+        assert (everything["awaiting"], everything["booked"]) == (2, 3)
+        high = counts(priority="HIGH")
+        assert (high["awaiting"], high["booked"]) == (1, 1)
+        low = counts(priority="LOW")
+        assert (low["awaiting"], low["booked"]) == (1, 2)
+        assert counts(search="Pune")["booked"] == 3
+        assert counts(search="Nowhere-at-all")["booked"] == 0
+
+        # And each tab's count is the number of rows its list returns.
+        for tab, key in (("SUBMITTED", "awaiting"), ("BOOKED", "booked")):
+            listed = client.get("/requests", headers=auth(admin), params={
+                "mine": "false", "status": tab, "priority": "LOW"}).json()["total"]
+            assert listed == low[key]
+
+
+class TestTicketOnTheRow:
+    """The Booked tab opens a traveller's uploaded ticket straight from their
+    row, so the list names which ticket that is."""
+
+    def ticket(self, db, row, status, path="tickets/x.pdf"):
+        ticket = TicketDocument(tenant_id=TENANT, request_id=row.id,
+                                traveller_id=row.travellers[0].id, status=status,
+                                file_path=path, file_name="x.pdf")
+        db.add(ticket)
+        db.flush()
+        return ticket
+
+    def test_the_confirmed_ticket_wins_and_staff_never_see_one(self, client, db, world):
+        project, admin, ravi, _ = world
+        row = make_row(db, project, ravi, traveller_status=TravellerStatus.BOOKED)
+        confirmed = self.ticket(db, row, TicketStatus.CONFIRMED)
+        self.ticket(db, row, TicketStatus.EXTRACTED)            # newer, still in review
+        self.ticket(db, row, TicketStatus.DISCARDED, path=None)  # file deleted
+        bare = make_row(db, project, ravi, traveller_status=TravellerStatus.BOOKED)
+        db.commit()
+
+        listed = client.get("/requests", headers=auth(admin), params={
+            "mine": "false", "status": "BOOKED"}).json()["items"]
+        by_id = {r["id"]: r["travellers"][0]["ticket_id"] for r in listed}
+        assert by_id == {row.id: confirmed.id, bare.id: None}
+
+        mine = client.get("/requests", headers=auth(ravi)).json()["items"]
+        assert all(r["travellers"][0]["ticket_id"] is None for r in mine)
+
+    def test_a_ticket_under_review_is_shown_when_none_is_confirmed(self, client, db, world):
+        project, admin, ravi, _ = world
+        row = make_row(db, project, ravi, traveller_status=TravellerStatus.APPROVED)
+        older = self.ticket(db, row, TicketStatus.FAILED)
+        newer = self.ticket(db, row, TicketStatus.EXTRACTED)
+        db.commit()
+        assert older.id < newer.id
+
+        [item] = client.get("/requests", headers=auth(admin), params={
+            "mine": "false", "status": "APPROVED"}).json()["items"]
+        assert item["travellers"][0]["ticket_id"] == newer.id
 
 
 class TestTheExport:

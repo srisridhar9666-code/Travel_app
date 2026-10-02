@@ -1,11 +1,47 @@
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 
 import { setAccessToken, setUnauthorizedHandler } from '@/lib/api';
 import { useTheme } from '@/store/theme';
 import type { LoginResponse, Role, UserProfile } from '@/types';
+
+const SESSION_KEY = 'travel-ops-session';
+
+/**
+ * Each tab keeps its own sign-in, so two tabs can be two different people - an
+ * admin in one and a field account in the other. They used to share one, and
+ * signing in as someone else in a second tab quietly turned the first tab into
+ * that person too.
+ *
+ * sessionStorage holds this tab's session and survives a reload. localStorage
+ * holds the last one written in any tab, only so that a brand-new tab starts
+ * signed in rather than at the login screen. Tabs on the same session are kept
+ * in step by `channel` below.
+ */
+const tabStorage: StateStorage = {
+  getItem: (name) => sessionStorage.getItem(name) ?? localStorage.getItem(name),
+  setItem: (name, value) => {
+    sessionStorage.setItem(name, value);
+    localStorage.setItem(name, value);
+  },
+  removeItem: (name) => {
+    sessionStorage.removeItem(name);
+    localStorage.removeItem(name);
+  },
+};
+
+/** What one tab tells the others about a session it shares with them. */
+type SessionMessage =
+  /** That token was signed out (or rejected); every tab holding it ends too. */
+  | { kind: 'signed-out'; token: string }
+  /** A password change replaced this person's token; their tabs adopt it, or
+   *  their next request would 401 on the old one. */
+  | { kind: 'token'; userId: number; token: string; expiresAt: string };
+
+const channel =
+  typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(SESSION_KEY);
 
 interface AuthState {
   token: string | null;
@@ -53,13 +89,19 @@ export const useAuth = create<AuthState>()(
       },
 
       signOut(notice) {
+        const ended = get().token;
         setAccessToken(null);
         set({ token: null, expiresAt: null, user: null, notice: notice ?? null });
+        if (ended) channel?.postMessage({ kind: 'signed-out', token: ended } satisfies SessionMessage);
       },
 
       replaceToken(token, expiresAt) {
         setAccessToken(token);
         set({ token, expiresAt });
+        const userId = get().user?.id;
+        if (userId !== undefined) {
+          channel?.postMessage({ kind: 'token', userId, token, expiresAt } satisfies SessionMessage);
+        }
       },
 
       clearNotice() {
@@ -85,7 +127,8 @@ export const useAuth = create<AuthState>()(
       },
     }),
     {
-      name: 'travel-ops-session',
+      name: SESSION_KEY,
+      storage: createJSONStorage(() => tabStorage),
       partialize: (state) =>
         ({ token: state.token, expiresAt: state.expiresAt, user: state.user }) as AuthState,
       // Rehydration is the moment the axios client learns about the token.
@@ -119,18 +162,24 @@ export function useHasHydrated(): boolean {
   return hydrated;
 }
 
-// Another tab in this browser changed the session - a password change swapped
-// the token, or a sign-in or sign-out. Adopt it here at once: otherwise this
-// tab's next request carries the old token, 401s, and its sign-out is written
-// back to the shared storage, signing out the tab that changed the password.
-if (typeof window !== 'undefined') {
-  window.addEventListener('storage', (event) => {
-    if (event.key !== null && event.key !== useAuth.persist.getOptions().name) return;
-    void Promise.resolve(useAuth.persist.rehydrate()).then(() => {
-      setAccessToken(useAuth.getState().token);
+// Another tab changed a session this tab may share. A sign-in elsewhere is that
+// tab's own business and changes nothing here.
+channel?.addEventListener('message', (event: MessageEvent<SessionMessage>) => {
+  const message = event.data;
+  const state = useAuth.getState();
+  if (!state.token) return;
+  if (message.kind === 'signed-out' && message.token === state.token) {
+    // Set directly rather than through signOut(), which would announce it again.
+    setAccessToken(null);
+    useAuth.setState({ token: null, expiresAt: null, user: null, notice: null });
+    toast('You signed out in another tab. Sign in again here - each tab can use its own account.', {
+      id: 'session-ended',
     });
-  });
-}
+  } else if (message.kind === 'token' && message.userId === state.user?.id) {
+    setAccessToken(message.token);
+    useAuth.setState({ token: message.token, expiresAt: message.expiresAt });
+  }
+});
 
 // Any 401 from anywhere drops the session, so a revoked or expired token cannot
 // leave the UI showing a signed-in shell it can no longer populate. Every query

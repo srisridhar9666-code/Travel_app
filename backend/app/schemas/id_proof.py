@@ -9,29 +9,10 @@ from __future__ import annotations
 
 from datetime import date
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.enums import IdProofType
 from app.schemas.common import UTCInstant
-
-
-class IdProofCreate(BaseModel):
-    proof_type: IdProofType
-    number: str = Field(min_length=4, max_length=40)
-    label: str | None = Field(default=None, max_length=80)
-    issued_on: date | None = None
-    expires_on: date | None = None
-
-    @field_validator("number")
-    @classmethod
-    def _tidy(cls, value: str) -> str:
-        return value.strip()
-
-    @model_validator(mode="after")
-    def _dates_make_sense(self):
-        if self.issued_on and self.expires_on and self.expires_on < self.issued_on:
-            raise ValueError("Expiry date cannot be before the issue date.")
-        return self
 
 
 class IdProofUpdate(BaseModel):

@@ -14,7 +14,6 @@ blocked.
 from datetime import date, datetime
 
 import pytest
-from sqlalchemy import create_engine
 
 from app.core.enums import RequestType, Role, TravellerStatus
 from app.models.project import Project

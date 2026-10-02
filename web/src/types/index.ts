@@ -348,6 +348,9 @@ export interface RequestTraveller {
   decision_reason: string | null;
   /** PNR, ticket number or hotel confirmation. */
   booking_reference: string | null;
+  /** On the admin queue list only: the uploaded ticket to open from this row - the
+   *  confirmed one, else the newest still under review. */
+  ticket_id?: number | null;
 
   /** This person's share of the cost. Admin-only — null for ground staff
    *  however they reach the request. Amounts are strings; see the note on
@@ -514,16 +517,6 @@ export interface Colleague {
 }
 
 // --- Phase 4 ---------------------------------------------------------------
-
-/** What an admin may do to a traveller row next. Mirrors
- *  ALLOWED_TRAVELLER_TRANSITIONS on the server; the server is the authority. */
-export const NEXT_STATUSES: Record<TravellerStatus, TravellerStatus[]> = {
-  PENDING: ['APPROVED', 'REJECTED', 'CANCELLED'],
-  APPROVED: ['BOOKED', 'CANCELLED'],
-  BOOKED: ['CANCELLED'],
-  REJECTED: ['CANCELLED'],
-  CANCELLED: [],
-};
 
 export interface QueueCounts {
   awaiting: number;

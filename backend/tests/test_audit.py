@@ -6,7 +6,6 @@ logic is dialect-independent; what MySQL adds is DATETIME(6), and the fact that
 plain DATETIME would break the chain is the reason `UTCDateTime` exists.
 """
 import pytest
-from sqlalchemy import create_engine
 
 from app.core.enums import AuditAction, Role
 from app.models.audit import GENESIS_HASH

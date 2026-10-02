@@ -22,6 +22,7 @@ import {
   reextractTicket,
   uploadTicket,
 } from '@/lib/api';
+import { openFileTab, showFile } from '@/lib/files';
 import { cn } from '@/lib/utils';
 import {
   REVIEW_THRESHOLD,
@@ -115,15 +116,12 @@ function TicketCard({ ticket, onChanged }: { ticket: Ticket; onChanged: () => vo
   const [notify, setNotify] = useState(true);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
 
+  // Through the API rather than a link: the document carries a PNR and a
+  // passenger name, and the endpoint needs the bearer token.
   const view = useMutation({
-    mutationFn: () => fetchTicketFile(ticket.id),
-    onSuccess: (blob) => {
-      // Opened from a blob rather than linked: the endpoint needs the bearer
-      // token, and the document carries a PNR and a passenger name.
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank', 'noopener');
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    },
+    mutationFn: (tab: Window | null) =>
+      showFile(tab, () => fetchTicketFile(ticket.id), ticket.file_name ?? 'ticket'),
+    meta: { errorFallback: 'Could not open the ticket.' },
   });
 
   const confirm = useMutation({
@@ -181,7 +179,7 @@ function TicketCard({ ticket, onChanged }: { ticket: Ticket; onChanged: () => vo
             variant="ghost"
             className="ml-auto"
             loading={view.isPending}
-            onClick={() => view.mutate()}
+            onClick={() => view.mutate(openFileTab())}
             title="Open the document"
           >
             <Eye size={13} />

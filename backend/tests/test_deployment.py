@@ -6,6 +6,7 @@ value of these tests is entirely in the day someone flips a switch and needs the
 other path to already work.
 """
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -79,8 +80,9 @@ class TestStoragePathContract:
         assert storage.read(relative) == b"%PDF-1.4 hello"
 
         assert storage.delete(relative) is True
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException) as gone:
             storage.read(relative)
+        assert gone.value.status_code == 404
 
     def test_deleting_something_absent_is_not_an_error(self, tmp_path, monkeypatch):
         monkeypatch.setattr(type(storage.settings), "upload_path", property(lambda s: tmp_path))
@@ -162,6 +164,35 @@ class TestGeminiCredentialResolution:
         # rather than failing, which is what Cloud Run wants.
         _, source = gemini._resolve_credentials()
         assert "application default" in source
+
+
+class TestVersionHandshake:
+    """The web app reads /health to spot an API process older than itself -
+    one that was not restarted after an update - and says so to admins."""
+
+    def test_health_reports_the_version_and_pending_migrations(self, client, monkeypatch):
+        from app import main
+
+        monkeypatch.setattr(main, "schema_behind", lambda: None)
+        body = client.get("/health").json()
+        assert body["version"] == main.API_VERSION
+        assert body["migrations_pending"] is False
+
+        monkeypatch.setattr(main, "schema_behind", lambda: "the database is at abc")
+        assert client.get("/health").json()["migrations_pending"] is True
+
+    def test_the_web_app_expects_this_version(self):
+        """Bumping one side and not the other would warn about a mismatch that
+        is not there, or miss one that is."""
+        import re
+        from pathlib import Path
+
+        from app.main import API_VERSION
+
+        source = (Path(__file__).parents[2] / "web" / "src" / "lib" / "api.ts").read_text()
+        match = re.search(r"export const API_VERSION = '([^']+)'", source)
+        assert match, "web/src/lib/api.ts no longer declares API_VERSION"
+        assert match.group(1) == API_VERSION
 
 
 class TestRequestCorrelation:

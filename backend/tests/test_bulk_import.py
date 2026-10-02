@@ -5,10 +5,8 @@ Preview is the safety net before a hundred accounts get created, so its counts
 and per-row messages are what these tests pin down.
 """
 import pytest
-from sqlalchemy import create_engine
 
 from app.core.enums import Designation, Gender, Role, UserStatus
-from app.database import Base
 from app.models.department import Department
 from app.models.user import User
 from app.services import bulk_import, locations
