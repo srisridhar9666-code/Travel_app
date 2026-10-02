@@ -10,6 +10,7 @@ from app.core.enums import (
     ConflictKind,
     ConflictSeverity,
     Designation,
+    RequestPriority,
     RequestStatus,
     RequestType,
     RoomSharingChoice,
@@ -27,6 +28,7 @@ EDITABLE_FIELDS = (
     "hotel_state",
     "other_project_name",
     "travel_reason",
+    "priority",
     "mode",
     "origin",
     "destination",
@@ -75,6 +77,10 @@ class RequestBody(BaseModel):
     #: Mandatory. An admin deciding on a trip needs to know what it is for,
     #: and "because I was asked to" in a free-text note was not reliably there.
     travel_reason: str = Field(min_length=5, max_length=500)
+
+    #: How soon the requester needs a decision. Defaults to MEDIUM so an older
+    #: client that never sends it still gets the honest middle answer.
+    priority: RequestPriority = RequestPriority.MEDIUM
 
     #: Only when the chosen campaign is the fallback "Other" one. Validated in
     #: the service, which is where the project is actually looked up.
@@ -250,6 +256,7 @@ class RequestRead(BaseModel):
     check_out: date | None = None
 
     travel_reason: str | None = None
+    priority: RequestPriority = RequestPriority.MEDIUM
     other_project_name: str | None = None
     origin_state: str | None = None
     destination_state: str | None = None
@@ -276,6 +283,19 @@ class RequestListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class QueueExport(BaseModel):
+    """Every request in one admin queue tab, for the CSV export.
+
+    Not paged: an export that silently stops at page one is worse than none.
+    Capped instead, with `truncated` saying so, the same way the travel log is.
+    """
+
+    status: RequestStatus
+    total: int
+    truncated: bool
+    items: list[RequestRead]
 
 
 class ConflictCheckRequest(RequestBody):
@@ -373,3 +393,6 @@ class QueueCounts(BaseModel):
     expired: int
     with_conflicts: int
     edited: int
+    #: HIGH-priority requests still waiting on someone (awaiting or partly
+    #: approved). The queue's banner, so urgent work is not lost in a long tab.
+    high_priority: int = 0

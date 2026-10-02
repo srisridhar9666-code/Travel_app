@@ -11,10 +11,12 @@ from datetime import date, datetime
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 
 from app.core.enums import (
     Gender,
+    RequestPriority,
     RequestType,
     RequestStatus,
     Role,
@@ -24,6 +26,7 @@ from app.core.enums import (
 from app.models.project import Project
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
+from app.schemas.request import RequestCreate
 from app.services import audit
 from app.services import requests as svc
 
@@ -336,3 +339,41 @@ def test_to_read_reports_the_lock_and_the_edit_count(db, world):
     row.travellers[0].status = TravellerStatus.BOOKED
     db.commit()
     assert svc.to_read(db, row, tenant_id=TENANT).is_editable is False
+
+
+# ---------------------------------------------------------------------------
+# Priority is an editable field like any other
+# ---------------------------------------------------------------------------
+
+
+def test_a_request_saved_without_a_priority_is_medium(db, world):
+    project, ravi, _ = world
+    row = make_request(db, project, [ravi])
+    db.refresh(row)
+    assert row.priority is RequestPriority.MEDIUM
+    assert svc.to_read(db, row, tenant_id=TENANT).priority is RequestPriority.MEDIUM
+
+
+def test_changing_priority_writes_a_revision(db, world):
+    project, ravi, _ = world
+    row = make_request(db, project, [ravi])
+    svc.record_submission(db, request=row, actor=ravi, tenant_id=TENANT)
+    db.commit()
+
+    diff = amend(db, row, ravi, priority=RequestPriority.HIGH)
+
+    assert diff == {"priority": {"from": RequestPriority.MEDIUM, "to": RequestPriority.HIGH}}
+    latest = svc.revisions_of(db, row.id)[0]
+    assert latest.summary == "Edited priority"
+    assert latest.changes == {"priority": {"from": "MEDIUM", "to": "HIGH"}}
+    assert svc.describe_changes({"priority": {}}) == "priority"
+
+
+def test_the_body_defaults_priority_and_refuses_an_unknown_one():
+    base = dict(
+        request_type="HOTEL", project_id=1, hotel_city="Mumbai",
+        check_in="2026-10-03", travel_reason="Store audit",
+    )
+    assert RequestCreate(**base).priority is RequestPriority.MEDIUM
+    with pytest.raises(ValidationError):
+        RequestCreate(**base, priority="URGENT")
