@@ -9,6 +9,7 @@ import LoginPage from '@/pages/LoginPage';
 import AnalyticsPage from '@/pages/AnalyticsPage';
 import ApprovalsPage from '@/pages/ApprovalsPage';
 import NotificationsPage from '@/pages/NotificationsPage';
+import ProfilePage from '@/pages/ProfilePage';
 import ProjectsPage from '@/pages/ProjectsPage';
 import RequestsPage from '@/pages/RequestsPage';
 import SetPasswordPage from '@/pages/SetPasswordPage';
@@ -62,6 +63,7 @@ export default function App() {
           <Route index element={<DashboardPage />} />
           <Route path="requests" element={<RequestsPage />} />
           <Route path="notifications" element={<NotificationsPage />} />
+          <Route path="profile" element={<ProfilePage />} />
           <Route
             path="approvals"
             element={

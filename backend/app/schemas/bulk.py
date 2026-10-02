@@ -21,6 +21,8 @@ IMPORT_COLUMNS = [
     "gender",
     "phone",
     "employee_code",
+    "department",
+    "base_state",
     "base_location",
 ]
 
@@ -35,9 +37,14 @@ class ImportRow(BaseModel):
     email: str | None = None
     role: Role = Role.GROUND_STAFF
     designation: Designation | None = None
-    gender: Gender = Gender.UNDISCLOSED
+    #: None only on a row that is an error for want of one.
+    gender: Gender | None = None
     phone: str | None = None
     employee_code: str | None = None
+    #: A department name; created on commit if it does not exist yet.
+    department: str | None = None
+    base_state: str | None = None
+    #: The city or constituency.
     base_location: str | None = None
 
     #: Hard problems. A row with any of these is skipped on commit.

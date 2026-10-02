@@ -13,9 +13,12 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.enums import Designation, Gender, Role
+from app.core.enums import Designation, Gender, Role, UserStatus
+from app.models.department import Department
 from app.models.user import User
 from app.schemas.bulk import IMPORT_COLUMNS, REQUIRED_COLUMNS, ImportPreview, ImportRow
+from app.schemas.user import tidy_phone
+from app.services import locations
 
 #: Deliberately permissive - the authority on an address is the invite that
 #: either arrives or does not. This only catches obvious nonsense.
@@ -50,6 +53,22 @@ def _enum_or_error(
         return default
 
 
+#: What a spreadsheet may say for gender. Only Male and Female can be recorded;
+#: the room-sharing rule depends on it, so a blank is an error, not a default.
+_GENDERS = {"M": Gender.MALE, "MALE": Gender.MALE, "F": Gender.FEMALE, "FEMALE": Gender.FEMALE}
+
+
+def _gender_or_error(raw: str, row: ImportRow) -> Gender | None:
+    value = (raw or "").strip().upper()
+    if not value:
+        row.errors.append("gender is required (MALE or FEMALE)")
+        return None
+    if value not in _GENDERS:
+        row.errors.append("gender must be MALE or FEMALE")
+        return None
+    return _GENDERS[value]
+
+
 def parse(raw: bytes, db: Session, tenant_id: str) -> ImportPreview:
     """Turn an uploaded CSV into validated rows. Writes nothing."""
     text, file_errors = _decode(raw)
@@ -77,13 +96,21 @@ def parse(raw: bytes, db: Session, tenant_id: str) -> ImportPreview:
 
     unknown = [h for h in headers if h and h not in IMPORT_COLUMNS]
 
-    # One query for every address already taken, rather than one per row.
+    # One query for every address already taken, rather than one per row. A
+    # deleted account keeps its address, and is restored rather than re-added.
     existing = {
-        email.lower()
-        for (email,) in db.execute(
-            select(User.email).where(User.tenant_id == tenant_id)
+        email.lower(): user_status
+        for email, user_status in db.execute(
+            select(User.email, User.status).where(User.tenant_id == tenant_id)
         ).all()
     }
+    departments = {
+        name.casefold()
+        for (name,) in db.execute(
+            select(Department.name).where(Department.tenant_id == tenant_id)
+        ).all()
+    }
+    new_departments: set[str] = set()
     seen_in_file: set[str] = set()
 
     rows: list[ImportRow] = []
@@ -113,6 +140,10 @@ def parse(raw: bytes, db: Session, tenant_id: str) -> ImportPreview:
             row.errors.append("email is required")
         elif not _EMAIL.match(email):
             row.errors.append(f"{email} is not a valid email address")
+        elif existing.get(email) is UserStatus.DELETED:
+            row.errors.append(
+                f"{email} belongs to a deleted account - restore it from the team list"
+            )
         elif email in existing:
             row.errors.append(f"{email} already has an account")
         elif email in seen_in_file:
@@ -125,19 +156,36 @@ def parse(raw: bytes, db: Session, tenant_id: str) -> ImportPreview:
         row.designation = _enum_or_error(
             clean.get("designation", ""), Designation, "designation", row
         )
-        row.gender = _enum_or_error(
-            clean.get("gender", ""), Gender, "gender", row, default=Gender.UNDISCLOSED
-        )
+        row.gender = _gender_or_error(clean.get("gender", ""), row)
 
-        row.phone = clean.get("phone") or None
+        try:
+            row.phone = tidy_phone(clean.get("phone"))
+        except ValueError as exc:
+            row.errors.append(f"phone: {exc}")
         row.employee_code = clean.get("employee_code") or None
-        row.base_location = clean.get("base_location") or None
 
-        if row.gender is Gender.UNDISCLOSED:
-            # Not an error, but it changes how the person is treated later.
-            row.warnings.append(
-                "No gender given - room sharing will default to a separate room"
-            )
+        # Matched against the place list, as the form does: "hyd" is Hyderabad.
+        # Read-only, so safe inside a preview.
+        row.base_state, row.base_location = locations.canonical(
+            db, tenant_id, clean.get("base_state"), clean.get("base_location")
+        )
+        if len(row.base_state or "") > 80:
+            row.errors.append("base_state must be at most 80 characters")
+        if len(row.base_location or "") > 120:
+            row.errors.append("base_location must be at most 120 characters")
+
+        department = " ".join(clean.get("department", "").split())
+        if department:
+            if not 2 <= len(department) <= 80:
+                row.errors.append("department must be 2 to 80 characters")
+            else:
+                row.department = department
+                key = department.casefold()
+                if key not in departments and key not in new_departments:
+                    # Said once, on the first row that names it.
+                    new_departments.add(key)
+                    row.warnings.append(f"Department “{department}” will be created")
+
         if row.role in (Role.ADMIN, Role.SYSTEM_ADMIN):
             row.warnings.append(f"This row grants {row.role} access")
 
@@ -170,6 +218,8 @@ def template_csv() -> str:
             "MALE",
             "+91 98765 43210",
             "DB-1042",
+            "Field Operations",
+            "Telangana",
             "Hyderabad",
         ]
     )

@@ -19,6 +19,7 @@ from app.database import SessionLocal, engine
 from app.routers import analytics as analytics_router
 from app.routers import audit as audit_router
 from app.routers import auth as auth_router
+from app.routers import departments as departments_router
 from app.routers import id_proofs as id_proofs_router
 from app.routers import insights as insights_router
 from app.routers import internal as internal_router
@@ -145,6 +146,7 @@ app.add_middleware(
 
 app.include_router(auth_router.router)
 app.include_router(users_router.router)
+app.include_router(departments_router.router)
 app.include_router(projects_router.router)
 app.include_router(requests_router.router)
 app.include_router(tickets_router.router)

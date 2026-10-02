@@ -79,6 +79,8 @@ export interface InviteLink {
   email_sent?: boolean | null;
   /** Why it did not, in words an admin can act on. */
   email_detail?: string | null;
+  /** Which kind of link it is: a first invitation or a password reset. */
+  purpose?: 'INVITE' | 'PASSWORD_RESET' | null;
 }
 
 export interface TokenPreview {
@@ -153,6 +155,30 @@ export interface Department {
   member_count: number;
 }
 
+/** Trips someone is on that are still live and not over yet - what to look at
+ *  before switching their account off. */
+export interface OpenTrips {
+  pending: number;
+  approved: number;
+  booked: number;
+  total: number;
+}
+
+/** What anyone may change about themselves without their password. */
+export interface ProfileUpdate {
+  full_name?: string;
+  phone?: string | null;
+}
+
+/** A password change signs out every other device, this one included; the
+ *  fresh token keeps this one signed in. */
+export interface PasswordChanged {
+  detail: string;
+  access_token: string;
+  token_type: string;
+  expires_at: string;
+}
+
 // --- Phase 2 ---------------------------------------------------------------
 
 export type ProjectStatus = 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'ARCHIVED';
@@ -220,9 +246,13 @@ export interface ImportRow {
   email: string | null;
   role: Role;
   designation: Designation | null;
-  gender: Gender;
+  /** Null when the row is missing one, which is an error. */
+  gender: Gender | null;
   phone: string | null;
   employee_code: string | null;
+  /** A department name; a new one is created on import. */
+  department: string | null;
+  base_state: string | null;
   base_location: string | null;
   errors: string[];
   warnings: string[];
