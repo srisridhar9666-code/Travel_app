@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 
 import { formatMoney } from '@/components/charts';
 import { Button, Field, Input } from '@/components/ui';
-import { errorMessage, previewSplit, setCosts, splitCost } from '@/lib/api';
+import { previewSplit, setCosts, splitCost } from '@/lib/api';
 import type { CostPreview, RequestTraveller } from '@/types';
 
 /**
@@ -39,8 +39,12 @@ export default function CostPanel({
     (t) => t.status === 'BOOKED' || t.status === 'APPROVED',
   );
 
+  // Spend feeds the dashboard insights and the travel log's cost column as well
+  // as the analytics page, so all three refetch rather than show the old total.
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['analytics'] });
+    queryClient.invalidateQueries({ queryKey: ['insights'] });
+    queryClient.invalidateQueries({ queryKey: ['travel-logs'] });
     onChanged();
   };
 
@@ -51,7 +55,6 @@ export default function CostPanel({
         traveller_ids: costable.map((t) => t.id),
       }),
     onSuccess: setPreview,
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const save = useMutation({
@@ -66,7 +69,6 @@ export default function CostPanel({
       setTotal('');
       refresh();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const saveExact = useMutation({
@@ -82,7 +84,6 @@ export default function CostPanel({
       toast.success('Cost saved');
       refresh();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   if (costable.length === 0) {

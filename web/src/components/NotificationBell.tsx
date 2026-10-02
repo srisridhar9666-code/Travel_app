@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, CheckCheck } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
 
 import { Button } from '@/components/ui';
@@ -40,7 +41,16 @@ export default function NotificationBell() {
   };
 
   const readOne = useMutation({ mutationFn: markNoticeRead, onSuccess: refresh });
-  const readAll = useMutation({ mutationFn: markAllRead, onSuccess: refresh });
+  // A single notice going grey is its own confirmation; clearing the whole list
+  // is a bigger change, so it says so.
+  const readAll = useMutation({
+    mutationFn: markAllRead,
+    meta: { errorFallback: 'Could not mark the notifications read.' },
+    onSuccess: () => {
+      toast.success('All notifications marked read');
+      refresh();
+    },
+  });
 
   // Click outside and Escape both close it.
   useEffect(() => {
