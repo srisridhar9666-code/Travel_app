@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -154,6 +153,3 @@ def generate_url_token() -> tuple[str, str]:
 def hash_url_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-
-def tokens_equal(a: str, b: str) -> bool:
-    return hmac.compare_digest(a, b)

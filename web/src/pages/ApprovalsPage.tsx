@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Eye,
   Flag,
   History,
   IndianRupee,
@@ -41,8 +42,10 @@ import {
   fetchQueueCounts,
   fetchRequests,
   fetchRevisions,
+  fetchTicketFile,
 } from '@/lib/api';
 import { downloadCsv, slug, type CsvCell } from '@/lib/csv';
+import { openFileTab, showFile } from '@/lib/files';
 import { routeLabel } from '@/lib/places';
 import { campaignLabel, revisionValue } from '@/lib/requests';
 import { fileStamp, formatInstant, parseInstant, sheetInstant } from '@/lib/time';
@@ -473,7 +476,18 @@ export default function ApprovalsPage() {
     priority: priority || undefined,
   };
 
-  const counts = useQuery({ queryKey: ['queue-counts'], queryFn: fetchQueueCounts });
+  // The banners count the whole queue. The tab labels follow the search and
+  // priority, as the list under them does: "Booked 12" over a high-priority
+  // list of two read as the filter not working.
+  const counts = useQuery({ queryKey: ['queue-counts'], queryFn: () => fetchQueueCounts() });
+  const sliced = Boolean(filters.search || filters.priority);
+  const slicedCounts = useQuery({
+    queryKey: ['queue-counts', filters.search, filters.priority],
+    queryFn: () => fetchQueueCounts({ search: filters.search, priority: filters.priority }),
+    enabled: sliced,
+    placeholderData: keepPreviousData,
+  });
+  const tabCounts = sliced ? slicedCounts.data : counts.data;
   const requests = useQuery({
     queryKey: ['queue', tab, search, priority, page, pageSize],
     queryFn: () =>
@@ -519,6 +533,14 @@ export default function ApprovalsPage() {
         toast.success(`Exported ${written} ${written === 1 ? 'row' : 'rows'}`);
       }
     },
+  });
+
+  // Straight from the traveller's row, so a booked ticket is one click away
+  // rather than behind the row's expand button.
+  const viewTicket = useMutation({
+    mutationFn: (vars: { ticketId: number; tab: Window | null }) =>
+      showFile(vars.tab, () => fetchTicketFile(vars.ticketId), `ticket-${vars.ticketId}`),
+    meta: { errorFallback: 'Could not open the ticket.' },
   });
 
   const decide = useMutation({
@@ -701,8 +723,8 @@ export default function ApprovalsPage() {
               )}
             >
               {item.label}
-              {countData && (
-                <span className="ml-1.5 text-text-subtle">{countData[item.countKey]}</span>
+              {tabCounts && (
+                <span className="ml-1.5 text-text-subtle">{tabCounts[item.countKey]}</span>
               )}
             </button>
           ))}
@@ -816,7 +838,7 @@ export default function ApprovalsPage() {
                       variant="ghost"
                       size="sm"
                       aria-expanded={isOpen}
-                      title={isOpen ? 'Hide history' : 'Show history'}
+                      title={isOpen ? 'Hide details' : 'Tickets, cost and history'}
                       onClick={() => setExpanded(isOpen ? null : request.id)}
                     >
                       <ChevronDown
@@ -863,6 +885,20 @@ export default function ApprovalsPage() {
                         )}
 
                         <div className="ml-auto flex gap-1.5">
+                          {traveller.ticket_id != null && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              loading={viewTicket.isPending && viewTicket.variables?.ticketId === traveller.ticket_id}
+                              onClick={() =>
+                                viewTicket.mutate({ ticketId: traveller.ticket_id!, tab: openFileTab() })
+                              }
+                              title={`Open the ticket uploaded for ${traveller.full_name}`}
+                            >
+                              <Eye size={13} />
+                              View ticket
+                            </Button>
+                          )}
                           {traveller.status === 'PENDING' && (
                             <>
                               <Button

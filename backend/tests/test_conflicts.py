@@ -10,7 +10,6 @@ meets another hotel check-in on the same day.
 from datetime import date, datetime
 
 import pytest
-from sqlalchemy import create_engine
 
 from app.core.enums import (
     ConflictKind,

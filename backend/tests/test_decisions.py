@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import create_engine, select
+from sqlalchemy import select
 
 from app.core import clock
 from app.core.enums import (

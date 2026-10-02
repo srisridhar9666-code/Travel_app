@@ -22,6 +22,7 @@ import {
   fetchIdProofs,
   revealIdProof,
 } from '@/lib/api';
+import { openFileTab, showFile } from '@/lib/files';
 import { formatInstantDate } from '@/lib/time';
 import { ID_PROOF_LABELS, type IdProof, type IdProofType, type UserRow } from '@/types';
 
@@ -58,14 +59,12 @@ function ProofRow({ proof, onDeleted }: { proof: IdProof; onDeleted: () => void 
     },
   });
 
+  // Through the API rather than a link, so the request carries the bearer
+  // token and lands in the audit log like any other read.
   const download = useMutation({
-    mutationFn: () => fetchIdProofFile(proof.id),
-    onSuccess: (blob) => {
-      // Opened from a blob rather than linked directly, so the request carries
-      // the bearer token and lands in the audit log like any other read.
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank', 'noopener,noreferrer');
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    mutationFn: (tab: Window | null) =>
+      showFile(tab, () => fetchIdProofFile(proof.id), proof.file_name ?? 'id-proof'),
+    onSuccess: () => {
       toast('Download recorded in the activity log.', { icon: '📋' });
     },
   });
@@ -138,7 +137,7 @@ function ProofRow({ proof, onDeleted }: { proof: IdProof; onDeleted: () => void 
             size="sm"
             title="Open the scan (recorded)"
             loading={download.isPending}
-            onClick={() => download.mutate()}
+            onClick={() => download.mutate(openFileTab())}
           >
             <Download size={14} />
           </Button>

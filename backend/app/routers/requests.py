@@ -242,7 +242,10 @@ def list_requests(
     # request at a time, and GET /requests/{id} carries them.
     return RequestListResponse(
         items=[
-            svc.to_read(db, r, tenant_id=user.tenant_id, with_conflicts=True) for r in window
+            svc.to_read(
+                db, r, tenant_id=user.tenant_id, with_conflicts=True, with_tickets=user.is_admin
+            )
+            for r in window
         ],
         total=total,
         page=page,
@@ -321,25 +324,36 @@ def create_request(
 
 
 @router.get("/queue/counts", response_model=QueueCounts)
-def queue_counts(actor: AdminUser, db: DbSession) -> QueueCounts:
+def queue_counts(
+    actor: AdminUser,
+    db: DbSession,
+    search: Annotated[str | None, Query(max_length=120)] = None,
+    priority: Annotated[RequestPriority | None, Query()] = None,
+) -> QueueCounts:
     """Headline numbers for the admin queue tabs.
 
     Counted over the whole tenant rather than the current page, because the tab
-    labels have to be true regardless of what is being looked at. Drafts are
-    excluded: they are not in the queue and their owners have not asked for them
-    to be.
+    labels have to be true regardless of which page is open. With a search or a
+    priority, only the requests matching it count, by the same rule the tab's
+    list applies - so "Booked 2" under "High priority" means two high-priority
+    bookings, not every booking. Drafts are excluded: they are not in the queue
+    and their owners have not asked for them to be.
     """
-    rows = (
-        db.execute(
-            select(TravelRequest).where(
-                TravelRequest.tenant_id == actor.tenant_id,
-                TravelRequest.is_draft.is_(False),
-            )
+    rows = [
+        row
+        for row in _matching(
+            db,
+            actor,
+            mine=False,
+            request_status=None,
+            request_type=None,
+            project_id=None,
+            search=search,
+            priority=priority,
+            sort="newest",
         )
-        .scalars()
-        .unique()
-        .all()
-    )
+        if not row.is_draft
+    ]
 
     tally = {s: 0 for s in RequestStatus}
     conflicted = 0

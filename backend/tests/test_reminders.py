@@ -9,7 +9,7 @@ waiting on a decision, or email a category the person switched off.
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import select
 
 from app.core import clock
 from app.core.enums import (

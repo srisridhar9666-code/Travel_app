@@ -103,7 +103,7 @@ confirms the ledger survived the round trip intact.
 
 | Endpoint | Tells you |
 |---|---|
-| `GET /health` | Process is up and MySQL answers a real query |
+| `GET /health` | Process is up and MySQL answers a real query; also its version and whether migrations are pending |
 | `GET /health/gemini` | Ticket extraction can reach the model, and **which credentials** it used |
 | `GET /health/email` | SMTP authenticates, without sending anything |
 | `GET /audit/verify` | The hash chain is unbroken (system admin) |

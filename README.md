@@ -85,7 +85,10 @@ cd "D:\Travel Management System\V1\backend"
 
 > `--reload` is deliberately omitted: on Windows the watcher has been seen to wedge, leaving
 > an orphaned worker holding port 8000 under a parent PID that no longer exists. Restart the
-> API by hand after backend edits. To free a stuck port:
+> API by hand after backend edits **and after every pull** - Vite picks up new frontend code on
+> its own, the API does not, and an old API behind a new page answers "Not Found" and "Method
+> Not Allowed" to whatever it has not heard of. Admins see a red banner when that happens. To
+> free a stuck port:
 >
 > ```powershell
 > Get-NetTCPConnection -LocalPort 8000 -State Listen | ForEach-Object { taskkill /PID $_.OwningProcess /F /T }
@@ -148,7 +151,7 @@ cd "D:\Travel Management System\V1\backend"
 
 | Endpoint | Proves |
 |---|---|
-| `GET /health` | API is up and MySQL answers a real query |
+| `GET /health` | API is up and MySQL answers a real query; also its version and whether migrations are pending |
 | `GET /health/gemini` | The service account actually reaches `gemini-3.1-pro-preview` |
 | `GET /audit/verify` | Walks the ledger's hash chain and reports the first break |
 | `GET /health/email` | Authenticates against SMTP without sending anything |
@@ -368,6 +371,16 @@ before the insert, so a truncated read-back never rehashes to the same value. Us
 **Passwords are SHA-256'd before bcrypt.** Plain bcrypt stops at 72 bytes, so two
 passphrases sharing a 72-byte prefix would open the same account. The pre-hash folds any
 length into 44 bytes. Hashes here are therefore not interchangeable with plain-bcrypt ones.
+
+**The web app checks the API's version.** `API_VERSION` in `backend/app/main.py` and in
+`web/src/lib/api.ts` must match (a test fails otherwise); bump both whenever the page starts
+relying on a new route or field. `/health` reports it, and an API older than the page puts a
+banner in front of admins saying to restart it, rather than leaving them to decode a 404.
+
+**Each browser tab has its own sign-in.** The session lives in `sessionStorage`, so an admin
+in one tab and a field account in another stay that way; `localStorage` only seeds a brand-new
+tab with the last sign-in. Tabs on the *same* sign-in stay in step over a `BroadcastChannel`:
+signing out ends it in all of them, and a password change hands them the new token.
 
 **Login never reveals whether an account exists.** Unknown address, wrong password and
 forgot-password all answer identically, and the unknown-address path still burns a bcrypt

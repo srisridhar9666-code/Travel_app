@@ -20,6 +20,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
 import { CreatorCredit, LogoLockup } from '@/components/Logo';
 import NotificationBell from '@/components/NotificationBell';
+import { PageErrorBoundary, ServerStatusBanner } from '@/components/ServerStatus';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button } from '@/components/ui';
 import { fetchMe, logout, saveThemePreference } from '@/lib/api';
@@ -264,7 +265,10 @@ export default function AppShell() {
           tabIndex={-1}
           className="mx-auto w-full max-w-7xl animate-fade-in px-4 py-6 sm:px-6 sm:py-8 lg:px-8 focus:outline-none"
         >
-          <Outlet />
+          <ServerStatusBanner isAdmin={!!user && ADMINS.includes(user.role)} />
+          <PageErrorBoundary key={location.pathname}>
+            <Outlet />
+          </PageErrorBoundary>
         </main>
 
         {/* Route changes are silent in a single-page app. This announces the

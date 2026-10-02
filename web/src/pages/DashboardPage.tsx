@@ -92,7 +92,7 @@ function AdminDashboard() {
   const [trendMetric, setTrendMetric] = useState<'movements' | 'spent'>('movements');
 
   // This page has no error state of its own, so a failed load says so in a toast.
-  const queue = useQuery({ queryKey: ['queue-counts'], queryFn: fetchQueueCounts, meta: { errorToast: true } });
+  const queue = useQuery({ queryKey: ['queue-counts'], queryFn: () => fetchQueueCounts(), meta: { errorToast: true } });
   const options = useQuery({ queryKey: ['filter-options'], queryFn: fetchFilterOptions, meta: { errorToast: true } });
   const insights = useQuery({
     queryKey: ['insights', f.apiFilters],

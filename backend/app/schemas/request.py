@@ -181,6 +181,9 @@ class TravellerRead(BaseModel):
     decided_at: UTCInstant | None = None
     decision_reason: str | None = None
     booking_reference: str | None = None
+    #: The uploaded ticket to open from this row (GET /tickets/{id}/file):
+    #: the confirmed one, else the newest under review. On the admin queue list only.
+    ticket_id: int | None = None
 
     # --- cost (SOW 2 and 6, addendum C1). Admin-only; see the router. -------
     cost_amount: Decimal | None = None
@@ -307,16 +310,6 @@ class ConflictCheckRequest(RequestBody):
 class ConflictCheckResponse(BaseModel):
     conflicts: list[ConflictRead]
     costay_matches: list[CoStayMatchRead]
-
-
-class NotificationRead(BaseModel):
-    id: int
-    kind: str
-    title: str
-    body: str
-    request_id: int | None = None
-    created_at: UTCInstant
-    read_at: UTCInstant | None = None
 
 
 class ColleagueRead(BaseModel):

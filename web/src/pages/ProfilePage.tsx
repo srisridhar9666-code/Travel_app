@@ -3,9 +3,19 @@ import { AlertCircle, KeyRound, Mail, UserRound } from 'lucide-react';
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import toast from 'react-hot-toast';
 
+import { DepartmentPicker } from '@/components/DepartmentPicker';
 import { PasswordChecklist } from '@/components/PasswordChecklist';
-import { Button, Card, CardHeader, Field, Input, PageHeader } from '@/components/ui';
-import { changeMyEmail, changePassword, errorMessage, updateMyProfile } from '@/lib/api';
+import { PlacePicker } from '@/components/PlacePicker';
+import { Button, Card, CardHeader, Field, Input, PageHeader, Select } from '@/components/ui';
+import {
+  changeMyEmail,
+  changePassword,
+  errorMessage,
+  fetchMe,
+  updateMyProfile,
+  updateUser,
+  type UserUpdatePayload,
+} from '@/lib/api';
 import { passwordIssues } from '@/lib/password';
 import { formatInstant } from '@/lib/time';
 import { useAuth } from '@/store/auth';
@@ -13,7 +23,8 @@ import {
   DESIGNATION_LABELS,
   GENDER_LABELS,
   ROLE_LABELS,
-  type ProfileUpdate,
+  SELECTABLE_GENDERS,
+  type Designation,
   type UserProfile,
 } from '@/types';
 
@@ -39,10 +50,38 @@ function ReadOnly({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+interface Details {
+  full_name: string;
+  phone: string;
+  designation: string;
+  department_id: number | null;
+  /** Blank when the stored value predates Male/Female being required. */
+  gender: string;
+  base_state: string;
+  base_location: string;
+  employee_code: string;
+}
+
+function detailsOf(user: UserProfile): Details {
+  return {
+    full_name: user.full_name,
+    phone: user.phone ?? '',
+    designation: user.designation ?? '',
+    department_id: user.department_id ?? null,
+    gender: (SELECTABLE_GENDERS as readonly string[]).includes(user.gender) ? user.gender : '',
+    base_state: user.base_state ?? '',
+    base_location: user.base_location ?? '',
+    employee_code: user.employee_code ?? '',
+  };
+}
+
 /**
  * Everyone's own page: name and phone, the email they sign in with, and their
- * password. The rest of their record - role, department, gender, base - is set
- * by an admin and shown here read-only, so they can see what is on file.
+ * password. For ground staff the rest of their record - department, gender,
+ * base - is set by an admin and shown here read-only. Admins are the people
+ * who set those, so they set their own here too, through the same endpoint the
+ * Team page uses. App access stays read-only for everyone: nobody changes
+ * their own role.
  */
 export default function ProfilePage() {
   const user = useAuth((s) => s.user);
@@ -52,6 +91,7 @@ export default function ProfilePage() {
 
 function Profile({ user }: { user: UserProfile }) {
   const queryClient = useQueryClient();
+  const isAdmin = user.role === 'ADMIN' || user.role === 'SYSTEM_ADMIN';
 
   /** Keep the shell, and the cached copy the shell refreshes from, in step. */
   const adopt = (updated: UserProfile) => {
@@ -62,27 +102,52 @@ function Profile({ user }: { user: UserProfile }) {
   // --- personal details ----------------------------------------------------
   // Null until they type, so an admin's edit that arrives on the next refresh
   // shows up instead of being hidden behind a stale copy.
-  const [draft, setDraft] = useState<{ full_name: string; phone: string } | null>(null);
-  const details = draft ?? { full_name: user.full_name, phone: user.phone ?? '' };
+  const [draft, setDraft] = useState<Details | null>(null);
+  const details = draft ?? detailsOf(user);
+  const edit = (patch: Partial<Details>) => setDraft({ ...details, ...patch });
   const [detailsError, setDetailsError] = useState<string | null>(null);
 
   const changes = useMemo(() => {
-    const out: ProfileUpdate = {};
+    const out: UserUpdatePayload = {};
     const name = details.full_name.trim();
     if (name !== user.full_name) out.full_name = name;
     const phone = details.phone.trim();
     if (phone !== (user.phone ?? '')) out.phone = phone || null;
+    if (!isAdmin) return out;
+
+    if (details.designation !== (user.designation ?? '')) out.designation = details.designation || null;
+    if (details.department_id !== (user.department_id ?? null)) out.department_id = details.department_id;
+    if (details.gender && details.gender !== user.gender) out.gender = details.gender;
+    // As a pair: the server checks a city against its state.
+    if (
+      details.base_state !== (user.base_state ?? '') ||
+      details.base_location !== (user.base_location ?? '')
+    ) {
+      out.base_state = details.base_state || null;
+      out.base_location = details.base_location || null;
+    }
+    const code = details.employee_code.trim();
+    if (code !== (user.employee_code ?? '')) out.employee_code = code || null;
     return out;
-  }, [details, user]);
+  }, [details, user, isAdmin]);
   const dirty = Object.keys(changes).length > 0;
 
   const saveDetails = useMutation({
-    mutationFn: () => updateMyProfile(changes),
+    mutationFn: async () => {
+      if (!isAdmin) return updateMyProfile({ full_name: changes.full_name, phone: changes.phone });
+      await updateUser(user.id, changes);
+      return fetchMe();
+    },
     meta: { errorFallback: 'Could not save your details.' },
     onSuccess: (updated) => {
       adopt(updated);
       setDraft(null);
       setDetailsError(null);
+      if (isAdmin) {
+        // Their row on Team, and the department member counts, just moved.
+        queryClient.invalidateQueries({ queryKey: ['users'] });
+        queryClient.invalidateQueries({ queryKey: ['departments'] });
+      }
       toast.success('Profile saved');
     },
     onError: (err) => setDetailsError(errorMessage(err, 'Could not save your details.')),
@@ -149,7 +214,11 @@ function Profile({ user }: { user: UserProfile }) {
     <div className="space-y-6">
       <PageHeader
         title="My profile"
-        description="Your name, phone and sign-in details. Every change is recorded in the activity log."
+        description={
+          isAdmin
+            ? 'Your details and sign-in. Every change is recorded in the activity log.'
+            : 'Your name, phone and sign-in details. Every change is recorded in the activity log.'
+        }
       />
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -166,7 +235,7 @@ function Profile({ user }: { user: UserProfile }) {
                 autoComplete="name"
                 required
                 value={details.full_name}
-                onChange={(e) => setDraft({ ...details, full_name: e.target.value })}
+                onChange={(e) => edit({ full_name: e.target.value })}
               />
             </Field>
             <Field label="Phone" htmlFor="profile_phone" hint="10 to 15 digits.">
@@ -175,24 +244,103 @@ function Profile({ user }: { user: UserProfile }) {
                 type="tel"
                 autoComplete="tel"
                 value={details.phone}
-                onChange={(e) => setDraft({ ...details, phone: e.target.value })}
+                onChange={(e) => edit({ phone: e.target.value })}
                 placeholder="+91 98765 43210"
               />
             </Field>
 
-            <div className="rounded-md bg-surface-sunken px-3 py-3">
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-                <ReadOnly label="App access">{ROLE_LABELS[user.role]}</ReadOnly>
-                <ReadOnly label="Designation">
-                  {user.designation ? DESIGNATION_LABELS[user.designation] : null}
-                </ReadOnly>
-                <ReadOnly label="Employee code">{user.employee_code}</ReadOnly>
-                <ReadOnly label="Gender">{GENDER_LABELS[user.gender]}</ReadOnly>
-                <ReadOnly label="Department">{user.department_name}</ReadOnly>
-                <ReadOnly label="Base">{base}</ReadOnly>
-              </dl>
-              <p className="mt-3 text-xs text-text-subtle">Managed by your administrator.</p>
-            </div>
+            {isAdmin ? (
+              <>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="Designation" htmlFor="profile_designation">
+                    <Select
+                      id="profile_designation"
+                      value={details.designation}
+                      onChange={(e) => edit({ designation: e.target.value })}
+                    >
+                      <option value="">Not set</option>
+                      {(Object.keys(DESIGNATION_LABELS) as Designation[]).map((d) => (
+                        <option key={d} value={d}>
+                          {DESIGNATION_LABELS[d]}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field
+                    label="Gender"
+                    htmlFor="profile_gender"
+                    hint="Decides who may share a room."
+                    error={
+                      details.gender === '' && user.gender
+                        ? `Recorded as "${GENDER_LABELS[user.gender]}". Choose Male or Female.`
+                        : null
+                    }
+                  >
+                    <Select
+                      id="profile_gender"
+                      value={details.gender}
+                      onChange={(e) => edit({ gender: e.target.value })}
+                    >
+                      <option value="" disabled>
+                        Choose…
+                      </option>
+                      {SELECTABLE_GENDERS.map((g) => (
+                        <option key={g} value={g}>
+                          {GENDER_LABELS[g]}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field
+                    label="Department"
+                    htmlFor="profile_department"
+                    hint="Type a new one to add it."
+                    className="sm:col-span-2"
+                  >
+                    <DepartmentPicker
+                      id="profile_department"
+                      value={details.department_id}
+                      onChange={(department_id) => edit({ department_id })}
+                    />
+                  </Field>
+                  <PlacePicker
+                    label="Base"
+                    id="profile_base"
+                    className="sm:col-span-2"
+                    state={details.base_state}
+                    city={details.base_location}
+                    onChange={({ state, city }) => edit({ base_state: state, base_location: city })}
+                  />
+                  <Field label="Employee code" htmlFor="profile_code">
+                    <Input
+                      id="profile_code"
+                      value={details.employee_code}
+                      onChange={(e) => edit({ employee_code: e.target.value })}
+                    />
+                  </Field>
+                </div>
+                <div className="rounded-md bg-surface-sunken px-3 py-3">
+                  <ReadOnly label="App access">{ROLE_LABELS[user.role]}</ReadOnly>
+                  <p className="mt-2 text-xs text-text-subtle">
+                    Nobody changes their own app access. Another system administrator can, from Team.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-md bg-surface-sunken px-3 py-3">
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+                  <ReadOnly label="App access">{ROLE_LABELS[user.role]}</ReadOnly>
+                  <ReadOnly label="Designation">
+                    {user.designation ? DESIGNATION_LABELS[user.designation] : null}
+                  </ReadOnly>
+                  <ReadOnly label="Employee code">{user.employee_code}</ReadOnly>
+                  <ReadOnly label="Gender">{GENDER_LABELS[user.gender]}</ReadOnly>
+                  <ReadOnly label="Department">{user.department_name}</ReadOnly>
+                  <ReadOnly label="Base">{base}</ReadOnly>
+                </dl>
+                <p className="mt-3 text-xs text-text-subtle">Managed by your administrator.</p>
+              </div>
+            )}
 
             <ErrorBox message={detailsError} />
 

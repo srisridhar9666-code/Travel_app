@@ -34,17 +34,6 @@ _UNAUTHENTICATED = HTTPException(
 )
 
 
-def get_tenant_id(request: Request) -> str:
-    """Resolve the tenant for this request.
-
-    Single-tenant today, so this is the configured default. It exists as a
-    dependency now so that every query is already tenant-scoped when a second
-    company is onboarded - see addendum D.
-    """
-    authenticated = getattr(request.state, "tenant_id", None)
-    return authenticated or settings.default_tenant
-
-
 def get_current_user(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
@@ -101,7 +90,6 @@ def get_current_user(
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 DbSession = Annotated[Session, Depends(get_db)]
-TenantId = Annotated[str, Depends(get_tenant_id)]
 
 
 def require_roles(*allowed: Role):

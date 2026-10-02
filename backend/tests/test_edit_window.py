@@ -12,7 +12,6 @@ from datetime import date, datetime
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import create_engine
 
 from app.core.enums import (
     Gender,

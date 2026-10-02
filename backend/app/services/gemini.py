@@ -95,17 +95,6 @@ def get_client():
     return _client
 
 
-def credential_source() -> str:
-    """Which of the three paths authenticated. Surfaced on the health endpoint so
-    a deploy that silently fell back to the wrong identity is visible."""
-    get_client()
-    return _credential_source
-
-
-def is_available() -> bool:
-    return get_client() is not None
-
-
 def ping() -> dict:
     """Round-trip the configured model once. Used by /health/gemini and by the
     Phase 0 spike to prove the credentials reach the model before we build on it."""

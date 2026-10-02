@@ -5,7 +5,6 @@ import type {
   AnalyticsBundle,
   AuditRow,
   BatchDecisionItem,
-  CampaignSpend,
   ChainVerification,
   Colleague,
   CoStayMatch,
@@ -31,7 +30,6 @@ import type {
   Paginated,
   PasswordChanged,
   ProfileUpdate,
-  DecisionBody,
   Project,
   QueueCounts,
   QueueExport,
@@ -48,11 +46,35 @@ import type {
   TokenPreview,
   TravelMode,
   TravelRequest,
-  UncostedRow,
   UserProfile,
   UserRow,
   UserStatus,
 } from '@/types';
+
+/**
+ * The API version this build was written against. Bump it together with
+ * API_VERSION in backend/app/main.py (a backend test checks they match). The
+ * shell compares it with what /health reports, to tell an admin when the API
+ * process is older than this page.
+ */
+export const API_VERSION = '0.9.0';
+
+/** Negative when `a` is older than `b`, by dotted number. */
+export function compareVersions(a: string, b: string): number {
+  const left = a.split('.').map(Number);
+  const right = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const difference = (left[i] || 0) - (right[i] || 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+/** What a request to a route the server does not have is told instead of
+ *  FastAPI's bare "Not Found" or "Method Not Allowed". */
+export const STALE_API_MESSAGE =
+  'The server does not know this action yet - it is running older code than this page. ' +
+  'Restart the API (after running its migrations), then try again.';
 
 /**
  * Single axios instance for the whole app. In dev, Vite proxies `/api` to the
@@ -125,11 +147,18 @@ function fieldLabel(loc: unknown): string | null {
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : null;
 }
 
+/** FastAPI's own answers when no route matches. Every 404 this API raises on
+ *  purpose names what was missing ("Request not found."), so these two mean
+ *  the route itself is absent: the API process predates the page. */
+const NO_ROUTE: Record<number, string> = { 404: 'Not Found', 405: 'Method Not Allowed' };
+
 /** Pull a readable message out of a FastAPI error body. */
 export function errorMessage(error: unknown, fallback = 'Something went wrong.'): string {
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail;
-    if (typeof detail === 'string') return detail;
+    if (typeof detail === 'string') {
+      return detail === NO_ROUTE[error.response?.status ?? 0] ? STALE_API_MESSAGE : detail;
+    }
     // 422 bodies are a list of per-field validation errors. Pydantic's wording
     // ("Value error, ...", no field name) is for developers; say which field
     // and what is wrong with it.
@@ -171,20 +200,14 @@ export function errorMessage(error: unknown, fallback = 'Something went wrong.')
 export interface HealthResponse {
   status: string;
   app: string;
+  /** Absent on servers from before the version handshake. */
+  version?: string;
   environment: string;
   database: string;
-}
-
-export interface GeminiHealthResponse {
-  ok: boolean;
-  model?: string;
-  reply?: string;
-  detail?: string;
+  migrations_pending?: boolean;
 }
 
 export const fetchHealth = () => api.get<HealthResponse>('/health').then((r) => r.data);
-export const fetchGeminiHealth = () =>
-  api.get<GeminiHealthResponse>('/health/gemini').then((r) => r.data);
 
 // --- auth -----------------------------------------------------------------
 
@@ -289,11 +312,6 @@ export const fetchDepartments = () =>
 /** Returns the existing department when the name is already taken (any case). */
 export const createDepartment = (name: string) =>
   api.post<Department>('/departments', { name }).then((r) => r.data);
-
-export const renameDepartment = (id: number, name: string) =>
-  api.patch<Department>(`/departments/${id}`, { name }).then((r) => r.data);
-
-export const deleteDepartment = (id: number) => api.delete(`/departments/${id}`);
 
 // --- audit ----------------------------------------------------------------
 
@@ -495,11 +513,6 @@ export const setRoomSharing = (
   body: { traveller_id: number; choice: RoomSharingChoice; share_with_user_id?: number | null },
 ) => api.post<TravelRequest>(`/requests/${id}/room-sharing`, body).then((r) => r.data);
 
-export const confirmShare = (id: number, travellerId: number) =>
-  api
-    .post<TravelRequest>(`/requests/${id}/travellers/${travellerId}/confirm-share`)
-    .then((r) => r.data);
-
 /** The signed-in person's own in-app notices. My requests reads the room-share
  *  asks out of these. */
 export const fetchNotifications = () =>
@@ -512,8 +525,10 @@ export const fetchColleagues = () =>
 
 // --- admin decisions ------------------------------------------------------
 
-export const fetchQueueCounts = () =>
-  api.get<QueueCounts>('/requests/queue/counts').then((r) => r.data);
+/** Without filters, the whole queue; with them, only what matches - for tab
+ *  labels that agree with the filtered list under them. */
+export const fetchQueueCounts = (filters: { search?: string; priority?: RequestPriority } = {}) =>
+  api.get<QueueCounts>('/requests/queue/counts', { params: filters }).then((r) => r.data);
 
 /** Every request in one queue tab, not just a page, for the CSV export. Given
  *  longer than the default timeout: a big tab is read row by row as the admin. */
@@ -526,11 +541,6 @@ export const exportQueue = (params: {
     .get<QueueExport>('/requests/queue/export', { params, timeout: 120_000 })
     .then((r) => r.data);
 
-export const decideTraveller = (requestId: number, travellerId: number, body: DecisionBody) =>
-  api
-    .post<TravelRequest>(`/requests/${requestId}/travellers/${travellerId}/decide`, body)
-    .then((r) => r.data);
-
 /** Several travellers on one request in a single transaction — one failure rolls
  *  the whole set back, so the queue never shows a half-applied decision. */
 export const decideBatch = (requestId: number, decisions: BatchDecisionItem[]) =>
@@ -540,9 +550,6 @@ export const decideBatch = (requestId: number, decisions: BatchDecisionItem[]) =
 
 export const fetchTickets = (requestId: number) =>
   api.get<Ticket[]>(`/requests/${requestId}/tickets`).then((r) => r.data);
-
-export const fetchPendingTickets = () =>
-  api.get<Ticket[]>('/tickets/pending').then((r) => r.data);
 
 /** Upload runs extraction inline — a ticket takes a few seconds and the admin
  *  who uploaded it is waiting to review it. */
@@ -588,17 +595,6 @@ export const retryFailedEmail = () =>
   api
     .post<{ attempted: number; sent: number; still_failing: number }>('/notifications/retry')
     .then((r) => r.data);
-
-export interface EmailHealthResponse {
-  ok: boolean;
-  host?: string;
-  from?: string;
-  restricted_to?: string[] | null;
-  detail?: string;
-}
-
-export const fetchEmailHealth = () =>
-  api.get<EmailHealthResponse>('/health/email').then((r) => r.data);
 
 /** What the running API is using for email, and what is missing. No
  *  connection to the mail server, so cheap to load. */
@@ -646,12 +642,6 @@ export const runReminderJobs = () =>
 export const fetchAnalytics = (params: InsightFilters = {}) =>
   api.get<AnalyticsBundle>('/analytics', { params: repeatParams({ ...params }) }).then((r) => r.data);
 
-export const fetchCampaignSpend = () =>
-  api.get<CampaignSpend[]>('/analytics/campaigns').then((r) => r.data);
-
-export const fetchUncosted = () =>
-  api.get<UncostedRow[]>('/analytics/uncosted').then((r) => r.data);
-
 export const setCosts = (
   requestId: number,
   amounts: { traveller_id: number; amount: string | null; note?: string | null }[],
@@ -696,9 +686,6 @@ export const fetchLedgerGrants = () =>
 export const fetchAuditSummary = () =>
   api.get<AuditSummary>('/audit/summary').then((r) => r.data);
 
-export const fetchEntityHistory = (entityType: string, entityId: number) =>
-  api.get<AuditRow[]>(`/audit/entity/${entityType}/${entityId}`).then((r) => r.data);
-
 /** Fetched as a blob so the bearer token is attached — and because exporting
  *  the log writes its own VIEW_SENSITIVE row. */
 export const exportAudit = (params: { action?: string; entity_type?: string; limit?: number }) =>
@@ -715,20 +702,6 @@ export const fetchTravelHistory = (userId: number, params?: { since?: string; un
 /** Cities grouped by state, which is the shape the cascading picker wants. */
 export const fetchLocations = () =>
   api.get<Record<string, string[]>>('/locations').then((r) => r.data);
-
-export const addLocation = (state: string, city: string) =>
-  api.post<{ id: number; state: string; city: string }>('/locations', { state, city })
-    .then((r) => r.data);
-
-/** What a free-text place name probably meant, for rows written before the
- *  picker existed. */
-export const resolvePlace = (typed: string) =>
-  api
-    .get<{ typed: string; matched: boolean; city: string | null; state: string | null }>(
-      '/locations/resolve',
-      { params: { typed } },
-    )
-    .then((r) => r.data);
 
 // --- travel logs and the dashboard ------------------------------------------
 

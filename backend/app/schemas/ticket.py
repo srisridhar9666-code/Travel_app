@@ -15,19 +15,6 @@ from app.core.enums import (
 from app.schemas.common import UTCInstant
 
 
-class ExtractedField(BaseModel):
-    """One proposed value and how sure the model was.
-
-    Confidence travels with the value rather than in a separate block so the
-    review screen cannot accidentally show one without the other.
-    """
-
-    value: str | None = None
-    confidence: float | None = None
-    #: True when the value needs a human read before it is trusted.
-    needs_review: bool = False
-
-
 class TicketRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
