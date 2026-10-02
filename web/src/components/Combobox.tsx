@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Search } from 'lucide-react';
+import { Check, ChevronDown, Search, X } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
@@ -26,6 +26,11 @@ interface ComboboxProps {
   loading?: boolean;
   /** Offer "Use “what you typed”" when it matches nothing on the list. */
   allowCustom?: boolean;
+  /** Wording for that row, e.g. "Add new department “X”". */
+  customLabel?: (typed: string) => ReactNode;
+  /** Show an × that empties the field, for optional fields. Never shown on
+   *  a required one. */
+  clearable?: boolean;
   /** A fixed row at the foot of the list, such as "Other — type it in". */
   action?: ComboboxAction;
   emptyText?: string;
@@ -64,6 +69,8 @@ export function Combobox({
   required,
   loading,
   allowCustom,
+  customLabel,
+  clearable,
   action,
   emptyText = 'Nothing matches.',
   className,
@@ -173,13 +180,29 @@ export function Combobox({
             open && value && 'placeholder:text-text-muted',
           )}
         />
-        <ChevronDown
-          size={16}
-          className={cn(
-            'pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-text-subtle transition-transform',
-            open && 'rotate-180',
-          )}
-        />
+        {clearable && !required && value && !disabled && !open ? (
+          <button
+            type="button"
+            aria-label="Clear"
+            title="Clear"
+            // mousedown, not click, so the input does not take focus first.
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onChange('');
+            }}
+            className="absolute right-1.5 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md text-text-subtle hover:bg-surface-sunken hover:text-text"
+          >
+            <X size={15} />
+          </button>
+        ) : (
+          <ChevronDown
+            size={16}
+            className={cn(
+              'pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-text-subtle transition-transform',
+              open && 'rotate-180',
+            )}
+          />
+        )}
       </div>
 
       {open && !disabled && (
@@ -235,7 +258,13 @@ export function Combobox({
                 active === shown.length ? 'bg-surface-sunken text-text' : 'text-text-muted',
               )}
             >
-              Use “<span className="font-medium text-text">{typed}</span>” — not on the list
+              {customLabel ? (
+                customLabel(typed)
+              ) : (
+                <>
+                  Use “<span className="font-medium text-text">{typed}</span>” — not on the list
+                </>
+              )}
             </li>
           )}
 

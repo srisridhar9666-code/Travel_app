@@ -6,9 +6,15 @@ again without duplicating anything, an empty table repairs itself on first
 read, and a place typed under "Other" lands on the listed spelling whenever the
 list has it - conflict detection and co-stay compare places exactly.
 """
+from datetime import datetime
+
 from sqlalchemy import func, select
 
+from app.core.enums import ProjectStatus, RequestType, Role
 from app.models.location import Location
+from app.models.project import Project
+from app.models.request import TravelRequest
+from app.models.user import User
 from app.services import locations
 
 TENANT = "designboxed"
@@ -130,3 +136,67 @@ class TestCanonical:
 
     def test_blank_stays_blank(self, db):
         assert locations.canonical(db, TENANT, "Goa", "   ") == ("Goa", None)
+
+
+class TestBackfillingRequestStates:
+    """Requests saved before states were captured get one where it is certain."""
+
+    def request(self, db, kind, **fields):
+        project = Project(tenant_id=TENANT, name="Monsoon", code=f"MS-{kind}-{len(fields)}",
+                          status=ProjectStatus.ACTIVE)
+        person = User(tenant_id=TENANT, email=f"{kind.lower()}{len(fields)}@designboxed.com",
+                      full_name="Ravi Kumar", role=Role.GROUND_STAFF, password_hash="x")
+        db.add_all([project, person])
+        db.flush()
+        row = TravelRequest(tenant_id=TENANT, request_type=RequestType(kind),
+                            project_id=project.id, requester_id=person.id,
+                            start_at=datetime(2026, 8, 5, 9), **fields)
+        db.add(row)
+        db.commit()
+        return row
+
+    def test_a_flight_between_listed_cities_gets_both_states(self, db):
+        locations.seed(db, TENANT)
+        row = self.request(db, "LONG_DISTANCE", origin="Hyderabad", destination="Chennai")
+        assert locations.backfill_request_states(db, TENANT) == 1
+        assert (row.origin_state, row.destination_state) == ("Telangana", "Tamil Nadu")
+
+    def test_a_hotel_city_gets_its_state(self, db):
+        locations.seed(db, TENANT)
+        row = self.request(db, "HOTEL", hotel_city="Udaipur")
+        locations.backfill_request_states(db, TENANT)
+        assert row.hotel_state == "Rajasthan"
+
+    def test_an_abbreviation_is_understood(self, db):
+        locations.seed(db, TENANT)
+        row = self.request(db, "LONG_DISTANCE", origin="hyd", destination="Pune")
+        locations.backfill_request_states(db, TENANT)
+        assert (row.origin_state, row.destination_state) == ("Telangana", "Maharashtra")
+
+    def test_a_name_two_states_share_is_left_empty(self, db):
+        locations.seed(db, TENANT)
+        row = self.request(db, "HOTEL", hotel_city="Aurangabad")
+        assert locations.backfill_request_states(db, TENANT) == 0
+        assert row.hotel_state is None
+
+    def test_a_cab_is_never_touched(self, db):
+        """Its places are street addresses: "Shamshabad" alone would land in
+        Madhya Pradesh, which is wrong for Hyderabad's airport."""
+        locations.seed(db, TENANT)
+        row = self.request(db, "LOCAL_CAB", origin="Road No. 12, Banjara Hills",
+                           destination="Shamshabad")
+        assert locations.backfill_request_states(db, TENANT) == 0
+        assert (row.origin_state, row.destination_state) == (None, None)
+
+    def test_a_recorded_state_is_never_overwritten(self, db):
+        locations.seed(db, TENANT)
+        row = self.request(db, "LONG_DISTANCE", origin="Hyderabad", origin_state="Somewhere",
+                           destination="Chennai")
+        locations.backfill_request_states(db, TENANT)
+        assert (row.origin_state, row.destination_state) == ("Somewhere", "Tamil Nadu")
+
+    def test_a_second_run_changes_nothing(self, db):
+        locations.seed(db, TENANT)
+        self.request(db, "LONG_DISTANCE", origin="Hyderabad", destination="Chennai")
+        assert locations.backfill_request_states(db, TENANT) == 1
+        assert locations.backfill_request_states(db, TENANT) == 0

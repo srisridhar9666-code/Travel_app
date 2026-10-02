@@ -1,5 +1,4 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { format } from 'date-fns';
 import {
   AlertTriangle,
   ArrowRight,
@@ -11,23 +10,18 @@ import {
   Moon,
   Plane,
   Users,
-  X,
 } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { Combobox } from '@/components/Combobox';
-import {
-  DateRangePicker,
-  describeRange,
-  rangeFor,
-  type DateRange,
-} from '@/components/DateRangePicker';
+import type { RangePreset } from '@/components/DateRangePicker';
 import { EmailProblemBanner } from '@/components/EmailDeliveryCard';
+import { ReportFilterBar, stateChange, useReportFilters } from '@/components/ReportFilters';
 import { TravelHistoryPanel } from '@/components/TravelHistoryPanel';
 import { Columns, HorizontalBars, StatTile, formatMoney } from '@/components/charts';
-import { Button, Card, CardHeader, Field, PageHeader, Select, Skeleton } from '@/components/ui';
+import { Button, Card, CardHeader, PageHeader, Skeleton } from '@/components/ui';
 import { fetchFilterOptions, fetchInsights, fetchQueueCounts } from '@/lib/api';
+import { periodLabel } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
 import {
@@ -35,7 +29,6 @@ import {
   TRAVELLER_STATUS_LABELS,
   TRAVEL_MODE_LABELS,
   type Insights,
-  type RequestType,
   type TravelMode,
   type TravellerStatus,
 } from '@/types';
@@ -47,11 +40,6 @@ const STATUS_BAR: Record<TravellerStatus, string> = {
   REJECTED: 'bg-danger',
   CANCELLED: 'bg-border-strong',
 };
-
-function periodLabel(period: string, grain: Insights['grain']) {
-  if (grain === 'month') return format(new Date(`${period}-01T00:00:00`), 'MMM yy');
-  return format(new Date(`${period}T00:00:00`), 'd MMM');
-}
 
 /** Where the money and the movements stand by status, as one stacked bar. */
 function StatusStrip({ data }: { data: Insights['by_status'] }) {
@@ -84,155 +72,82 @@ function StatusStrip({ data }: { data: Insights['by_status'] }) {
   );
 }
 
+/** The menu here leads with the default: recent trips and the upcoming ones,
+ *  which is where requests still awaiting a decision sit. */
+const DASHBOARD_PRESETS: RangePreset[] = [
+  'last_30_next_30',
+  'this_month',
+  'last_month',
+  'last_7',
+  'last_30',
+  'last_90',
+  'next_30',
+  'this_year',
+  'all',
+  'custom',
+];
+
 function AdminDashboard() {
-  const [range, setRange] = useState<DateRange>(() => rangeFor('last_30'));
-  const [projectId, setProjectId] = useState('');
-  const [userId, setUserId] = useState<number | undefined>();
-  const [state, setState] = useState('');
-  const [requestType, setRequestType] = useState<RequestType | ''>('');
+  const f = useReportFilters('last_30_next_30');
   const [trendMetric, setTrendMetric] = useState<'movements' | 'spent'>('movements');
 
-  const queue = useQuery({ queryKey: ['queue-counts'], queryFn: fetchQueueCounts });
-  const options = useQuery({ queryKey: ['filter-options'], queryFn: fetchFilterOptions });
-
-  const filters = {
-    since: range.since || '2000-01-01',
-    until: range.until || undefined,
-    project_id: projectId ? Number(projectId) : undefined,
-    user_id: userId,
-    state: state || undefined,
-    request_type: requestType || undefined,
-  };
+  // This page has no error state of its own, so a failed load says so in a toast.
+  const queue = useQuery({ queryKey: ['queue-counts'], queryFn: fetchQueueCounts, meta: { errorToast: true } });
+  const options = useQuery({ queryKey: ['filter-options'], queryFn: fetchFilterOptions, meta: { errorToast: true } });
   const insights = useQuery({
-    queryKey: ['insights', filters],
-    queryFn: () => fetchInsights(filters),
+    queryKey: ['insights', f.apiFilters],
+    queryFn: () => fetchInsights(f.apiFilters),
     placeholderData: keepPreviousData,
+    meta: { errorToast: true },
   });
 
-  const people = new Map(
-    (options.data?.people ?? []).map((p) => [
-      p.employee_code ? `${p.full_name} (${p.employee_code})` : p.full_name,
-      p.id,
-    ]),
-  );
-  const personLabel = [...people.entries()].find(([, id]) => id === userId)?.[0] ?? '';
-  const sliced = Boolean(projectId || userId || state || requestType);
   const data = insights.data;
   const k = data?.kpis;
-
-  // Deep link into the log with the same window, for "who exactly?".
-  const logLink = (extra: Record<string, string> = {}) => {
-    const search = new URLSearchParams({
-      range: range.preset,
-      ...(range.preset === 'custom' ? { since: range.since, until: range.until } : {}),
-      ...(projectId ? { campaign: projectId } : {}),
-      ...(state ? { state } : {}),
-      ...(requestType ? { type: requestType } : {}),
-      ...(userId ? { user: String(userId) } : {}),
-      ...extra,
-    });
-    return `/travel-logs?${search.toString()}`;
-  };
+  const awaiting = data?.awaiting;
+  // The tile counts this slice; the queue's own total is every campaign, person
+  // and date. Say both when they differ, so "0" in a past window is not read as
+  // "nothing waiting" - and only blame the dates when nothing else is filtered.
+  const awaitingHint = awaiting
+    ? [
+        awaiting.with_conflicts > 0 && `${awaiting.with_conflicts} with a calendar clash`,
+        awaiting.partly_approved > 0 && `+${awaiting.partly_approved} partly approved`,
+        queue.data &&
+          queue.data.awaiting !== awaiting.requests &&
+          `${queue.data.awaiting} ${f.sliced ? 'in the whole queue' : 'across all dates'}`,
+      ]
+        .filter(Boolean)
+        .join(' · ') || 'In this view'
+    : undefined;
+  const toggleState = (label: string) =>
+    f.update(stateChange(options.data, f.city, f.state === label ? '' : label));
 
   return (
     <div className="space-y-6">
-      <Card className="p-4 sm:p-5">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          <Field label="When" htmlFor="dash-range" className="sm:col-span-2 lg:col-span-1">
-            <DateRangePicker
-              id="dash-range"
-              value={range}
-              onChange={setRange}
-              presets={['this_month', 'last_month', 'last_7', 'last_30', 'last_90', 'next_30', 'this_year', 'all', 'custom']}
-            />
-          </Field>
-          <Field label="Campaign" htmlFor="dash-campaign">
-            <Select id="dash-campaign" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-              <option value="">All campaigns</option>
-              {(options.data?.projects ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.code} — {p.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Employee" htmlFor="dash-person">
-            <Combobox
-              id="dash-person"
-              value={personLabel}
-              options={[...people.keys()]}
-              placeholder="Everyone"
-              emptyText="Nobody by that name."
-              onChange={(label) => setUserId(people.get(label))}
-              action={
-                userId
-                  ? { label: 'Everyone', icon: <Users size={16} className="mt-0.5 shrink-0 text-text-subtle" />, onSelect: () => setUserId(undefined) }
-                  : undefined
-              }
-            />
-          </Field>
-          <Field label="State" htmlFor="dash-state">
-            <Select id="dash-state" value={state} onChange={(e) => setState(e.target.value)}>
-              <option value="">All states</option>
-              {(options.data?.states ?? []).map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Type" htmlFor="dash-type">
-            <Select
-              id="dash-type"
-              value={requestType}
-              onChange={(e) => setRequestType(e.target.value as RequestType | '')}
-            >
-              <option value="">All types</option>
-              {(Object.keys(REQUEST_TYPE_LABELS) as RequestType[]).map((t) => (
-                <option key={t} value={t}>
-                  {REQUEST_TYPE_LABELS[t]}
-                </option>
-              ))}
-            </Select>
-          </Field>
-        </div>
-        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border pt-4 text-sm text-text-muted">
-          <span>
-            Showing <span className="font-medium text-text">{describeRange(range)}</span>
-            {insights.isFetching && !insights.isPending && <span className="ml-2 text-text-subtle">Updating…</span>}
-          </span>
-          {sliced && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setProjectId('');
-                setUserId(undefined);
-                setState('');
-                setRequestType('');
-              }}
-            >
-              <X size={14} />
-              Clear filters
-            </Button>
-          )}
-          <Link to={logLink()} className="ml-auto inline-flex items-center gap-1 font-medium text-brand-strong hover:underline">
+      <ReportFilterBar
+        filters={f}
+        options={options.data}
+        optionsLoading={options.isPending}
+        presets={DASHBOARD_PRESETS}
+        idPrefix="dash"
+        fetching={insights.isFetching && !insights.isPending}
+        footerAction={
+          <Link to={f.link('/travel-logs')} className="inline-flex items-center gap-1 font-medium text-brand-strong hover:underline">
             Open in travel logs <ArrowRight size={14} />
           </Link>
-        </div>
-      </Card>
+        }
+      />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Link to="/approvals" className="rounded-xl focus-visible:outline-offset-4">
+        <Link
+          to="/approvals"
+          title="Open the whole approvals queue"
+          className="rounded-xl focus-visible:outline-offset-4"
+        >
           <StatTile
             label="Awaiting a decision"
-            value={queue.data ? String(queue.data.awaiting) : '—'}
-            hint={
-              queue.data && queue.data.with_conflicts > 0
-                ? `${queue.data.with_conflicts} with a calendar clash`
-                : 'Right now, all dates'
-            }
-            tone={queue.data && queue.data.awaiting > 0 ? 'warning' : 'default'}
+            value={awaiting ? String(awaiting.requests) : '—'}
+            hint={awaitingHint}
+            tone={awaiting && awaiting.requests > 0 ? 'warning' : 'default'}
             icon={<CheckSquare size={15} />}
           />
         </Link>
@@ -258,7 +173,7 @@ function AdminDashboard() {
 
       {k && k.uncosted > 0 && (
         <Link
-          to="/analytics"
+          to={f.link('/analytics')}
           className="flex items-start gap-2.5 rounded-xl border border-warning/30 bg-warning-soft px-4 py-3 text-sm text-warning hover:underline"
         >
           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
@@ -317,27 +232,25 @@ function AdminDashboard() {
         <Card>
           <CardHeader title="Top destination states" description="Click one to filter the dashboard." />
           <div className="px-4 py-5 sm:px-5">
-            {data ? (
-              data.top_states.length ? (
-                <ul className="space-y-1">
-                  {data.top_states.map((row) => (
-                    <li key={row.label}>
-                      <button
-                        type="button"
-                        onClick={() => setState(state === row.label ? '' : row.label)}
-                        className={cn(
-                          'w-full rounded-md px-2 py-1.5 text-left hover:bg-surface-sunken',
-                          state === row.label && 'bg-surface-sunken',
-                        )}
-                      >
-                        <HorizontalBars data={[{ label: row.label, value: row.count }]} max={data.top_states[0].count} />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="py-6 text-center text-xs text-text-subtle">No travel in this period.</p>
-              )
+            {data && k ? (
+              <>
+                <HorizontalBars
+                  data={data.top_states.map((row) => ({ label: row.label, value: row.count, id: row.label }))}
+                  onSelect={(row) => toggleState(row.label)}
+                  selected={f.state}
+                  empty={
+                    k.movements > 0
+                      ? 'None of these trips has a destination state recorded.'
+                      : 'No travel in this period.'
+                  }
+                />
+                {k.unstated > 0 && data.top_states.length > 0 && (
+                  <p className="mt-3 px-2 text-2xs text-text-subtle">
+                    {k.unstated} {k.unstated === 1 ? 'trip has' : 'trips have'} no state recorded (raised before
+                    states were captured).
+                  </p>
+                )}
+              </>
             ) : (
               <Skeleton className="h-40 w-full" />
             )}
@@ -345,11 +258,13 @@ function AdminDashboard() {
         </Card>
 
         <Card>
-          <CardHeader title="Top places" description="Destinations and hotel cities." />
+          <CardHeader title="Top places" description="Destinations, cab drop cities and hotel cities." />
           <div className="px-4 py-5 sm:px-5">
             {data ? (
               <HorizontalBars
-                data={data.top_places.map((row) => ({ label: row.label, value: row.count }))}
+                data={data.top_places.map((row) => ({ label: row.label, value: row.count, id: row.label }))}
+                onSelect={(row) => f.update({ city: f.city === row.label ? undefined : row.label })}
+                selected={f.city}
                 empty="No travel in this period."
               />
             ) : (
@@ -391,7 +306,7 @@ function AdminDashboard() {
         {/* self-start: a short campaign list should not stretch to the
             height of the people list beside it. */}
         <Card className="self-start xl:col-span-2">
-          <CardHeader title="Campaigns" description="Movements and booked spend in this window." />
+          <CardHeader title="Campaigns" description="Movements and booked spend in this window. Click one to filter." />
           {data ? (
             data.by_campaign.length ? (
               <div className="overflow-x-auto">
@@ -408,8 +323,13 @@ function AdminDashboard() {
                     {data.by_campaign.map((row) => (
                       <tr
                         key={row.project_id}
-                        className="cursor-pointer hover:bg-surface-sunken/60"
-                        onClick={() => setProjectId(projectId === String(row.project_id) ? '' : String(row.project_id))}
+                        className={cn(
+                          'cursor-pointer hover:bg-surface-sunken/60',
+                          f.projectId === row.project_id && 'bg-surface-sunken',
+                        )}
+                        onClick={() =>
+                          f.update({ campaign: f.projectId === row.project_id ? undefined : String(row.project_id) })
+                        }
                       >
                         <td className="px-4 py-3 sm:px-5">
                           <span className="font-medium">{row.name}</span>
@@ -439,8 +359,9 @@ function AdminDashboard() {
                 <ul>
                   {data.top_travellers.map((row) => (
                     <li key={row.user_id}>
+                      {/* Travelled or going only, so the log's count matches this one. */}
                       <Link
-                        to={logLink({ user: String(row.user_id) })}
+                        to={f.link('/travel-logs', { user: String(row.user_id), status: 'travelled' })}
                         className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-surface-sunken"
                       >
                         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-surface-sunken text-xs font-semibold text-text-muted">
@@ -472,10 +393,10 @@ function AdminDashboard() {
         <Link to="/approvals" className="inline-flex items-center gap-1.5 font-medium text-brand-strong hover:underline">
           <Clock size={15} /> Approvals queue
         </Link>
-        <Link to="/analytics" className="inline-flex items-center gap-1.5 font-medium text-brand-strong hover:underline">
+        <Link to={f.link('/analytics')} className="inline-flex items-center gap-1.5 font-medium text-brand-strong hover:underline">
           <IndianRupee size={15} /> Cost analytics
         </Link>
-        <Link to={logLink()} className="inline-flex items-center gap-1.5 font-medium text-brand-strong hover:underline">
+        <Link to={f.link('/travel-logs')} className="inline-flex items-center gap-1.5 font-medium text-brand-strong hover:underline">
           <MapPin size={15} /> Travel logs
         </Link>
       </div>
@@ -497,7 +418,7 @@ export default function DashboardPage() {
         title={`Welcome back, ${firstName}`}
         description={
           isAdmin
-            ? 'Filter by dates, campaign, person or place - every number below follows.'
+            ? 'Filter by dates, campaign, person or destination. Every number below follows.'
             : 'Raise a request from My requests. Decisions and tickets arrive in your notifications.'
         }
         actions={

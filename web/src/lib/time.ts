@@ -77,9 +77,9 @@ export function todayInIndia(now: Date = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: APP_TIME_ZONE }).format(now);
 }
 
-/** A file-name stamp in India time: 2026-10-02-0035. */
-export function fileStamp(now: Date = new Date()): string {
-  const parts = Object.fromEntries(
+/** Year, month, day, hour and minute of a moment, in India time. */
+function indiaParts(date: Date): Record<string, string> {
+  return Object.fromEntries(
     new Intl.DateTimeFormat('en-GB', {
       timeZone: APP_TIME_ZONE,
       year: 'numeric',
@@ -89,8 +89,35 @@ export function fileStamp(now: Date = new Date()): string {
       minute: '2-digit',
       hourCycle: 'h23',
     })
-      .formatToParts(now)
+      .formatToParts(date)
       .map((part) => [part.type, part.value]),
   );
+}
+
+/** A file-name stamp in India time: 2026-10-02-0035. */
+export function fileStamp(now: Date = new Date()): string {
+  const parts = indiaParts(now);
   return `${parts.year}-${parts.month}-${parts.day}-${parts.hour}${parts.minute}`;
+}
+
+/** A recorded moment for a spreadsheet cell: "2026-10-02 00:35" in India time.
+ *  Sorts correctly as text, unlike "02 Oct 2026, 12:35 am". */
+export function sheetInstant(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const date = parseInstant(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const parts = indiaParts(date);
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** A chart axis label for a trend bucket: "Oct 26" for a month ("2026-10"),
+ *  "2 Oct" for a day or the first day of a week ("2026-10-02"). Buckets are
+ *  calendar dates already, so no time zone is involved. */
+export function periodLabel(period: string, grain: 'day' | 'week' | 'month'): string {
+  const [year, month, day] = period.split('-');
+  const name = MONTHS[Number(month) - 1] ?? month;
+  if (grain === 'month') return `${name} ${year.slice(2)}`;
+  return `${Number(day)} ${name}`;
 }

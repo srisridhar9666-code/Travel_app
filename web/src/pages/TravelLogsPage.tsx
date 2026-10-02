@@ -17,11 +17,12 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useSearchParams } from 'react-router-dom';
 
 import { Combobox } from '@/components/Combobox';
+import { CityField, peopleChoices, stateChange } from '@/components/ReportFilters';
 import {
   DateRangePicker,
   PRESET_LABELS,
@@ -42,10 +43,12 @@ import {
   Skeleton,
 } from '@/components/ui';
 import { MAX_LOG_ROWS, errorMessage, fetchFilterOptions, fetchTravelLogs } from '@/lib/api';
+import { downloadCsv, slug } from '@/lib/csv';
 import { routeLabel } from '@/lib/places';
 import { fileStamp } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import {
+  PRIORITY_LABELS,
   REQUEST_TYPE_LABELS,
   TRAVELLER_STATUS_LABELS,
   TRAVEL_MODE_LABELS,
@@ -54,19 +57,18 @@ import {
   type TravellerStatus,
 } from '@/types';
 
-/** Which traveller statuses each choice in the Status menu stands for. */
+/** Which traveller statuses each choice in the Status menu stands for. No
+ *  statuses sent means every status, which is the default. */
 const STATUS_CHOICES: Record<string, { label: string; statuses: TravellerStatus[] | undefined }> = {
-  travelled: { label: 'Travelled or going', statuses: undefined },
+  all: { label: 'Every status', statuses: undefined },
+  travelled: { label: 'Travelled or going', statuses: ['PENDING', 'APPROVED', 'BOOKED'] },
   BOOKED: { label: 'Booked', statuses: ['BOOKED'] },
   APPROVED: { label: 'Approved, not booked', statuses: ['APPROVED'] },
   PENDING: { label: 'Awaiting a decision', statuses: ['PENDING'] },
   REJECTED: { label: 'Rejected', statuses: ['REJECTED'] },
   CANCELLED: { label: 'Cancelled', statuses: ['CANCELLED'] },
-  all: {
-    label: 'Every status',
-    statuses: ['PENDING', 'APPROVED', 'BOOKED', 'REJECTED', 'CANCELLED'],
-  },
 };
+const DEFAULT_STATUS = 'all';
 
 /** Rows per page. The server caps a page at MAX_LOG_ROWS; these are what a
  *  person scrolls comfortably. */
@@ -120,28 +122,17 @@ function exportCsv(entries: TravelLogEntry[], label: string) {
   const header = [
     'Date', 'Time', 'Employee', 'Employee code', 'Type', 'From', 'From city', 'From state',
     'To', 'To city', 'To state', 'Hotel', 'Hotel state', 'Nights', 'Campaign', 'Status',
-    'PNR / booking ref', 'Travelled with', 'Cost (INR)', 'Reason',
+    'Priority', 'PNR / booking ref', 'Travelled with', 'Cost (INR)', 'Reason',
   ];
   const rows = entries.map((e) => [
-    e.started_on ?? '', e.start_at ? e.start_at.slice(11, 16) : '', e.full_name,
-    e.employee_code ?? '', kind(e), e.origin ?? '', e.pickup_city ?? '', e.origin_state ?? '',
-    e.destination ?? '', e.drop_city ?? '', e.destination_state ?? '', e.hotel_city ?? '',
-    e.hotel_state ?? '', e.nights ?? '', e.project_name ?? e.project_code ?? '',
-    TRAVELLER_STATUS_LABELS[e.status], e.booking_reference ?? '', e.companions.join('; '),
-    e.cost_amount ?? '', e.travel_reason ?? '',
+    e.started_on, e.start_at ? e.start_at.slice(11, 16) : '', e.full_name,
+    e.employee_code, kind(e), e.origin, e.pickup_city, e.origin_state,
+    e.destination, e.drop_city, e.destination_state, e.hotel_city,
+    e.hotel_state, e.nights, e.project_name ?? e.project_code,
+    TRAVELLER_STATUS_LABELS[e.status], e.priority ? PRIORITY_LABELS[e.priority] : '',
+    e.booking_reference, e.companions.join('; '), e.cost_amount, e.travel_reason,
   ]);
-  const escape = (value: unknown) => {
-    const text = String(value);
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-  };
-  const csv = [header, ...rows].map((row) => row.map(escape).join(',')).join('\n');
-  const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' }));
-  const link = document.createElement('a');
-  link.href = url;
-  const slug = label.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
-  link.download = `travel-log-${slug}-${fileStamp()}.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
+  downloadCsv(`travel-log-${slug(label)}-${fileStamp()}.csv`, header, rows);
 }
 
 function Pager({
@@ -232,7 +223,9 @@ export default function TravelLogsPage() {
   const projectId = params.get('campaign') ? Number(params.get('campaign')) : undefined;
   const requestType = (params.get('type') as RequestType) || undefined;
   const state = params.get('state') || '';
-  const statusKey = params.get('status') || 'travelled';
+  const city = params.get('city') || '';
+  const askedStatus = params.get('status') ?? '';
+  const statusKey = STATUS_CHOICES[askedStatus] ? askedStatus : DEFAULT_STATUS;
   const search = params.get('q') || '';
   const page = Math.max(1, Math.floor(Number(params.get('page'))) || 1);
   const pageSize = PAGE_SIZES.includes(Number(params.get('size')))
@@ -262,17 +255,7 @@ export default function TravelLogsPage() {
 
   const options = useQuery({ queryKey: ['filter-options'], queryFn: fetchFilterOptions });
 
-  const people = useMemo(() => {
-    const byLabel = new Map<string, number>();
-    for (const person of options.data?.people ?? []) {
-      const label = person.employee_code
-        ? `${person.full_name} (${person.employee_code})`
-        : person.full_name;
-      byLabel.set(label, person.id);
-    }
-    return byLabel;
-  }, [options.data]);
-  const personLabel = [...people.entries()].find(([, id]) => id === userId)?.[0] ?? '';
+  const person = peopleChoices(options.data, userId);
 
   const filters = {
     since: range.since || undefined,
@@ -281,7 +264,8 @@ export default function TravelLogsPage() {
     project_id: projectId,
     request_type: requestType,
     state: state || undefined,
-    status: STATUS_CHOICES[statusKey]?.statuses,
+    city: city || undefined,
+    status: STATUS_CHOICES[statusKey].statuses,
     search: search || undefined,
   };
 
@@ -299,12 +283,12 @@ export default function TravelLogsPage() {
     placeholderData: keepPreviousData,
   });
 
-  const activeCount = [userId, projectId, requestType, state, search, statusKey !== 'travelled'].filter(
+  const activeCount = [userId, projectId, requestType, state, city, search, statusKey !== DEFAULT_STATUS].filter(
     Boolean,
   ).length;
   const filtersActive = activeCount > 0;
   const rangeLabel = describeRange(range);
-  const heading = personLabel ? `${personLabel.replace(/ \(.*\)$/, '')} · ${rangeLabel}` : rangeLabel;
+  const heading = person.name ? `${person.name} · ${rangeLabel}` : rangeLabel;
 
   // The export is every match, fetched afresh, not the page on screen.
   const exporting = useMutation({
@@ -317,7 +301,7 @@ export default function TravelLogsPage() {
         toast.success(`Exported ${all.entries.length} ${all.entries.length === 1 ? 'row' : 'rows'}`);
       }
     },
-    onError: (err) => toast.error(errorMessage(err, 'Could not export the log.')),
+    meta: { errorFallback: 'Could not export the log.' },
   });
 
   const data = log.data;
@@ -349,7 +333,7 @@ export default function TravelLogsPage() {
       </div>
 
       <Card className="shrink-0 p-4 sm:p-5 lg:p-4">
-        {/* Seven filters stacked on a phone are a screen of form before the
+        {/* Nine filters stacked on a phone are a screen of form before the
             first row of results, so below lg they fold away. */}
         <button
           type="button"
@@ -371,19 +355,19 @@ export default function TravelLogsPage() {
         <div
           id="log-filters"
           className={cn(
-            'grid gap-4 sm:grid-cols-2 lg:grid lg:grid-cols-4 lg:gap-x-4 lg:gap-y-3',
+            'grid gap-4 sm:grid-cols-2 lg:grid lg:grid-cols-4 lg:gap-x-4 lg:gap-y-3 xl:grid-cols-5',
             showFilters ? 'mt-4 lg:mt-0' : 'hidden',
           )}
         >
           <Field label="Employee" htmlFor="log-person">
             <Combobox
               id="log-person"
-              value={personLabel}
-              options={[...people.keys()]}
+              value={person.label}
+              options={[...person.byLabel.keys()]}
               loading={options.isPending}
               placeholder="All employees"
               emptyText="Nobody by that name."
-              onChange={(label) => update({ user: String(people.get(label) ?? '') })}
+              onChange={(label) => update({ user: String(person.byLabel.get(label) ?? '') })}
               action={
                 userId
                   ? { label: 'All employees', icon: <Users size={16} className="mt-0.5 shrink-0 text-text-subtle" />, onSelect: () => update({ user: undefined }) }
@@ -441,8 +425,12 @@ export default function TravelLogsPage() {
               ))}
             </Select>
           </Field>
-          <Field label="State" htmlFor="log-state">
-            <Select id="log-state" value={state} onChange={(e) => update({ state: e.target.value })}>
+          <Field label="Destination state" htmlFor="log-state">
+            <Select
+              id="log-state"
+              value={state}
+              onChange={(e) => update(stateChange(options.data, city, e.target.value))}
+            >
               <option value="">All states</option>
               {(options.data?.states ?? []).map((s) => (
                 <option key={s} value={s}>
@@ -451,11 +439,21 @@ export default function TravelLogsPage() {
               ))}
             </Select>
           </Field>
+          <Field label="Destination city" htmlFor="log-city">
+            <CityField
+              id="log-city"
+              options={options.data}
+              state={state}
+              city={city}
+              loading={options.isPending}
+              onChange={(next) => update(next)}
+            />
+          </Field>
           <Field label="Status" htmlFor="log-status">
             <Select
               id="log-status"
               value={statusKey}
-              onChange={(e) => update({ status: e.target.value === 'travelled' ? undefined : e.target.value })}
+              onChange={(e) => update({ status: e.target.value === DEFAULT_STATUS ? undefined : e.target.value })}
             >
               {Object.entries(STATUS_CHOICES).map(([key, choice]) => (
                 <option key={key} value={key}>
@@ -506,7 +504,8 @@ export default function TravelLogsPage() {
             <h2 className="text-base font-semibold tracking-tight">{heading}</h2>
             <p className="mt-0.5 text-xs text-text-muted">
               {data
-                ? `${total} ${total === 1 ? 'movement' : 'movements'}${filtersActive ? ' matching the filters' : ''}`
+                ? `${total} ${total === 1 ? 'entry' : 'entries'}${filtersActive ? ' matching the filters' : ''}` +
+                  (statusKey === DEFAULT_STATUS ? '. Totals count only trips that went or are going ahead.' : '')
                 : 'Loading…'}
             </p>
           </div>
@@ -651,6 +650,9 @@ export default function TravelLogsPage() {
                       </td>
                       <td className="px-4 py-3 lg:py-2.5">
                         <Badge tone={STATUS_TONE[entry.status]}>{TRAVELLER_STATUS_LABELS[entry.status]}</Badge>
+                        {entry.priority === 'HIGH' && (
+                          <span className="mt-1 block text-xs font-medium text-danger">High priority</span>
+                        )}
                         {entry.booking_reference && (
                           <span className="mt-1 block font-mono text-xs text-text-subtle">PNR {entry.booking_reference}</span>
                         )}

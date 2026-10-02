@@ -1,7 +1,9 @@
 """Request and response bodies for cost entry and reporting (SOW §2 and §6)."""
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -74,7 +76,6 @@ class CostPreview(BaseModel):
 
 
 class Overview(BaseModel):
-    window_days: int
     spent: Decimal
     committed: Decimal
     average_per_traveller: Decimal
@@ -105,10 +106,33 @@ class TypeSpend(BaseModel):
     travellers: int
 
 
-class MonthSpend(BaseModel):
-    month: str
+class TrendPoint(BaseModel):
+    #: "2026-10" for a month, or the day (a week's Monday) as "2026-10-05".
+    period: str
     spent: Decimal
     travellers: int
+
+
+class PersonSpend(BaseModel):
+    user_id: int
+    full_name: str
+    employee_code: str | None = None
+    spent: Decimal
+    committed: Decimal
+    trips: int
+    uncosted: int
+
+
+class PlaceSpend(BaseModel):
+    #: What the bar reads. "State not recorded" / "City not recorded" when the
+    #: trip has none, and then `state`/`city` are null so the bar is not a filter.
+    label: str
+    state: str | None = None
+    city: str | None = None
+    spent: Decimal
+    travellers: int
+    trips: int
+    uncosted: int
 
 
 class DeploymentRow(BaseModel):
@@ -135,9 +159,20 @@ class AnalyticsBundle(BaseModel):
     confirmed.
     """
 
+    #: The span the trend covers: the chosen dates, or the data's own span
+    #: where a side was left open.
+    since: date
+    until: date
+    grain: Literal["day", "week", "month"]
     overview: Overview
+    trend: list[TrendPoint]
     by_campaign: list[CampaignSpend]
     by_type: list[TypeSpend]
-    by_month: list[MonthSpend]
+    by_person: list[PersonSpend]
+    by_state: list[PlaceSpend]
+    by_city: list[PlaceSpend]
     deployment: list[DeploymentRow]
+    #: Distinct people across `deployment`; its rows overlap for anyone
+    #: heading to more than one place.
+    deployed_people: int
     uncosted: list[UncostedRow]

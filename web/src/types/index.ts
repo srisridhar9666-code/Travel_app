@@ -1,7 +1,11 @@
 export type Role = 'SYSTEM_ADMIN' | 'ADMIN' | 'GROUND_STAFF';
 export type Designation = 'EXECUTIVE' | 'TEAM_LEAD' | 'MANAGER';
+/** OTHER and UNDISCLOSED only appear on people saved before gender had to be
+ *  chosen; new input is Male or Female (SELECTABLE_GENDERS). */
 export type Gender = 'MALE' | 'FEMALE' | 'OTHER' | 'UNDISCLOSED';
 export type ThemePreference = 'light' | 'dark' | 'system';
+/** Only ACTIVE can sign in. */
+export type UserStatus = 'ACTIVE' | 'DEACTIVATED' | 'LEFT' | 'DELETED';
 
 export interface UserProfile {
   id: number;
@@ -12,10 +16,17 @@ export interface UserProfile {
   designation: Designation | null;
   gender: Gender;
   phone: string | null;
+  base_state: string | null;
+  /** The city or constituency they are based in. */
   base_location: string | null;
+  department_id: number | null;
+  department_name: string | null;
   theme_preference: ThemePreference;
+  status: UserStatus;
   is_active: boolean;
   last_login_at: string | null;
+  /** When they last changed or reset their password. */
+  password_changed_at?: string | null;
 }
 
 export interface LoginResponse {
@@ -34,10 +45,17 @@ export interface UserRow {
   designation: Designation | null;
   gender: Gender;
   phone: string | null;
+  base_state: string | null;
+  /** The city or constituency they are based in. */
   base_location: string | null;
+  department_id: number | null;
+  department_name: string | null;
+  status: UserStatus;
+  status_changed_at: string | null;
+  /** Mirrors status === 'ACTIVE'. */
   is_active: boolean;
   /** The day they left. Starts the 90-day clock on their identity documents.
-   *  Distinct from is_active: a suspension is not a departure. */
+   *  Distinct from deactivation: a suspension is not a departure. */
   exited_on: string | null;
   last_login_at: string | null;
   created_at: string;
@@ -61,6 +79,8 @@ export interface InviteLink {
   email_sent?: boolean | null;
   /** Why it did not, in words an admin can act on. */
   email_detail?: string | null;
+  /** Which kind of link it is: a first invitation or a password reset. */
+  purpose?: 'INVITE' | 'PASSWORD_RESET' | null;
 }
 
 export interface TokenPreview {
@@ -106,9 +126,58 @@ export const DESIGNATION_LABELS: Record<Designation, string> = {
 export const GENDER_LABELS: Record<Gender, string> = {
   MALE: 'Male',
   FEMALE: 'Female',
-  OTHER: 'Other',
-  UNDISCLOSED: 'Prefer not to say',
+  OTHER: 'Other (old value)',
+  UNDISCLOSED: 'Not set',
 };
+
+/** What a form or import can record. */
+export const SELECTABLE_GENDERS = ['MALE', 'FEMALE'] as const satisfies readonly Gender[];
+
+export const USER_STATUS_LABELS: Record<UserStatus, string> = {
+  ACTIVE: 'Active',
+  DEACTIVATED: 'Deactivated',
+  LEFT: 'Left',
+  DELETED: 'Deleted',
+};
+
+/** One line each, true to what the server does. */
+export const USER_STATUS_HELP: Record<UserStatus, string> = {
+  ACTIVE: 'Can sign in and be added to trips.',
+  DEACTIVATED: 'Cannot sign in. For leave or a suspension; reactivate any time.',
+  LEFT: 'Cannot sign in. Their ID documents are deleted 90 days after the exit date.',
+  DELETED: 'Cannot sign in and is hidden from the team list. Travel history is kept; can be restored.',
+};
+
+export interface Department {
+  id: number;
+  name: string;
+  /** People in it, not counting deleted accounts. */
+  member_count: number;
+}
+
+/** Trips someone is on that are still live and not over yet - what to look at
+ *  before switching their account off. */
+export interface OpenTrips {
+  pending: number;
+  approved: number;
+  booked: number;
+  total: number;
+}
+
+/** What anyone may change about themselves without their password. */
+export interface ProfileUpdate {
+  full_name?: string;
+  phone?: string | null;
+}
+
+/** A password change signs out every other device, this one included; the
+ *  fresh token keeps this one signed in. */
+export interface PasswordChanged {
+  detail: string;
+  access_token: string;
+  token_type: string;
+  expires_at: string;
+}
 
 // --- Phase 2 ---------------------------------------------------------------
 
@@ -128,6 +197,10 @@ export interface Project {
   code: string;
   description: string | null;
   client_name: string | null;
+  state: string | null;
+  /** City or assembly constituency. */
+  city: string | null;
+  /** Free text from before state/city; shown until a state is picked. */
   location: string | null;
   status: ProjectStatus;
   start_date: string | null;
@@ -135,6 +208,12 @@ export interface Project {
   created_at: string;
   /** Whether this campaign still appears in the request dropdowns. */
   accepts_requests: boolean;
+  /** Requests raised against it, of any status. Only one with none can be
+   *  deleted. */
+  request_count: number;
+  /** The built-in "Other / not yet listed" campaign the request form needs.
+   *  It cannot be archived, deleted, recoded or paused. */
+  is_fallback: boolean;
 }
 
 export interface IdProof {
@@ -167,9 +246,13 @@ export interface ImportRow {
   email: string | null;
   role: Role;
   designation: Designation | null;
-  gender: Gender;
+  /** Null when the row is missing one, which is an error. */
+  gender: Gender | null;
   phone: string | null;
   employee_code: string | null;
+  /** A department name; a new one is created on import. */
+  department: string | null;
+  base_state: string | null;
   base_location: string | null;
   errors: string[];
   warnings: string[];
@@ -198,6 +281,17 @@ export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
   PAUSED: 'Paused',
   COMPLETED: 'Completed',
   ARCHIVED: 'Archived',
+};
+
+/** What each status does, in the words shown under the status picker. */
+export const PROJECT_STATUS_HELP: Record<ProjectStatus, string> = {
+  ACTIVE: 'Open: staff can pick it when they raise or edit a travel request.',
+  PAUSED:
+    'On hold: hidden from the request form, so no new requests or edits. Trips already raised can still be approved and booked.',
+  COMPLETED:
+    'Finished: no new requests, like Paused, but marks the work as done. Its trips and costs stay in every report.',
+  ARCHIVED:
+    'Put away: no new requests, hidden from staff and greyed out here. Nothing is deleted; Restore reopens it.',
 };
 
 export const ID_PROOF_LABELS: Record<IdProofType, string> = {
@@ -337,6 +431,8 @@ export interface TravelRequest {
   travel_reason: string | null;
   /** Set when the requester picked "Other" and typed a campaign name. */
   other_project_name: string | null;
+  /** How soon the requester needs a decision. */
+  priority: RequestPriority;
   notes: string | null;
   submitted_at: string | null;
   created_at: string;
@@ -373,6 +469,17 @@ export const TRAVEL_MODE_LABELS: Record<TravelMode, string> = {
   BUS: 'Bus',
   CAB: 'Cab',
 };
+
+export type RequestPriority = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export const PRIORITY_LABELS: Record<RequestPriority, string> = {
+  HIGH: 'High',
+  MEDIUM: 'Medium',
+  LOW: 'Low',
+};
+
+/** High first: the order admins work through them. */
+export const PRIORITY_ORDER: RequestPriority[] = ['HIGH', 'MEDIUM', 'LOW'];
 
 export const REQUEST_STATUS_LABELS: Record<RequestStatus, string> = {
   DRAFT: 'Draft',
@@ -428,6 +535,19 @@ export interface QueueCounts {
   expired: number;
   with_conflicts: number;
   edited: number;
+  /** High-priority requests still waiting on a decision. */
+  high_priority: number;
+  high_priority_awaiting: number;
+  high_priority_partial: number;
+}
+
+/** Every request in one admin queue tab, read as the admin (so with cost), for
+ *  the CSV. Capped on the server; `truncated` says when the cap was hit. */
+export interface QueueExport {
+  status: RequestStatus;
+  total: number;
+  truncated: boolean;
+  items: TravelRequest[];
 }
 
 export interface DecisionBody {
@@ -677,7 +797,6 @@ export const JOB_LABELS: Record<string, string> = {
  *  number is a float, and a float is how a report starts disagreeing with an
  *  invoice. */
 export interface Overview {
-  window_days: number;
   spent: string;
   committed: string;
   average_per_traveller: string;
@@ -708,10 +827,34 @@ export interface TypeSpend {
   travellers: number;
 }
 
-export interface MonthSpend {
-  month: string;
+/** One bucket of booked spend: "2026-10" for a month, or a day (a week's
+ *  Monday) as "2026-10-05". */
+export interface TrendPoint {
+  period: string;
   spent: string;
   travellers: number;
+}
+
+export interface PersonSpend {
+  user_id: number;
+  full_name: string;
+  employee_code: string | null;
+  spent: string;
+  committed: string;
+  trips: number;
+  uncosted: number;
+}
+
+/** Spend by destination state or city. `state`/`city` are null on the
+ *  "not recorded" row, which is not a filter. */
+export interface PlaceSpend {
+  label: string;
+  state: string | null;
+  city: string | null;
+  spent: string;
+  travellers: number;
+  trips: number;
+  uncosted: number;
 }
 
 export interface DeploymentRow {
@@ -731,11 +874,21 @@ export interface UncostedRow {
 }
 
 export interface AnalyticsBundle {
+  /** The span the trend covers: the chosen dates, or the data's own span
+   *  where a side was left open. */
+  since: string;
+  until: string;
+  grain: 'day' | 'week' | 'month';
   overview: Overview;
+  trend: TrendPoint[];
   by_campaign: CampaignSpend[];
   by_type: TypeSpend[];
-  by_month: MonthSpend[];
+  by_person: PersonSpend[];
+  by_state: PlaceSpend[];
+  by_city: PlaceSpend[];
   deployment: DeploymentRow[];
+  /** Distinct people across `deployment`; its rows overlap. */
+  deployed_people: number;
   uncosted: UncostedRow[];
 }
 
@@ -810,6 +963,8 @@ export interface TravelHistory {
 
 // --- travel logs and the dashboard ------------------------------------------
 
+/** The slice every report takes. State and city are the destination: where
+ *  the trip goes (a hotel's own state and city), never where it starts. */
 export interface InsightFilters {
   since?: string;
   until?: string;
@@ -817,6 +972,7 @@ export interface InsightFilters {
   project_id?: number;
   request_type?: RequestType;
   state?: string;
+  city?: string;
 }
 
 export interface TravelLogEntry {
@@ -848,6 +1004,7 @@ export interface TravelLogEntry {
   project_code: string | null;
   project_name: string | null;
   travel_reason: string | null;
+  priority: RequestPriority;
   booking_reference: string | null;
   companions: string[];
   cost_amount: string | null;
@@ -897,7 +1054,12 @@ export interface Insights {
     committed: string;
     uncosted: number;
     average_per_booking: string;
+    /** Travelled movements with no destination state on record. */
+    unstated: number;
   };
+  /** Requests in this slice still waiting on a decision (status Submitted),
+   *  plus partly-approved ones with someone still pending. */
+  awaiting: { requests: number; people: number; partly_approved: number; with_conflicts: number };
   trend: { period: string; movements: number; people: number; spent: string }[];
   by_status: { status: TravellerStatus; count: number }[];
   by_type: { request_type: RequestType; count: number; spent: string }[];
@@ -923,6 +1085,15 @@ export interface Insights {
 
 export interface FilterOptions {
   projects: { id: number; code: string; name: string; status: ProjectStatus }[];
-  people: { id: number; full_name: string; employee_code: string | null; is_active: boolean }[];
+  people: {
+    id: number;
+    full_name: string;
+    employee_code: string | null;
+    is_active: boolean;
+    status: UserStatus;
+  }[];
+  /** Destination states in use. */
   states: string[];
+  /** Destination cities in use, with the state each is in. */
+  cities: { state: string | null; city: string }[];
 }

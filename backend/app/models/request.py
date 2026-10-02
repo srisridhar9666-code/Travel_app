@@ -34,6 +34,7 @@ from app.core.enums import (
     NotificationCategory,
     NotificationChannel,
     NotificationStatus,
+    RequestPriority,
     RequestType,
     RoomSharingChoice,
     TravelMode,
@@ -110,6 +111,15 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
     #: schema, not the column, so the rows that predate it stay readable). An
     #: admin approving a trip needs to know what it is for.
     travel_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    #: How soon the requester needs a decision. They set it, and can change it
+    #: while the request is still editable; admins see high-priority work first.
+    priority: Mapped[RequestPriority] = mapped_column(
+        _enum(RequestPriority),
+        default=RequestPriority.MEDIUM,
+        server_default=RequestPriority.MEDIUM.value,
+        nullable=False,
+    )
 
     #: Set when the requester picked "Other" instead of a listed campaign and
     #: typed a name. The request still points at the seeded "Other" project so

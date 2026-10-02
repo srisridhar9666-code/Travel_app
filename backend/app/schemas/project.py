@@ -9,12 +9,35 @@ from app.core.enums import ProjectStatus
 from app.schemas.common import UTCInstant
 
 
+def _code(value: str | None) -> str | None:
+    """Blank means "make one for me"; anything typed is stored in one canonical
+    form, because codes get typed, spoken and pasted."""
+    if value is None or not value.strip():
+        return None
+    code = "-".join(value.strip().upper().split())
+    if len(code) < 2:
+        raise ValueError(
+            "A code needs at least 2 characters, or leave it blank and one is made for you."
+        )
+    return code
+
+
+def _dates_in_order(start: date | None, end: date | None) -> None:
+    if start and end and end < start:
+        raise ValueError("End date cannot be before the start date.")
+
+
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=2, max_length=160)
-    code: str = Field(min_length=2, max_length=40)
+    #: Optional. Left blank, the server makes one from the name's initials and
+    #: the start year (see services/projects.py).
+    code: str | None = Field(default=None, max_length=40)
     description: str | None = None
     client_name: str | None = Field(default=None, max_length=160)
-    location: str | None = Field(default=None, max_length=120)
+    #: Both optional; a campaign can cover a whole state. `location` is no
+    #: longer accepted - an old client that sends it is ignored.
+    state: str | None = Field(default=None, max_length=80)
+    city: str | None = Field(default=None, max_length=120)
     status: ProjectStatus = ProjectStatus.ACTIVE
     start_date: date | None = None
     end_date: date | None = None
@@ -26,23 +49,23 @@ class ProjectCreate(BaseModel):
 
     @field_validator("code")
     @classmethod
-    def _normalise_code(cls, value: str) -> str:
-        # Codes get typed, spoken and pasted, so store one canonical form.
-        return "-".join(value.strip().upper().split())
+    def _normalise_code(cls, value: str | None) -> str | None:
+        return _code(value)
 
     @model_validator(mode="after")
     def _dates_make_sense(self):
-        if self.start_date and self.end_date and self.end_date < self.start_date:
-            raise ValueError("End date cannot be before the start date.")
+        _dates_in_order(self.start_date, self.end_date)
         return self
 
 
 class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=160)
-    code: str | None = Field(default=None, min_length=2, max_length=40)
+    #: Sending a blank or null code regenerates it from the current name.
+    code: str | None = Field(default=None, max_length=40)
     description: str | None = None
     client_name: str | None = Field(default=None, max_length=160)
-    location: str | None = Field(default=None, max_length=120)
+    state: str | None = Field(default=None, max_length=80)
+    city: str | None = Field(default=None, max_length=120)
     status: ProjectStatus | None = None
     start_date: date | None = None
     end_date: date | None = None
@@ -50,12 +73,30 @@ class ProjectUpdate(BaseModel):
     @field_validator("name")
     @classmethod
     def _tidy(cls, value: str | None) -> str | None:
-        return " ".join(value.split()) if value else value
+        # A campaign cannot lose its name: the column is NOT NULL, so an
+        # explicit null would otherwise surface as a 500.
+        if value is None:
+            raise ValueError("A campaign needs a name.")
+        return " ".join(value.split())
 
     @field_validator("code")
     @classmethod
     def _normalise_code(cls, value: str | None) -> str | None:
-        return "-".join(value.strip().upper().split()) if value else value
+        return _code(value)
+
+    @field_validator("status")
+    @classmethod
+    def _status_given(cls, value: ProjectStatus | None) -> ProjectStatus:
+        if value is None:
+            raise ValueError("Pick a status.")
+        return value
+
+    @model_validator(mode="after")
+    def _dates_make_sense(self):
+        # Only when both are in this request; the router checks the merged
+        # values against what is already stored.
+        _dates_in_order(self.start_date, self.end_date)
+        return self
 
 
 class ProjectRead(BaseModel):
@@ -66,6 +107,10 @@ class ProjectRead(BaseModel):
     code: str
     description: str | None = None
     client_name: str | None = None
+    state: str | None = None
+    #: City or assembly constituency.
+    city: str | None = None
+    #: Free text from before state/city. Read-only; shown until a state is picked.
     location: str | None = None
     status: ProjectStatus
     start_date: date | None = None
@@ -74,6 +119,12 @@ class ProjectRead(BaseModel):
 
     #: Whether this campaign still appears in the request dropdowns.
     accepts_requests: bool
+    #: Requests of any status raised against it. Only one with none can be
+    #: deleted.
+    request_count: int = 0
+    #: The built-in "Other / not yet listed" campaign: cannot be archived,
+    #: deleted, recoded or paused.
+    is_fallback: bool = False
 
 
 class ProjectListResponse(BaseModel):

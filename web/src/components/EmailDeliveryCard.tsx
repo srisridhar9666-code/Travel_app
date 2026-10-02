@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, CheckCircle2, Info, Mail, Send, XCircle } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
+import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
 
 import { Badge, Button, Card, CardHeader, Input, Skeleton } from '@/components/ui';
@@ -192,7 +193,16 @@ export default function EmailDeliveryCard() {
 
   const test = useMutation({
     mutationFn: () => sendTestEmail(to.trim() || undefined),
+    meta: { errorFallback: 'Could not run the test.' },
     onSuccess: (result) => {
+      // A 200 can still be a failed send: the server ran the test and reports
+      // where it stopped. The card below keeps the full detail and the hint.
+      if (result.ok) {
+        toast.success(`Test email sent to ${result.to}`);
+      } else {
+        const stage = STAGE_LABELS[result.stage] ?? result.stage;
+        toast.error(`Test email not sent — stopped at ${stage.toLowerCase()}`);
+      }
       queryClient.setQueryData(['email-status'], {
         problem: status.data?.problem ?? null,
         settings: result.settings,

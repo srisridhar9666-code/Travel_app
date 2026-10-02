@@ -1,11 +1,11 @@
 """Request and response bodies for the authentication endpoints."""
 from __future__ import annotations
 
-
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.core.enums import Designation, Gender, Role
+from app.core.enums import Designation, Gender, Role, UserStatus
 from app.schemas.common import UTCInstant
+from app.schemas.user import PersonName, PhoneNumber, WorkEmail
 
 
 class LoginRequest(BaseModel):
@@ -26,10 +26,17 @@ class UserProfile(BaseModel):
     designation: Designation | None = None
     gender: Gender
     phone: str | None = None
+    base_state: str | None = None
     base_location: str | None = None
+    department_id: int | None = None
+    department_name: str | None = None
     theme_preference: str
+    status: UserStatus
     is_active: bool
     last_login_at: UTCInstant | None = None
+    #: When they last changed or reset their password, for "last changed" on
+    #: the profile page.
+    password_changed_at: UTCInstant | None = None
 
 
 class LoginResponse(BaseModel):
@@ -49,6 +56,38 @@ class SetPasswordRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=1, max_length=256)
+
+
+class PasswordChangedResponse(BaseModel):
+    """A password change signs out every other device - including the token
+    that made the request - so the caller gets a fresh one to carry on with."""
+
+    detail: str
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: UTCInstant
+
+
+class ProfileUpdateRequest(BaseModel):
+    """What anyone may change about themselves without a password.
+
+    Unknown fields are refused, not ignored: a body carrying `role` or
+    `status` is someone trying something, and should hear no.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: PersonName | None = Field(default=None, min_length=2, max_length=160)
+    phone: PhoneNumber = Field(default=None, max_length=32)
+
+
+class EmailChangeRequest(BaseModel):
+    """The sign-in address is where reset links go, so changing it needs the
+    current password: a session left open on a shared phone must not be enough
+    to take the account over for good."""
+
+    new_email: WorkEmail
+    current_password: str = Field(min_length=1, max_length=256)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -92,3 +131,5 @@ class InviteLinkResponse(BaseModel):
     #: Why it did not, when it did not - "EMAIL_ENABLED is not true", an SMTP
     #: authentication error - so the admin can fix the cause, not just retry.
     email_detail: str | None = None
+    #: INVITE or PASSWORD_RESET, so the admin is told which kind of link it is.
+    purpose: str | None = None

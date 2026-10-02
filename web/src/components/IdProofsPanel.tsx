@@ -12,6 +12,7 @@ import {
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import toast from 'react-hot-toast';
 
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Badge, Button, EmptyState, Field, Input, Select, Skeleton } from '@/components/ui';
 import {
   addIdProof,
@@ -36,6 +37,7 @@ function fileSize(bytes: number | null) {
 
 function ProofRow({ proof, onDeleted }: { proof: IdProof; onDeleted: () => void }) {
   const [revealed, setRevealed] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const timerRef = useRef<number | null>(null);
 
   // Clear the timer if the panel closes while a number is on screen.
@@ -54,7 +56,6 @@ function ProofRow({ proof, onDeleted }: { proof: IdProof; onDeleted: () => void 
       if (timerRef.current) window.clearTimeout(timerRef.current);
       timerRef.current = window.setTimeout(() => setRevealed(null), REVEAL_SECONDS * 1000);
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const download = useMutation({
@@ -67,16 +68,15 @@ function ProofRow({ proof, onDeleted }: { proof: IdProof; onDeleted: () => void 
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
       toast('Download recorded in the activity log.', { icon: '📋' });
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const remove = useMutation({
     mutationFn: () => deleteIdProof(proof.id),
     onSuccess: () => {
-      toast.success('Document deleted');
+      toast.success(`${ID_PROOF_LABELS[proof.proof_type]} deleted`);
+      setConfirmingDelete(false);
       onDeleted();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   if (proof.is_purged) {
@@ -149,14 +149,25 @@ function ProofRow({ proof, onDeleted }: { proof: IdProof; onDeleted: () => void 
           title="Delete"
           className="text-danger hover:text-danger"
           loading={remove.isPending}
-          onClick={() => {
-            if (window.confirm(`Delete this ${ID_PROOF_LABELS[proof.proof_type]} permanently?`))
-              remove.mutate();
-          }}
+          onClick={() => setConfirmingDelete(true)}
         >
           <Trash2 size={14} />
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={confirmingDelete}
+        title={`Delete this ${ID_PROOF_LABELS[proof.proof_type]}?`}
+        confirmLabel="Delete document"
+        loading={remove.isPending}
+        onConfirm={() => remove.mutate()}
+        onClose={() => setConfirmingDelete(false)}
+      >
+        <p>
+          The number{proof.has_file ? ' and the scanned copy' : ''} will be removed for good.
+          This cannot be undone.
+        </p>
+      </ConfirmDialog>
     </li>
   );
 }
@@ -184,8 +195,9 @@ export function IdProofsPanel({ user }: { user: UserRow }) {
         { proof_type: proofType, number: number.trim(), expires_on: expiresOn || undefined },
         file,
       ),
+    meta: { errorFallback: 'Could not save this document.' },
     onSuccess: () => {
-      toast.success('Document added');
+      toast.success(`${ID_PROOF_LABELS[proofType]} added`);
       setAdding(false);
       setNumber('');
       setExpiresOn('');

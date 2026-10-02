@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { AlertTriangle, BedDouble, Car, Plane, Search, Users } from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { PlacePicker } from '@/components/PlacePicker';
@@ -17,10 +17,14 @@ import {
 import { cn } from '@/lib/utils';
 import {
   DESIGNATION_LABELS,
+  PRIORITY_LABELS,
+  PRIORITY_ORDER,
   REQUEST_TYPE_LABELS,
   TRAVEL_MODE_LABELS,
   type CoStayMatch,
+  type Project,
   type RequestConflict,
+  type RequestPriority,
   type RequestType,
   type TravelMode,
   type TravelRequest,
@@ -33,6 +37,7 @@ interface FormState {
   project_id: string;
   other_project_name: string;
   travel_reason: string;
+  priority: RequestPriority;
   traveller_ids: number[];
   mode: TravelMode;
   origin: string;
@@ -59,6 +64,7 @@ const BLANK: FormState = {
   project_id: '',
   other_project_name: '',
   travel_reason: '',
+  priority: 'MEDIUM',
   traveller_ids: [],
   mode: 'FLIGHT',
   origin: '',
@@ -83,6 +89,7 @@ function fromRequest(request: TravelRequest): FormState {
     project_id: String(request.project_id),
     other_project_name: request.other_project_name ?? '',
     travel_reason: request.travel_reason ?? '',
+    priority: request.priority ?? 'MEDIUM',
     traveller_ids: request.travellers
       .filter((t) => !t.is_requester)
       .map((t) => t.user_id),
@@ -117,6 +124,7 @@ function toPayload(form: FormState, isDraft: boolean): RequestPayload {
     project_id: Number(form.project_id),
     other_project_name: form.other_project_name.trim() || null,
     travel_reason: form.travel_reason.trim(),
+    priority: form.priority,
     traveller_ids: form.traveller_ids,
     notes: form.notes || null,
     is_draft: isDraft,
@@ -172,6 +180,11 @@ function dropPlace(form: FormState): { state: string; city: string } {
  *  alongside for an admin to triage. */
 const OTHER_CODE = 'OTHER';
 
+/** The server flags it; the code check only covers a server that predates the
+ *  flag. */
+const isFallbackCampaign = (project: { code: string; is_fallback?: boolean }) =>
+  project.is_fallback ?? project.code === OTHER_CODE;
+
 /** Enough filled in for a conflict check to mean anything. */
 function worthChecking(form: FormState): boolean {
   if (!form.project_id) return false;
@@ -224,6 +237,13 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
   const [form, setForm] = useState<FormState>(BLANK);
   const [error, setError] = useState<string | null>(null);
   const [peopleQuery, setPeopleQuery] = useState('');
+  const errorRef = useRef<HTMLParagraphElement>(null);
+
+  // The error box sits at the bottom of a long modal, so a failed save on a
+  // phone would otherwise look like nothing happened.
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [error]);
 
   const projects = useQuery({
     queryKey: ['projects', 'for-requests'],
@@ -246,13 +266,28 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
   // fewer decision on a phone.
   useEffect(() => {
     const list = projects.data?.items ?? [];
-    const real = list.filter((p) => p.code !== OTHER_CODE);
+    const real = list.filter((p) => !isFallbackCampaign(p));
     if (!editing && !form.project_id && real.length === 1) {
       setForm((f) => (f.project_id ? f : { ...f, project_id: String(real[0].id) }));
     }
   }, [projects.data, editing, form.project_id]);
 
-  const otherProject = (projects.data?.items ?? []).find((p) => p.code === OTHER_CODE);
+  const otherProject = (projects.data?.items ?? []).find(isFallbackCampaign);
+  // Names are not unique, so two campaigns that would read the same in the
+  // picker get their code added to tell them apart.
+  const campaignLabels = useMemo(() => {
+    const list = (projects.data?.items ?? []).filter((project) => !isFallbackCampaign(project));
+    const label = (project: Project) =>
+      project.state ? `${project.name} · ${project.state}` : project.name;
+    const seen = new Map<string, number>();
+    for (const project of list) seen.set(label(project), (seen.get(label(project)) ?? 0) + 1);
+    return new Map(
+      list.map((project) => [
+        project.id,
+        (seen.get(label(project)) ?? 0) > 1 ? `${label(project)} (${project.code})` : label(project),
+      ]),
+    );
+  }, [projects.data]);
   const isOther = Boolean(otherProject && form.project_id === String(otherProject.id));
 
   const payload = useMemo(() => toPayload(form, false), [form]);
@@ -284,7 +319,9 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
       return editing ? editRequest(editing.id, body) : createRequest(body);
     },
     onSuccess: onSaved,
+    // The global toast and the inline box say the same thing.
     onError: (err) => setError(errorMessage(err, 'Could not save this request.')),
+    meta: { errorFallback: 'Could not save this request.' },
   });
 
   const submit = (event: FormEvent) => {
@@ -390,10 +427,11 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
           >
             <option value="">Choose a campaign</option>
             {(projects.data?.items ?? [])
-              .filter((project) => project.code !== OTHER_CODE)
+              .filter((project) => !isFallbackCampaign(project))
               .map((project) => (
+                // The name leads: staff should never need to decode a code.
                 <option key={project.id} value={project.id}>
-                  {project.code} — {project.name}
+                  {campaignLabels.get(project.id)}
                 </option>
               ))}
             {otherProject && (
@@ -438,6 +476,36 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
             placeholder="Store audit at 12 outlets; client walkthrough on the 14th."
             className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text transition-colors placeholder:text-text-subtle hover:border-border-strong"
           />
+        </Field>
+
+        <Field
+          label="Priority"
+          required
+          hint="How soon do you need a decision? Admins see high-priority requests first."
+        >
+          <div className="grid grid-cols-3 gap-2" role="group" aria-label="Priority">
+            {PRIORITY_ORDER.map((priority) => {
+              const active = form.priority === priority;
+              return (
+                <button
+                  key={priority}
+                  type="button"
+                  onClick={() => setForm({ ...form, priority })}
+                  aria-pressed={active}
+                  className={cn(
+                    'rounded-md border px-2 py-2 text-xs transition-colors',
+                    active
+                      ? priority === 'HIGH'
+                        ? 'border-danger bg-danger-soft font-medium text-danger'
+                        : 'border-primary bg-surface-sunken font-medium text-text'
+                      : 'border-border text-text-muted hover:border-border-strong hover:text-text',
+                  )}
+                >
+                  {PRIORITY_LABELS[priority]}
+                </button>
+              );
+            })}
+          </div>
         </Field>
 
         {isHotel ? (
@@ -709,7 +777,11 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
         )}
 
         {error && (
-          <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-xs text-danger">
+          <p
+            ref={errorRef}
+            role="alert"
+            className="rounded-md bg-danger-soft px-3 py-2 text-xs text-danger"
+          >
             {error}
           </p>
         )}

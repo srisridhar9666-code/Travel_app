@@ -10,6 +10,7 @@ import type {
   Colleague,
   CoStayMatch,
   CostPreview,
+  Department,
   EmailStatus,
   EmailTestResult,
   FilterOptions,
@@ -26,11 +27,16 @@ import type {
   LoginResponse,
   NotificationPreferences,
   NotificationLedger,
+  OpenTrips,
   Paginated,
+  PasswordChanged,
+  ProfileUpdate,
   DecisionBody,
   Project,
   QueueCounts,
+  QueueExport,
   RequestConflict,
+  RequestPriority,
   RequestRevision,
   RequestType,
   RetentionStatus,
@@ -45,6 +51,7 @@ import type {
   UncostedRow,
   UserProfile,
   UserRow,
+  UserStatus,
 } from '@/types';
 
 /**
@@ -56,10 +63,11 @@ export const api = axios.create({
   timeout: 30_000,
 });
 
-/** Set by the auth store; kept out of it to avoid an import cycle. */
-let onUnauthorized: (() => void) | null = null;
+/** Set by the auth store; kept out of it to avoid an import cycle. Called
+ *  with the server's reason, e.g. "Your account is deactivated...". */
+let onUnauthorized: ((detail?: string) => void) | null = null;
 
-export function setUnauthorizedHandler(handler: () => void) {
+export function setUnauthorizedHandler(handler: (detail?: string) => void) {
   onUnauthorized = handler;
 }
 
@@ -78,27 +86,82 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (response) => response,
-  (error: AxiosError) => {
-    // A 401 means the session is gone - expired, revoked, or the account was
-    // deactivated. Anything else is the caller's to handle.
-    if (error.response?.status === 401 && onUnauthorized) {
-      onUnauthorized();
+  async (error: AxiosError) => {
+    // Downloads ask for a Blob, so their error body arrives as one too. The
+    // server still sent JSON; read it so the reason reaches the person instead
+    // of "Something went wrong."
+    const body = error.response?.data;
+    if (body instanceof Blob && body.type.includes('json')) {
+      try {
+        error.response!.data = JSON.parse(await body.text());
+      } catch {
+        // Keep the blob; errorMessage falls back.
+      }
+    }
+
+    // A 401 means the session is gone - expired, revoked, a password changed
+    // elsewhere, or the account was deactivated. Only a request that carried
+    // the token in use now counts: one sent just before a password change
+    // (with the old token) must not sign out the person who changed it.
+    const sent = error.config?.headers?.Authorization;
+    if (
+      error.response?.status === 401 &&
+      onUnauthorized &&
+      (!accessToken || !sent || sent === `Bearer ${accessToken}`)
+    ) {
+      const detail = (error.response.data as { detail?: unknown } | undefined)?.detail;
+      onUnauthorized(typeof detail === 'string' ? detail : undefined);
     }
     return Promise.reject(error);
   },
 );
+
+/** "full_name" -> "Full name", for naming the field a 422 is about. */
+function fieldLabel(loc: unknown): string | null {
+  if (!Array.isArray(loc) || loc.length === 0) return null;
+  const last = loc[loc.length - 1];
+  if (typeof last !== 'string' || last === 'body' || last === 'query') return null;
+  const words = last.replace(/_id$/, '').replace(/_/g, ' ').trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : null;
+}
 
 /** Pull a readable message out of a FastAPI error body. */
 export function errorMessage(error: unknown, fallback = 'Something went wrong.'): string {
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail;
     if (typeof detail === 'string') return detail;
-    // 422 bodies are a list of per-field validation errors.
+    // 422 bodies are a list of per-field validation errors. Pydantic's wording
+    // ("Value error, ...", no field name) is for developers; say which field
+    // and what is wrong with it.
     if (Array.isArray(detail) && detail.length > 0) {
-      const first = detail[0];
-      if (typeof first?.msg === 'string') return first.msg;
+      const first = detail[0] as {
+        msg?: unknown;
+        type?: unknown;
+        loc?: unknown;
+        ctx?: Record<string, unknown>;
+      };
+      if (typeof first?.msg === 'string') {
+        const message = first.msg.replace(/^(Value error|Assertion failed), /, '');
+        const label = fieldLabel(first.loc);
+        if (!label) return message;
+        switch (first.type) {
+          case 'missing':
+            return `${label} is required.`;
+          case 'string_too_short':
+            return `${label} must be at least ${first.ctx?.min_length} characters.`;
+          case 'string_too_long':
+            return `${label} must be at most ${first.ctx?.max_length} characters.`;
+          case 'value_error':
+            return message;
+          default:
+            return `${label}: ${message}`;
+        }
+      }
     }
-    if (!error.response) return 'Cannot reach the server. Is the API running?';
+    if (error.code === 'ECONNABORTED') {
+      return 'The server took too long to answer. Please try again.';
+    }
+    if (!error.response) return 'Cannot reach the server. Check your connection and try again.';
   }
   return fallback;
 }
@@ -135,8 +198,20 @@ export const fetchMe = () => api.get<UserProfile>('/auth/me').then((r) => r.data
 export const saveThemePreference = (theme_preference: ThemePreference) =>
   api.patch<UserProfile>('/auth/me/theme', { theme_preference }).then((r) => r.data);
 
+/** Signs out every other device; the answer carries a fresh token for this
+ *  one (swap it in with the auth store's replaceToken). */
 export const changePassword = (current_password: string, new_password: string) =>
-  api.post('/auth/change-password', { current_password, new_password }).then((r) => r.data);
+  api
+    .post<PasswordChanged>('/auth/change-password', { current_password, new_password })
+    .then((r) => r.data);
+
+export const updateMyProfile = (payload: ProfileUpdate) =>
+  api.patch<UserProfile>('/auth/me', payload).then((r) => r.data);
+
+export const changeMyEmail = (new_email: string, current_password: string) =>
+  api
+    .post<UserProfile>('/auth/me/email', { new_email, current_password })
+    .then((r) => r.data);
 
 export const previewToken = (token: string) =>
   api.get<TokenPreview>(`/auth/token/${token}`).then((r) => r.data);
@@ -153,6 +228,9 @@ export interface UserQuery {
   search?: string;
   role?: string;
   is_active?: boolean;
+  /** Without it, everyone except deleted accounts. */
+  status?: UserStatus;
+  department_id?: number;
   page?: number;
   page_size?: number;
 }
@@ -165,23 +243,57 @@ export interface UserPayload {
   full_name: string;
   role: string;
   designation?: string | null;
-  gender?: string;
+  /** MALE or FEMALE; required on create. */
+  gender: string;
   phone?: string | null;
   employee_code?: string | null;
+  base_state?: string | null;
+  /** The city or constituency. */
   base_location?: string | null;
+  department_id?: number | null;
 }
+
+/** A partial update. Status is not here: it has its own endpoint. */
+export type UserUpdatePayload = Partial<UserPayload>;
 
 export const createUser = (payload: UserPayload) =>
   api.post<InviteLink>('/users', payload).then((r) => r.data);
 
-export const updateUser = (id: number, payload: Partial<UserPayload> & { is_active?: boolean }) =>
+export const updateUser = (id: number, payload: UserUpdatePayload) =>
   api.patch<UserRow>(`/users/${id}`, payload).then((r) => r.data);
+
+export interface StatusChange {
+  status: UserStatus;
+  /** Left (or Deleted) only; defaults to today on the server. */
+  exited_on?: string | null;
+  reason?: string | null;
+}
+
+export const changeUserStatus = (id: number, change: StatusChange) =>
+  api.post<UserRow>(`/users/${id}/status`, change).then((r) => r.data);
+
+export const fetchUserOpenTrips = (id: number) =>
+  api.get<OpenTrips>(`/users/${id}/open-trips`).then((r) => r.data);
 
 export const reinviteUser = (id: number) =>
   api.post<InviteLink>(`/users/${id}/reinvite`).then((r) => r.data);
 
 export const unlockUser = (id: number) =>
   api.post<UserRow>(`/users/${id}/unlock`).then((r) => r.data);
+
+// --- departments ----------------------------------------------------------
+
+export const fetchDepartments = () =>
+  api.get<Department[]>('/departments').then((r) => r.data);
+
+/** Returns the existing department when the name is already taken (any case). */
+export const createDepartment = (name: string) =>
+  api.post<Department>('/departments', { name }).then((r) => r.data);
+
+export const renameDepartment = (id: number, name: string) =>
+  api.patch<Department>(`/departments/${id}`, { name }).then((r) => r.data);
+
+export const deleteDepartment = (id: number) => api.delete(`/departments/${id}`);
 
 // --- audit ----------------------------------------------------------------
 
@@ -210,10 +322,14 @@ export interface ProjectQuery {
 
 export interface ProjectPayload {
   name: string;
-  code: string;
+  /** Blank or null: the server makes one from the name's initials and the
+   *  start year. */
+  code?: string | null;
   description?: string | null;
   client_name?: string | null;
-  location?: string | null;
+  state?: string | null;
+  /** City or assembly constituency. */
+  city?: string | null;
   status?: string;
   start_date?: string | null;
   end_date?: string | null;
@@ -233,6 +349,10 @@ export const archiveProject = (id: number) =>
 
 export const restoreProject = (id: number) =>
   api.post<Project>(`/projects/${id}/restore`).then((r) => r.data);
+
+/** Only a campaign with no requests; the server answers 409 otherwise. */
+export const deleteProject = (id: number) =>
+  api.delete(`/projects/${id}`).then(() => undefined);
 
 // --- identity documents ---------------------------------------------------
 
@@ -305,6 +425,9 @@ export interface RequestQuery {
   type?: string;
   project_id?: number;
   search?: string;
+  priority?: RequestPriority;
+  /** 'priority' puts high first, then medium, then low; newest first within each. */
+  sort?: 'newest' | 'priority';
   page?: number;
   page_size?: number;
 }
@@ -330,6 +453,11 @@ export interface RequestPayload {
   hotel_city?: string | null;
   check_in?: string | null;
   check_out?: string | null;
+  travel_reason?: string;
+  /** Only with the fallback "Other" campaign: the name the requester typed. */
+  other_project_name?: string | null;
+  /** Defaults to MEDIUM on the server when left out. */
+  priority?: RequestPriority;
   notes?: string | null;
   is_draft?: boolean;
 }
@@ -386,6 +514,17 @@ export const fetchColleagues = () =>
 
 export const fetchQueueCounts = () =>
   api.get<QueueCounts>('/requests/queue/counts').then((r) => r.data);
+
+/** Every request in one queue tab, not just a page, for the CSV export. Given
+ *  longer than the default timeout: a big tab is read row by row as the admin. */
+export const exportQueue = (params: {
+  status: string;
+  search?: string;
+  priority?: RequestPriority;
+}) =>
+  api
+    .get<QueueExport>('/requests/queue/export', { params, timeout: 120_000 })
+    .then((r) => r.data);
 
 export const decideTraveller = (requestId: number, travellerId: number, body: DecisionBody) =>
   api
@@ -504,8 +643,8 @@ export const runReminderJobs = () =>
 
 // --- cost and analytics ---------------------------------------------------
 
-export const fetchAnalytics = (params: { days?: number; months?: number } = {}) =>
-  api.get<AnalyticsBundle>('/analytics', { params }).then((r) => r.data);
+export const fetchAnalytics = (params: InsightFilters = {}) =>
+  api.get<AnalyticsBundle>('/analytics', { params: repeatParams({ ...params }) }).then((r) => r.data);
 
 export const fetchCampaignSpend = () =>
   api.get<CampaignSpend[]>('/analytics/campaigns').then((r) => r.data);

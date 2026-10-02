@@ -60,7 +60,7 @@ r = c.post(
         "name": "Monsoon Field Survey",
         "code": code,
         "client_name": "Acme Retail",
-        "location": "Telangana",
+        "state": "Telangana",
         "start_date": str(date.today()),
         "end_date": str(date.today() + timedelta(days=60)),
     },
@@ -84,8 +84,8 @@ r = c.post(
 )
 check("end date before start date rejected", r.status_code == 422, r.status_code)
 
-r = c.patch(f"/projects/{project_id}", headers=AH, json={"location": "Andhra Pradesh"})
-check("campaign updates", r.status_code == 200 and r.json()["location"] == "Andhra Pradesh")
+r = c.patch(f"/projects/{project_id}", headers=AH, json={"state": "Andhra Pradesh"})
+check("campaign updates", r.status_code == 200 and r.json()["state"] == "Andhra Pradesh")
 
 r = c.post(f"/projects/{project_id}/archive", headers=AH)
 check("campaign archives", r.status_code == 200 and r.json()["status"] == "ARCHIVED")
@@ -103,7 +103,7 @@ check("import template downloads", r.status_code == 200 and "full_name" in r.tex
 stamp = uuid.uuid4().hex[:8]
 good_a = f"import.a.{stamp}@designboxed.com"
 good_b = f"import.b.{stamp}@designboxed.com"
-good_c = f"import.c.{stamp}@designboxed.com"  # gender deliberately blank
+good_c = f"import.c.{stamp}@designboxed.com"  # gender deliberately blank: an error now
 csv_body = (
     "full_name,email,role,designation,gender,phone,employee_code,base_location\n"
     f"Anita Desai,{good_a},GROUND_STAFF,TEAM_LEAD,FEMALE,+91 90000 00001,DB-{stamp[:4]},Pune\n"
@@ -126,8 +126,8 @@ def upload(path, body, name="team.csv"):
 r = upload("/users/import/preview", csv_body)
 check("import preview parses", r.status_code == 200, r.status_code)
 preview = r.json()
-check("preview counts importable rows", preview["importable"] == 3, preview["importable"])
-check("preview counts skipped rows", preview["skipped"] == 4, preview["skipped"])
+check("preview counts importable rows", preview["importable"] == 2, preview["importable"])
+check("preview counts skipped rows", preview["skipped"] == 5, preview["skipped"])
 check("preview writes nothing", c.get("/users", headers=AH, params={"search": good_a}).json()["total"] == 0)
 
 errors = {row["line"]: row["errors"] for row in preview["rows"]}
@@ -135,16 +135,13 @@ check("invalid email flagged", any("valid email" in e for e in errors.get(4, [])
 check("missing name flagged", any("full_name" in e for e in errors.get(5, [])), errors.get(5))
 check("duplicate within file flagged", any("more than once" in e for e in errors.get(6, [])), errors.get(6))
 check("unknown role flagged", any("role must be" in e for e in errors.get(7, [])), errors.get(7))
-check(
-    "undisclosed gender warns but does not block",
-    any("separate room" in w for row in preview["rows"] for w in row["warnings"]),
-)
+check("blank gender flagged", any("gender is required" in e for e in errors.get(8, [])), errors.get(8))
 
 r = upload("/users/import", csv_body)
 check("import commits", r.status_code == 200, r.status_code)
 result = r.json()
-check("only valid rows created", result["created"] == 3, result["created"])
-check("invite issued per imported account", len(result["invite_urls"]) == 3, len(result["invite_urls"]))
+check("only valid rows created", result["created"] == 2, result["created"])
+check("invite issued per imported account", len(result["invite_urls"]) == 2, len(result["invite_urls"]))
 
 r = upload("/users/import/preview", csv_body)
 check(
@@ -238,13 +235,15 @@ r = c.get("/id-proofs/retention", headers=AH)
 check("retention status reports the window", r.json()["retention_days"] == 90, r.json())
 baseline_due = r.json()["due_now"]
 
-r = c.patch(f"/users/{imported_id}", headers=AH, json={"is_active": False})
+r = c.post(f"/users/{imported_id}/status", headers=AH, json={"status": "DEACTIVATED"})
 check("deactivation alone does not start the clock", c.get("/id-proofs/retention", headers=AH).json()["due_now"] == baseline_due)
 
-r = c.patch(f"/users/{imported_id}", headers=AH, json={"exited_on": str(date.today() - timedelta(days=30))})
+r = c.post(f"/users/{imported_id}/status", headers=AH,
+           json={"status": "LEFT", "exited_on": str(date.today() - timedelta(days=30))})
 check("recent exit is not yet due", c.get("/id-proofs/retention", headers=AH).json()["due_now"] == baseline_due, "30 days should not be due")
 
-r = c.patch(f"/users/{imported_id}", headers=AH, json={"exited_on": str(date.today() - timedelta(days=100))})
+r = c.post(f"/users/{imported_id}/status", headers=AH,
+           json={"status": "LEFT", "exited_on": str(date.today() - timedelta(days=100))})
 due = c.get("/id-proofs/retention", headers=AH).json()["due_now"]
 check("exit beyond 90 days becomes due", due == baseline_due + 1, due)
 

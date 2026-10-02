@@ -17,7 +17,7 @@ Two things shape this module:
 """
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 from sqlalchemy import or_, select
@@ -25,7 +25,9 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import AdminUser, CurrentUser, DbSession
 from app.core.enums import (
+    PRIORITY_RANK,
     AuditAction,
+    RequestPriority,
     RequestStatus,
     RequestType,
     RoomSharingChoice,
@@ -42,6 +44,7 @@ from app.schemas.request import (
     ConflictCheckRequest,
     ConflictCheckResponse,
     QueueCounts,
+    QueueExport,
     RequestCreate,
     RequestEdit,
     RequestListResponse,
@@ -53,6 +56,10 @@ from app.services import audit, costay, decisions, notifications
 from app.services import requests as svc
 
 router = APIRouter(prefix="/requests", tags=["requests"])
+
+#: Request statuses that still need an admin: the awaiting and partly approved
+#: tabs. Their high-priority rows are what the queue banner counts.
+WAITING = frozenset({RequestStatus.SUBMITTED, RequestStatus.PARTIALLY_APPROVED})
 
 
 def _load(db: Session, request_id: int, user: User) -> TravelRequest:
@@ -123,22 +130,22 @@ def check(payload: ConflictCheckRequest, user: CurrentUser, db: DbSession) -> Co
     )
 
 
-@router.get("", response_model=RequestListResponse)
-def list_requests(
-    user: CurrentUser,
-    db: DbSession,
-    mine: Annotated[bool, Query(description="Only requests this person is on")] = True,
-    request_status: Annotated[RequestStatus | None, Query(alias="status")] = None,
-    request_type: Annotated[RequestType | None, Query(alias="type")] = None,
-    project_id: Annotated[int | None, Query()] = None,
-    search: Annotated[str | None, Query(max_length=120)] = None,
-    page: Annotated[int, Query(ge=1)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
-) -> RequestListResponse:
-    """The caller's requests, newest first.
+def _matching(
+    db: Session,
+    user: User,
+    *,
+    mine: bool,
+    request_status: RequestStatus | None,
+    request_type: RequestType | None,
+    project_id: int | None,
+    search: str | None,
+    priority: RequestPriority | None,
+    sort: str,
+) -> list[TravelRequest]:
+    """Every request the caller may see that matches the filters, in order.
 
-    Ground staff always see only what they are on, whatever `mine` says. Admins
-    can widen to the whole tenant - minus everyone else's drafts.
+    Shared by the paged list and the queue export, so a CSV always holds exactly
+    the rows the tab it came from would page through.
     """
     filters = [TravelRequest.tenant_id == user.tenant_id]
 
@@ -158,6 +165,8 @@ def list_requests(
         filters.append(TravelRequest.request_type == request_type)
     if project_id is not None:
         filters.append(TravelRequest.project_id == project_id)
+    if priority is not None:
+        filters.append(TravelRequest.priority == priority)
     if search:
         like = f"%{search.strip()}%"
         filters.append(
@@ -185,6 +194,44 @@ def list_requests(
     # the same function, not a second copy of the rule.
     if request_status is not None:
         rows = [r for r in rows if svc.status_of(r) is request_status]
+
+    # The rows are already in memory, so "high first" is a stable re-sort of a
+    # newest-first list rather than a second query.
+    if sort == "priority":
+        rows = sorted(rows, key=lambda r: PRIORITY_RANK.get(r.priority, 1))
+    return list(rows)
+
+
+@router.get("", response_model=RequestListResponse)
+def list_requests(
+    user: CurrentUser,
+    db: DbSession,
+    mine: Annotated[bool, Query(description="Only requests this person is on")] = True,
+    request_status: Annotated[RequestStatus | None, Query(alias="status")] = None,
+    request_type: Annotated[RequestType | None, Query(alias="type")] = None,
+    project_id: Annotated[int | None, Query()] = None,
+    search: Annotated[str | None, Query(max_length=120)] = None,
+    priority: Annotated[RequestPriority | None, Query()] = None,
+    sort: Annotated[Literal["newest", "priority"], Query()] = "newest",
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> RequestListResponse:
+    """The caller's requests, newest first (or high priority first).
+
+    Ground staff always see only what they are on, whatever `mine` says. Admins
+    can widen to the whole tenant - minus everyone else's drafts.
+    """
+    rows = _matching(
+        db,
+        user,
+        mine=mine,
+        request_status=request_status,
+        request_type=request_type,
+        project_id=project_id,
+        search=search,
+        priority=priority,
+        sort=sort,
+    )
 
     total = len(rows)
     window = rows[(page - 1) * page_size : page * page_size]
@@ -297,8 +344,12 @@ def queue_counts(actor: AdminUser, db: DbSession) -> QueueCounts:
     tally = {s: 0 for s in RequestStatus}
     conflicted = 0
     edited = 0
+    urgent = {s: 0 for s in WAITING}
     for row in rows:
-        tally[svc.status_of(row)] += 1
+        row_status = svc.status_of(row)
+        tally[row_status] += 1
+        if row.priority is RequestPriority.HIGH and row_status in WAITING:
+            urgent[row_status] += 1
         if svc.edit_count(db, row.id) > 0:
             edited += 1
         # Only requests still awaiting a decision are worth flagging as clashing:
@@ -318,6 +369,59 @@ def queue_counts(actor: AdminUser, db: DbSession) -> QueueCounts:
         expired=tally[RequestStatus.EXPIRED],
         with_conflicts=conflicted,
         edited=edited,
+        high_priority=sum(urgent.values()),
+        high_priority_awaiting=urgent[RequestStatus.SUBMITTED],
+        high_priority_partial=urgent[RequestStatus.PARTIALLY_APPROVED],
+    )
+
+
+@router.get("/queue/export", response_model=QueueExport)
+def export_queue(
+    actor: AdminUser,
+    db: DbSession,
+    request_status: Annotated[RequestStatus, Query(alias="status")],
+    request_type: Annotated[RequestType | None, Query(alias="type")] = None,
+    project_id: Annotated[int | None, Query()] = None,
+    search: Annotated[str | None, Query(max_length=120)] = None,
+    priority: Annotated[RequestPriority | None, Query()] = None,
+) -> QueueExport:
+    """Every request in one queue tab, for the admin's CSV.
+
+    The list is paged at 100 and leaves cost out; a spreadsheet needs every row
+    and the cost, so this returns the whole tab read as the admin. Not audited,
+    like the travel-log export, which carries the same names and costs.
+    """
+    rows = _matching(
+        db,
+        actor,
+        mine=False,
+        request_status=request_status,
+        request_type=request_type,
+        project_id=project_id,
+        search=search,
+        priority=priority,
+        sort="priority",
+    )
+    total = len(rows)
+    rows = rows[: svc.MAX_EXPORT_ROWS]
+    # Clash warnings only matter while someone still has to decide; on a booked
+    # or rejected tab they would cost a detection pass per row for nothing.
+    with_conflicts = request_status in WAITING
+    return QueueExport(
+        status=request_status,
+        total=total,
+        truncated=total > len(rows),
+        items=[
+            svc.to_read(
+                db,
+                r,
+                tenant_id=actor.tenant_id,
+                viewer=actor,
+                with_conflicts=with_conflicts,
+                with_costay=False,
+            )
+            for r in rows
+        ],
     )
 
 

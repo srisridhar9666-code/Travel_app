@@ -108,7 +108,7 @@ r = c.post(
 check("ground staff cannot create users", r.status_code == 403, r.status_code)
 
 # 14. admin cannot deactivate themselves
-r = c.patch("/users/1", headers=AH, json={"is_active": False})
+r = c.post("/users/1/status", headers=AH, json={"status": "DEACTIVATED"})
 check("admin cannot deactivate self", r.status_code == 400, r.json().get("detail"))
 r = c.patch("/users/1", headers=AH, json={"role": "GROUND_STAFF"})
 check("admin cannot change own role", r.status_code == 400, r.json().get("detail"))
@@ -121,7 +121,7 @@ check("invalid theme rejected", r.status_code == 422, r.status_code)
 
 # 16. lockout after repeated failures
 lock_email = f"lock.{uuid.uuid4().hex[:8]}@designboxed.com"
-r = c.post("/users", headers=AH, json={"email": lock_email, "full_name": "Lock Test", "role": "GROUND_STAFF"})
+r = c.post("/users", headers=AH, json={"email": lock_email, "full_name": "Lock Test", "role": "GROUND_STAFF", "gender": "MALE"})
 lock_token = r.json()["invite_url"].split("token=")[1]
 c.post("/auth/set-password", json={"token": lock_token, "password": "Corridor-Anchor-58"})
 codes = [

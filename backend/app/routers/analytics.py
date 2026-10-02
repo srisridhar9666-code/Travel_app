@@ -14,11 +14,10 @@ nothing in section 6 needs it.
 """
 from __future__ import annotations
 
-from typing import Annotated
-
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.core import clock
 from app.core.deps import AdminUser, DbSession
 from app.core.enums import AuditAction, TravellerStatus
 from app.models.base import naive_utcnow
@@ -31,11 +30,14 @@ from app.schemas.analytics import (
     CostPreviewRow,
     CostSplit,
     DeploymentRow,
-    MonthSpend,
     Overview,
+    PersonSpend,
+    PlaceSpend,
+    TrendPoint,
     TypeSpend,
     UncostedRow,
 )
+from app.routers.insights import ReportFilters
 from app.schemas.request import RequestRead
 from app.services import analytics, audit, costs
 from app.services import requests as svc
@@ -233,35 +235,43 @@ def split_cost(
 
 
 @router.get("/analytics", response_model=AnalyticsBundle)
-def bundle(
-    actor: AdminUser,
-    db: DbSession,
-    days: Annotated[int, Query(ge=1, le=730)] = 90,
-    months: Annotated[int, Query(ge=1, le=24)] = 6,
-) -> AnalyticsBundle:
-    """Everything the dashboard shows, in one round trip.
+def bundle(actor: AdminUser, db: DbSession, filters: ReportFilters) -> AnalyticsBundle:
+    """Everything the cost page shows, in one round trip, for one slice.
 
-    One call rather than six, because the figures have to agree with each other
-    on screen and six independent requests can land either side of a booking
-    being confirmed.
+    One call rather than eight, and one read of the rows shared by every
+    section, because the figures have to agree with each other on screen: the
+    spend by state adds up to the spend at the top. Every section follows the
+    same filters as the dashboard.
     """
+    rows = analytics.rows_for(db, actor.tenant_id, filters)
+    trend = analytics.trend(
+        rows, since=filters.since, until=filters.until, today=clock.local_today()
+    )
+    tenant = actor.tenant_id
     return AnalyticsBundle(
-        overview=Overview(**analytics.overview(db, actor.tenant_id, days=days)),
-        by_campaign=[CampaignSpend(**r) for r in analytics.by_campaign(db, actor.tenant_id)],
-        by_type=[TypeSpend(**r) for r in analytics.by_type(db, actor.tenant_id)],
-        by_month=[MonthSpend(**r) for r in analytics.by_month(db, actor.tenant_id, months=months)],
-        deployment=[DeploymentRow(**r) for r in analytics.deployment(db, actor.tenant_id)],
-        uncosted=[UncostedRow(**r) for r in analytics.uncosted_bookings(db, actor.tenant_id)],
+        since=trend["since"],
+        until=trend["until"],
+        grain=trend["grain"],
+        overview=Overview(**analytics.overview(db, tenant, rows=rows)),
+        trend=[TrendPoint(**p) for p in trend["points"]],
+        by_campaign=[CampaignSpend(**r) for r in analytics.by_campaign(db, tenant, rows=rows)],
+        by_type=[TypeSpend(**r) for r in analytics.by_type(db, tenant, rows=rows)],
+        by_person=[PersonSpend(**r) for r in analytics.by_person(db, tenant, rows=rows)],
+        by_state=[PlaceSpend(**r) for r in analytics.by_state(db, tenant, rows=rows)],
+        by_city=[PlaceSpend(**r) for r in analytics.by_city(db, tenant, rows=rows)],
+        deployment=[DeploymentRow(**r) for r in analytics.deployment(db, tenant, rows=rows)],
+        deployed_people=analytics.deployed_people(db, tenant, rows=rows),
+        uncosted=[UncostedRow(**r) for r in analytics.uncosted_bookings(db, tenant, rows=rows)],
     )
 
 
 @router.get("/analytics/campaigns", response_model=list[CampaignSpend])
-def campaign_spend(actor: AdminUser, db: DbSession) -> list[CampaignSpend]:
-    """Campaign Financials (SOW section 2) on their own, for the projects screen."""
-    return [CampaignSpend(**r) for r in analytics.by_campaign(db, actor.tenant_id)]
+def campaign_spend(actor: AdminUser, db: DbSession, filters: ReportFilters) -> list[CampaignSpend]:
+    """Campaign Financials (SOW section 2) on their own. All time unless filtered."""
+    return [CampaignSpend(**r) for r in analytics.by_campaign(db, actor.tenant_id, filters)]
 
 
 @router.get("/analytics/uncosted", response_model=list[UncostedRow])
-def uncosted(actor: AdminUser, db: DbSession) -> list[UncostedRow]:
+def uncosted(actor: AdminUser, db: DbSession, filters: ReportFilters) -> list[UncostedRow]:
     """Booked travellers with no cost recorded - the admin's worklist."""
-    return [UncostedRow(**r) for r in analytics.uncosted_bookings(db, actor.tenant_id)]
+    return [UncostedRow(**r) for r in analytics.uncosted_bookings(db, actor.tenant_id, filters)]

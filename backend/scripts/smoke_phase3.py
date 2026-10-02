@@ -98,14 +98,14 @@ section("cast")
 ravi_id, RAVI = make_staff("Ravi Kumar", "MALE")
 arjun_id, ARJUN = make_staff("Arjun Nair", "MALE")
 meera_id, MEERA = make_staff("Meera Iyer", "FEMALE")
-sam_id, SAM = make_staff("Sam Roy", "OTHER")
+sam_id, _ = make_staff("Sam Roy", "FEMALE")  # only Male or Female can be recorded
 check("four ground-staff accounts created and signed in", all([ravi_id, arjun_id, meera_id, sam_id]))
 
 code = f"P3-{STAMP[:6].upper()}"
 r = c.post(
     "/projects",
     headers=AH,
-    json={"name": "Phase 3 Field Sweep", "code": code, "location": "Maharashtra"},
+    json={"name": "Phase 3 Field Sweep", "code": code, "state": "Maharashtra"},
 )
 check("campaign created", r.status_code == 201, r.text[:200])
 project_id = r.json()["id"]
@@ -320,16 +320,6 @@ r = c.post("/requests/check", headers=MEERA, json={
     "hotel_city": CITY, "check_in": day(1), "check_out": day(3),
 })
 check("a different-gender colleague is never offered", r.json()["costay_matches"] == [], r.json()["costay_matches"])
-
-r = c.post("/requests/check", headers=SAM, json={
-    "request_type": "HOTEL", "project_id": project_id, "travel_reason": "Field survey coverage for the campaign",
-    "hotel_city": CITY, "check_in": day(1), "check_out": day(3),
-})
-check(
-    "an undisclosed/other gender falls back to a separate room",
-    r.json()["costay_matches"] == [],
-    r.json()["costay_matches"],
-)
 
 r = c.post("/requests/check", headers=RAVI, json={
     "request_type": "HOTEL", "project_id": project_id, "travel_reason": "Field survey coverage for the campaign",

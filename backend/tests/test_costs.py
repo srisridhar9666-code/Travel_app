@@ -6,7 +6,7 @@ is about arithmetic that looks obvious and is not: an even split that does not
 sum to the total, a float that arrives as 0.30000000000000004, a campaign that
 looks cheap because one fare was never entered.
 """
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -19,6 +19,7 @@ from app.models.project import Project
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
 from app.services import analytics, costs
+from app.services.insights import Filters
 
 TENANT = "designboxed"
 
@@ -280,15 +281,22 @@ def test_spend_is_grouped_by_request_type(db, world):
     assert rows["LOCAL_CAB"]["spent"] == "0.00"
 
 
+def this_year():
+    today = clock.local_today()
+    return date(today.year, 1, 1), date(today.year, 12, 31)
+
+
 def test_monthly_spend_includes_quiet_months_as_zero(db, world):
     """A chart that omits an empty month misrepresents the trend."""
     monsoon, _, ravi, _ = world
-    trip(db, monsoon, [ravi], cost="1000.00", days_out=5)
+    trip(db, monsoon, [ravi], cost="1000.00", days_out=0)
 
-    rows = analytics.by_month(db, TENANT, months=6)
-    assert len(rows) == 6
-    assert rows[-1]["month"] >= rows[0]["month"]   # oldest first
-    assert any(r["spent"] != "0.00" for r in rows)
+    since, until = this_year()
+    result = analytics.trend(analytics.rows_for(db, TENANT), since=since, until=until)
+    assert result["grain"] == "month"
+    assert len(result["points"]) == 12
+    assert result["points"][0]["period"] < result["points"][-1]["period"]   # oldest first
+    assert sum(p["spent"] != "0.00" for p in result["points"]) == 1
 
 
 def test_deployment_counts_people_by_campaign_location(db, world):
@@ -368,30 +376,211 @@ def test_an_odd_split_across_three_trips_still_totals_exactly(db, world):
     assert Decimal(analytics.overview(db, TENANT)["spent"]) == Decimal("3000.00")
 
 
-def test_the_monthly_window_is_centred_on_today(db, world):
-    """A backwards-only window showed an empty chart for a team that books ahead
-    - which is every field team. Half history, half already ticketed."""
+def test_all_time_stretches_to_cover_future_bookings(db, world):
+    """No dates means every booking, ahead as well as behind - field teams book
+    weeks out - and the chart starts at the first trip, not in the year 2000."""
     monsoon, _, ravi, _ = world
-    rows = analytics.by_month(db, TENANT, months=6)
-    this_month = f"{clock.local_today().year:04d}-{clock.local_today().month:02d}"
+    trip(db, monsoon, [ravi], cost="1000.00", days_out=-100)
+    trip(db, monsoon, [ravi], cost="2500.00", days_out=100)
 
-    assert len(rows) == 6
-    assert this_month in [r["month"] for r in rows]
-    assert rows[0]["month"] < this_month < rows[-1]["month"]
+    result = analytics.trend(analytics.rows_for(db, TENANT), since=None, until=None)
+    today = clock.local_today()
+    assert today - timedelta(days=101) <= result["since"] <= today - timedelta(days=99)
+    assert result["until"] >= today + timedelta(days=99)
+    assert result["grain"] == "month"
+    assert sum(Decimal(p["spent"]) for p in result["points"]) == Decimal("3500.00")
 
 
-def test_future_booked_travel_appears_in_the_monthly_chart(db, world):
-    """The case the centred window exists for."""
+def test_with_nothing_booked_the_chart_is_the_last_30_days(db, world):
+    result = analytics.trend([], since=None, until=None)
+    assert result["grain"] == "day"
+    assert len(result["points"]) == 30
+    assert result["until"] == clock.local_today()
+
+
+def test_future_booked_travel_appears_in_the_chart(db, world):
     monsoon, _, ravi, _ = world
     trip(db, monsoon, [ravi], cost="2500.00", days_out=40)
 
-    rows = analytics.by_month(db, TENANT, months=6)
-    assert any(r["spent"] == "2500.00" for r in rows), [r["spent"] for r in rows]
+    today = clock.local_today()
+    result = analytics.trend(analytics.rows_for(db, TENANT), since=today, until=None)
+    assert any(p["spent"] == "2500.00" for p in result["points"]), result["points"]
 
 
-def test_travel_beyond_the_window_is_excluded_rather_than_piled_on_the_last_month(db, world):
+def test_travel_beyond_the_window_is_excluded_rather_than_piled_on_the_last_bucket(db, world):
     monsoon, _, ravi, _ = world
     trip(db, monsoon, [ravi], cost="9999.00", days_out=400)
 
-    rows = analytics.by_month(db, TENANT, months=6)
-    assert all(r["spent"] == "0.00" for r in rows), [r["spent"] for r in rows]
+    since, until = this_year()
+    result = analytics.trend(analytics.rows_for(db, TENANT), since=since, until=until)
+    assert all(p["spent"] == "0.00" for p in result["points"])
+
+
+# ---------------------------------------------------------------------------
+# Filters: every figure on the cost page follows the same slice
+# ---------------------------------------------------------------------------
+
+
+def place(row, *, state=None, city=None, origin_state="Telangana"):
+    """Give a trip from trip() a destination."""
+    if row.request_type is RequestType.HOTEL:
+        row.hotel_state, row.hotel_city = state, city
+    elif row.request_type is RequestType.LOCAL_CAB:
+        row.origin_state, row.destination_state, row.drop_city = origin_state, state, city
+    else:
+        row.origin_state, row.destination_state, row.destination = origin_state, state, city
+
+
+def everything(db, filters):
+    rows = analytics.rows_for(db, TENANT, filters)
+    return {
+        "overview": analytics.overview(db, TENANT, rows=rows),
+        "by_campaign": analytics.by_campaign(db, TENANT, rows=rows),
+        "by_type": analytics.by_type(db, TENANT, rows=rows),
+        "by_person": analytics.by_person(db, TENANT, rows=rows),
+        "by_state": analytics.by_state(db, TENANT, rows=rows),
+        "by_city": analytics.by_city(db, TENANT, rows=rows),
+        "uncosted": analytics.uncosted_bookings(db, TENANT, rows=rows),
+    }
+
+
+def test_the_date_range_slices_every_cost_figure(db, world):
+    monsoon, coastal, ravi, meera = world
+    inside = trip(db, monsoon, [ravi], cost="1000.00", days_out=5)
+    place(inside, state="Maharashtra", city="Pune")
+    outside = trip(db, coastal, [meera], cost=None, days_out=60)
+    place(outside, state="Kerala", city="Kochi")
+    db.commit()
+
+    today = clock.local_today()
+    got = everything(db, Filters(since=today, until=today + timedelta(days=30)))
+    assert got["overview"]["spent"] == "1000.00"
+    assert got["overview"]["uncosted"] == 0
+    assert [c["code"] for c in got["by_campaign"]] == ["MON-1"]
+    assert {t["request_type"]: t["travellers"] for t in got["by_type"]}["LONG_DISTANCE"] == 1
+    assert [p["full_name"] for p in got["by_person"]] == ["Ravi Kumar"]
+    assert [s["label"] for s in got["by_state"]] == ["Maharashtra"]
+    assert [c["label"] for c in got["by_city"]] == ["Pune"]
+    assert got["uncosted"] == []
+
+
+def test_a_hotel_is_costed_by_check_in(db, world):
+    monsoon, _, ravi, _ = world
+    trip(db, monsoon, [ravi], cost="900.00", days_out=10, kind=RequestType.HOTEL)
+
+    today = clock.local_today()
+    hit = Filters(since=today + timedelta(days=10), until=today + timedelta(days=10))
+    miss = Filters(since=today + timedelta(days=11), until=today + timedelta(days=20))
+    assert analytics.overview(db, TENANT, hit)["spent"] == "900.00"
+    assert analytics.overview(db, TENANT, miss)["spent"] == "0.00"
+
+
+def test_campaign_and_employee_filters_slice_costs(db, world):
+    monsoon, coastal, ravi, meera = world
+    trip(db, monsoon, [ravi, meera], cost="600.00")
+    trip(db, coastal, [meera], cost="400.00")
+
+    mine = everything(db, Filters(user_id=ravi.id))
+    assert mine["overview"]["spent"] == "600.00"
+    assert [p["full_name"] for p in mine["by_person"]] == ["Ravi Kumar"]
+
+    coast = everything(db, Filters(project_id=coastal.id))
+    assert coast["overview"]["spent"] == "400.00"
+    assert [c["code"] for c in coast["by_campaign"]] == ["CST-1"]
+
+    people = {p["full_name"]: p for p in everything(db, Filters())["by_person"]}
+    assert people["Meera Iyer"]["spent"] == "1000.00"
+    assert people["Meera Iyer"]["trips"] == 2
+
+
+@pytest.mark.parametrize(
+    "status,spent,committed",
+    [
+        (TravellerStatus.BOOKED, "750.00", "0.00"),
+        (TravellerStatus.APPROVED, "0.00", "750.00"),
+        (TravellerStatus.PENDING, "0.00", "0.00"),
+    ],
+)
+def test_only_booked_counts_as_spend_under_filters(db, world, status, spent, committed):
+    monsoon, _, ravi, _ = world
+    row = trip(db, monsoon, [ravi], status=status, cost="750.00")
+    place(row, state="Maharashtra", city="Pune")
+    db.commit()
+
+    result = analytics.overview(db, TENANT, Filters(state="Maharashtra"))
+    assert (result["spent"], result["committed"]) == (spent, committed)
+
+
+def test_spend_by_state_and_city_groups_by_destination(db, world):
+    monsoon, _, ravi, meera = world
+    flight = trip(db, monsoon, [ravi], cost="4000.00")
+    place(flight, state="Maharashtra", city="Pune")
+    hotel = trip(db, monsoon, [meera], cost="900.00", kind=RequestType.HOTEL)
+    place(hotel, state="Tamil Nadu", city="Chennai")
+    old_cab = trip(db, monsoon, [ravi], cost="300.00", kind=RequestType.LOCAL_CAB)
+    old_cab.destination = "Nagpur Station"   # an address, with no city recorded
+    place(old_cab, state="Maharashtra", city=None)
+    db.commit()
+
+    got = everything(db, Filters())
+    states = {s["label"]: s["spent"] for s in got["by_state"]}
+    assert states == {"Maharashtra": "4300.00", "Tamil Nadu": "900.00"}
+    cities = {c["label"]: c for c in got["by_city"]}
+    assert set(cities) == {"Pune", "Chennai", analytics.NO_CITY}
+    assert cities[analytics.NO_CITY]["city"] is None
+    assert cities["Pune"]["state"] == "Maharashtra"
+    # Each booked row lands in exactly one bar, so the bars add up.
+    total = Decimal(got["overview"]["spent"])
+    assert sum(Decimal(s["spent"]) for s in got["by_state"]) == total
+    assert sum(Decimal(c["spent"]) for c in got["by_city"]) == total
+
+
+def test_the_city_filter_is_the_destination_city(db, world):
+    monsoon, _, ravi, meera = world
+    to_pune = trip(db, monsoon, [ravi], cost="1000.00")
+    place(to_pune, state="Maharashtra", city="Pune")
+    from_pune = trip(db, monsoon, [meera], cost="2000.00")
+    from_pune.origin = "Pune"
+    place(from_pune, state="Telangana", city="Hyderabad", origin_state="Maharashtra")
+    db.commit()
+
+    assert analytics.overview(db, TENANT, Filters(city="Pune"))["spent"] == "1000.00"
+    assert analytics.overview(db, TENANT, Filters(state="Maharashtra"))["spent"] == "1000.00"
+
+
+def test_deployment_uses_trip_state_and_follows_filters(db, world):
+    monsoon, coastal, ravi, meera = world
+    headed = trip(db, coastal, [ravi], cost="500.00", days_out=5)
+    place(headed, state="Tamil Nadu", city="Chennai")
+    trip(db, monsoon, [meera], cost="500.00", days_out=5)   # no state: campaign's location
+    db.commit()
+
+    rows = {r["location"]: r["people"] for r in analytics.deployment(db, TENANT)}
+    assert rows == {"Tamil Nadu": 1, "Maharashtra": 1}
+
+    only_ravi = analytics.deployment(db, TENANT, Filters(user_id=ravi.id))
+    assert [r["location"] for r in only_ravi] == ["Tamil Nadu"]
+
+    today = clock.local_today()
+    past = Filters(since=today - timedelta(days=30), until=today - timedelta(days=1))
+    assert analytics.deployment(db, TENANT, past) == []
+
+
+def test_deployment_falls_back_to_the_campaign_state(db, world):
+    monsoon, _, ravi, _ = world
+    monsoon.state = "Goa"
+    trip(db, monsoon, [ravi], cost="500.00", days_out=5)
+    assert [r["location"] for r in analytics.deployment(db, TENANT)] == ["Goa"]
+
+
+def test_deployed_people_counts_someone_in_two_states_once(db, world):
+    monsoon, coastal, ravi, meera = world
+    place(trip(db, coastal, [ravi], cost="500.00", days_out=5), state="Karnataka")
+    place(trip(db, monsoon, [ravi], status=TravellerStatus.APPROVED, cost=None, days_out=8),
+          state="Maharashtra")
+    trip(db, monsoon, [meera], cost="500.00", days_out=-3)   # already back: not deployed
+    db.commit()
+
+    rows = analytics.deployment(db, TENANT)
+    assert sum(r["people"] for r in rows) == 2
+    assert analytics.deployed_people(db, TENANT) == 1

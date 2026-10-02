@@ -335,6 +335,45 @@ def send_account_link(
     return send(to_address, subject, body)
 
 
+def send_email_changed_notice(
+    old_address: str, full_name: str, new_address: str, *, by: str | None = None
+) -> Sent:
+    """Tell the old address that the sign-in email moved.
+
+    Sent to the old address on purpose: if someone else made the change, the
+    real owner is the one who needs to hear about it, and the new address may
+    be theirs. Best-effort, after the response - the change has already
+    happened and a mail failure must not undo it.
+    """
+    settings = get_settings()
+    first_name = (full_name or "").split()[0] if (full_name or "").strip() else "there"
+    changed_by = f"Changed by {by}.\n\n" if by else ""
+    body = (
+        f"Hi {first_name},\n\n"
+        f"Your {settings.app_name} sign-in email is now {new_address}. "
+        "Use that address to sign in and to reset your password from now on.\n\n"
+        f"{changed_by}"
+        "If you did not expect this, contact your administrator.\n\n"
+        f"- {settings.email_from_name}"
+    )
+    return send(old_address, f"Your {settings.app_name} sign-in email was changed", body)
+
+
+def send_password_changed_notice(address: str, full_name: str) -> Sent:
+    """Tell someone their password was just changed, so a change they did not
+    make does not go unnoticed. Best-effort, after the response."""
+    settings = get_settings()
+    first_name = (full_name or "").split()[0] if (full_name or "").strip() else "there"
+    body = (
+        f"Hi {first_name},\n\n"
+        f"The password on your {settings.app_name} account was just changed, and "
+        "every other device was signed out.\n\n"
+        "If this was not you, contact your administrator straight away.\n\n"
+        f"- {settings.email_from_name}"
+    )
+    return send(address, f"Your {settings.app_name} password was changed", body)
+
+
 def check() -> dict:
     """Prove the SMTP credentials work, without sending anything.
 

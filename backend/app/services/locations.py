@@ -213,3 +213,94 @@ def match(db: Session, tenant_id: str, typed: str) -> Location | None:
 
     starts = [row for norm, row in by_key.items() if norm.startswith(key)]
     return starts[0] if len(starts) == 1 else None
+
+
+def backfill_request_states(db: Session, tenant_id: str) -> int:
+    """Fill in the state of requests saved before states were captured. Idempotent.
+
+    Only empty state columns are touched, and only where the place names
+    exactly one state on the list (or is a known abbreviation of one): a
+    long-distance origin or destination, or a hotel's city. "Aurangabad" is in
+    two states and stays empty rather than being guessed. Cabs are never
+    touched: their origin and destination are street addresses, and
+    "Shamshabad" with no state would land in Madhya Pradesh.
+
+    A data repair, not an edit anyone made, so it writes no revision or audit
+    row. Returns how many requests changed.
+    """
+    from sqlalchemy import and_, or_
+
+    from app.core.enums import RequestType
+    from app.models.request import TravelRequest
+
+    candidates = (
+        db.execute(
+            select(TravelRequest).where(
+                TravelRequest.tenant_id == tenant_id,
+                or_(
+                    and_(
+                        TravelRequest.request_type == RequestType.HOTEL,
+                        TravelRequest.hotel_state.is_(None),
+                        TravelRequest.hotel_city.is_not(None),
+                    ),
+                    and_(
+                        TravelRequest.request_type == RequestType.LONG_DISTANCE,
+                        or_(
+                            and_(
+                                TravelRequest.origin_state.is_(None),
+                                TravelRequest.origin.is_not(None),
+                            ),
+                            and_(
+                                TravelRequest.destination_state.is_(None),
+                                TravelRequest.destination.is_not(None),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not candidates:
+        return 0
+
+    # One read of the list for the whole run, not one per row.
+    states_by_key: dict[str, set[str]] = {}
+    alias_state: dict[str, str] = {}
+    for state, city in db.execute(
+        select(Location.state, Location.city).where(Location.tenant_id == tenant_id)
+    ).all():
+        states_by_key.setdefault(normalise(city), set()).add(state)
+        if city in ALIASES.values():
+            alias_state.setdefault(city, state)
+
+    def state_of(place: str | None) -> str | None:
+        key = normalise(place or "")
+        if not key:
+            return None
+        states = states_by_key.get(key, set())
+        if len(states) == 1:
+            return next(iter(states))
+        if not states and ALIASES.get(key) in alias_state:
+            return alias_state[ALIASES[key]]
+        return None
+
+    changed = 0
+    for request in candidates:
+        touched = False
+        if request.request_type is RequestType.HOTEL:
+            found = state_of(request.hotel_city)
+            if found:
+                request.hotel_state, touched = found, True
+        else:
+            if request.origin_state is None and (found := state_of(request.origin)):
+                request.origin_state, touched = found, True
+            if request.destination_state is None and (found := state_of(request.destination)):
+                request.destination_state, touched = found, True
+        changed += touched
+
+    if changed:
+        db.flush()
+        logger.info("Filled in the state on %d older request(s) for %s", changed, tenant_id)
+    return changed

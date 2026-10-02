@@ -31,6 +31,7 @@ from app.core.enums import (
     AuditAction,
     NotificationChannel,
     NotificationStatus,
+    RequestPriority,
     RequestStatus,
     RequestType,
     Role,
@@ -55,12 +56,17 @@ from app.schemas.request import (
 from app.services import audit, conflicts, costay, locations, notifications
 from app.services.seed import OTHER_PROJECT_CODE
 
+#: The most rows one queue export returns. Far above a real tab today; there so
+#: a runaway export cannot hold a worker for minutes.
+MAX_EXPORT_ROWS = 5000
+
 # Human labels for the diff, so a revision reads as English rather than as column
 # names. Anything not listed falls back to the column name itself.
 FIELD_LABELS = {
     "project_id": "campaign",
     "other_project_name": "campaign name",
     "travel_reason": "reason for travel",
+    "priority": "priority",
     "mode": "mode",
     "origin": "origin",
     "origin_state": "origin state",
@@ -227,11 +233,16 @@ def resolve_travellers(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown colleague id(s): {names}.",
             )
+        # is_active follows status (deactivated, left or deleted all clear it),
+        # so this one check covers every way a colleague stops being taggable.
         inactive = [u.full_name for u in found if not u.is_active]
         if inactive:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{', '.join(inactive)} is no longer active and cannot be tagged.",
+                detail=(
+                    f"{', '.join(inactive)} has left or been deactivated - "
+                    "remove them from this request."
+                ),
             )
         people.extend(sorted(found, key=lambda u: u.full_name))
 
@@ -345,6 +356,7 @@ def to_read(
     tenant_id: str,
     viewer: User | None = None,
     with_conflicts: bool = False,
+    with_costay: bool = True,
 ) -> RequestRead:
     show_cost = viewer is not None and viewer.is_admin
     travellers = [
@@ -401,6 +413,7 @@ def to_read(
         check_in=request.check_in,
         check_out=request.check_out,
         travel_reason=request.travel_reason,
+        priority=request.priority or RequestPriority.MEDIUM,
         origin_state=request.origin_state,
         destination_state=request.destination_state,
         hotel_state=request.hotel_state,
@@ -417,7 +430,9 @@ def to_read(
 
     if with_conflicts:
         read.conflicts = check_conflicts(db, tenant_id=tenant_id, request=request)
-        if viewer is not None:
+        # Co-stay matches are about the viewer, so an export (one admin, many
+        # requests) skips them rather than run the matcher once per row.
+        if with_costay and viewer is not None:
             read.costay_matches = check_costay(
                 db, tenant_id=tenant_id, request=request, for_user=viewer
             )
@@ -538,6 +553,11 @@ def notify_admins_of_submission(
     names = ", ".join(t.user.full_name for t in request.travellers if t.user) or actor.full_name
     campaign = f"{request.project.code} - {request.project.name}" if request.project else None
     link = f"{get_settings().frontend_base_url.rstrip('/')}/approvals"
+    priority = request.priority or RequestPriority.MEDIUM
+    label = priority.value.title()
+    # Only HIGH changes the subject and title: urgent mail should stand out in
+    # an inbox, and marking every request would make the marker meaningless.
+    urgent = priority is RequestPriority.HIGH
 
     queued: list[int] = []
     for admin in admins:
@@ -554,6 +574,7 @@ def notify_admins_of_submission(
             lines.append(f"Campaign: {campaign}")
         if request.travel_reason:
             lines.append(f"Reason: {request.travel_reason}")
+        lines.append(f"Priority: {label}")
         lines += ["", f"Review it: {link}"]
 
         rows = notifications.notify(
@@ -561,10 +582,16 @@ def notify_admins_of_submission(
             tenant_id=tenant_id,
             user=admin,
             kind="REQUEST_SUBMITTED",
-            title=f"New request from {actor.full_name}",
-            body=f"{summary} - for {names}.",
+            title=(
+                f"High-priority request from {actor.full_name}"
+                if urgent
+                else f"New request from {actor.full_name}"
+            ),
+            body=f"{summary} - for {names}. Priority: {label}.",
             request_id=request.id,
-            email_subject=f"New travel request: {summary}"[:255],
+            email_subject=(
+                ("High priority - " if urgent else "") + f"New travel request: {summary}"
+            )[:255],
             email_body="\n".join(lines),
             deliver_now=False,
         )

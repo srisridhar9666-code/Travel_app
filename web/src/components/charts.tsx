@@ -106,6 +106,10 @@ export interface BarDatum {
   value: number;
   /** Shown in the tooltip and under the label. */
   detail?: string;
+  /** What a click selects. A row without one is not clickable: a "not
+   *  recorded" bucket is nothing to filter on. Also the row's key, since two
+   *  cities in different states can share a label. */
+  id?: string;
 }
 
 export function HorizontalBars({
@@ -113,11 +117,17 @@ export function HorizontalBars({
   format = (v) => String(v),
   empty = 'Nothing to show yet.',
   max: fixedMax,
+  onSelect,
+  selected,
 }: {
   data: BarDatum[];
   format?: (value: number) => string;
   empty?: string;
   max?: number;
+  /** Makes rows that have an `id` into buttons that filter the page. */
+  onSelect?: (row: BarDatum) => void;
+  /** The `id` the page is filtered by, drawn as pressed. */
+  selected?: string;
 }) {
   if (data.length === 0) {
     return <p className="px-5 py-8 text-center text-xs text-text-subtle">{empty}</p>;
@@ -128,11 +138,11 @@ export function HorizontalBars({
   const max = fixedMax ?? Math.max(...data.map((d) => d.value), 1);
 
   return (
-    <ul className="space-y-2.5">
+    <ul className={onSelect ? 'space-y-1' : 'space-y-2.5'}>
       {data.map((row) => {
         const share = max > 0 ? Math.max((row.value / max) * 100, row.value > 0 ? 1.5 : 0) : 0;
-        return (
-          <li key={row.label} className="group">
+        const body = (
+          <>
             <div className="flex items-baseline justify-between gap-3">
               <span className="truncate text-xs font-medium">{row.label}</span>
               {/* Value at the tip, per row. Every value being visible is also
@@ -153,6 +163,26 @@ export function HorizontalBars({
                 style={{ width: `${share}%` }}
               />
             </div>
+          </>
+        );
+        return (
+          <li key={row.id ?? row.label} className="group">
+            {onSelect && row.id !== undefined ? (
+              <button
+                type="button"
+                onClick={() => onSelect(row)}
+                aria-pressed={selected === row.id}
+                className={cn(
+                  'w-full rounded-md px-2 py-1.5 text-left hover:bg-surface-sunken',
+                  selected === row.id && 'bg-surface-sunken',
+                )}
+              >
+                {body}
+              </button>
+            ) : (
+              // Same inset as a clickable row, so the bars line up.
+              <div className={cn(onSelect && 'px-2 py-1.5')}>{body}</div>
+            )}
           </li>
         );
       })}

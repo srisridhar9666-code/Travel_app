@@ -28,12 +28,30 @@ class Designation(StrEnum):
 
 class Gender(StrEnum):
     """Drives the room-sharing policy. Anything that is not an exact match
-    between two people falls back to separate rooms."""
+    between two people falls back to separate rooms.
+
+    Only MALE and FEMALE can be chosen now (SELECTABLE_GENDERS). OTHER and
+    UNDISCLOSED stay so rows saved before that rule still load; an admin sets
+    a real value the next time they edit the person."""
 
     MALE = "MALE"
     FEMALE = "FEMALE"
     OTHER = "OTHER"
     UNDISCLOSED = "UNDISCLOSED"
+
+
+#: What a person can be recorded as, on any form or import.
+SELECTABLE_GENDERS = frozenset({Gender.MALE, Gender.FEMALE})
+
+
+class UserStatus(StrEnum):
+    """Where someone stands with the organisation. Only ACTIVE can sign in;
+    `User.is_active` mirrors that, so queries that filter on it keep working."""
+
+    ACTIVE = "ACTIVE"            # can sign in
+    DEACTIVATED = "DEACTIVATED"  # suspended or on leave; reactivate any time
+    LEFT = "LEFT"                # left the organisation; exited_on is set
+    DELETED = "DELETED"          # removed from the team list; history is kept
 
 
 class ProjectStatus(StrEnum):
@@ -54,6 +72,18 @@ class TravelMode(StrEnum):
     TRAIN = "TRAIN"
     BUS = "BUS"
     CAB = "CAB"
+
+
+class RequestPriority(StrEnum):
+    """How soon the requester needs a decision. Set by them, read by admins."""
+
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+#: Sort order for queues: high first.
+PRIORITY_RANK = {RequestPriority.HIGH: 0, RequestPriority.MEDIUM: 1, RequestPriority.LOW: 2}
 
 
 class RequestStatus(StrEnum):

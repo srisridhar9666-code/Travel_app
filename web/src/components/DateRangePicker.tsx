@@ -19,6 +19,7 @@ export type RangePreset =
   | 'last_30'
   | 'last_90'
   | 'next_30'
+  | 'last_30_next_30'
   | 'this_year'
   | 'all'
   | 'custom';
@@ -37,6 +38,7 @@ export const PRESET_LABELS: Record<RangePreset, string> = {
   last_30: 'Last 30 days',
   last_90: 'Last 90 days',
   next_30: 'Next 30 days',
+  last_30_next_30: 'Last 30 & next 30 days',
   this_year: 'This year',
   all: 'All time',
   custom: 'Custom dates',
@@ -64,6 +66,8 @@ export function rangeFor(preset: RangePreset, custom?: { since: string; until: s
       return { preset, since: day(subDays(today, 89)), until: day(today) };
     case 'next_30':
       return { preset, since: day(today), until: day(subDays(today, -29)) };
+    case 'last_30_next_30':
+      return { preset, since: day(subDays(today, 29)), until: day(subDays(today, -30)) };
     case 'this_year':
       return { preset, since: day(startOfYear(today)), until: day(endOfYear(today)) };
     case 'all':
@@ -85,6 +89,22 @@ export function describeRange(range: DateRange): string {
   return range.since ? `From ${fmt(range.since, true)}` : `Until ${fmt(range.until, true)}`;
 }
 
+/** Every preset a page or a deep link can carry. A link from the dashboard
+ *  with range=next_30 must land on a menu that has that choice, or the menu
+ *  shows one thing while the dates mean another. */
+export const DEFAULT_PRESETS: RangePreset[] = [
+  'this_month',
+  'last_month',
+  'last_7',
+  'last_30',
+  'last_90',
+  'next_30',
+  'last_30_next_30',
+  'this_year',
+  'all',
+  'custom',
+];
+
 interface DateRangePickerProps {
   value: DateRange;
   onChange: (next: DateRange) => void;
@@ -97,7 +117,7 @@ interface DateRangePickerProps {
 export function DateRangePicker({
   value,
   onChange,
-  presets = ['this_month', 'last_month', 'last_7', 'last_30', 'last_90', 'this_year', 'all', 'custom'],
+  presets = DEFAULT_PRESETS,
   className,
   id = 'range',
 }: DateRangePickerProps) {

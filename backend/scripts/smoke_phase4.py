@@ -81,7 +81,7 @@ deepak_id, DEEPAK = make_staff("Deepak Shah")
 check("three ground-staff accounts created", all([ravi_id, arjun_id, deepak_id]))
 
 r = c.post("/projects", headers=AH, json={
-    "name": "Phase 4 Fulfilment", "code": f"P4-{STAMP[:6].upper()}", "location": "Madhya Pradesh",
+    "name": "Phase 4 Fulfilment", "code": f"P4-{STAMP[:6].upper()}", "state": "Madhya Pradesh",
 })
 check("campaign created", r.status_code == 201, r.text[:200])
 project_id = r.json()["id"]
