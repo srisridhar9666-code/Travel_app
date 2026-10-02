@@ -1,7 +1,11 @@
 export type Role = 'SYSTEM_ADMIN' | 'ADMIN' | 'GROUND_STAFF';
 export type Designation = 'EXECUTIVE' | 'TEAM_LEAD' | 'MANAGER';
+/** OTHER and UNDISCLOSED only appear on people saved before gender had to be
+ *  chosen; new input is Male or Female (SELECTABLE_GENDERS). */
 export type Gender = 'MALE' | 'FEMALE' | 'OTHER' | 'UNDISCLOSED';
 export type ThemePreference = 'light' | 'dark' | 'system';
+/** Only ACTIVE can sign in. */
+export type UserStatus = 'ACTIVE' | 'DEACTIVATED' | 'LEFT' | 'DELETED';
 
 export interface UserProfile {
   id: number;
@@ -12,10 +16,17 @@ export interface UserProfile {
   designation: Designation | null;
   gender: Gender;
   phone: string | null;
+  base_state: string | null;
+  /** The city or constituency they are based in. */
   base_location: string | null;
+  department_id: number | null;
+  department_name: string | null;
   theme_preference: ThemePreference;
+  status: UserStatus;
   is_active: boolean;
   last_login_at: string | null;
+  /** When they last changed or reset their password. */
+  password_changed_at?: string | null;
 }
 
 export interface LoginResponse {
@@ -34,10 +45,17 @@ export interface UserRow {
   designation: Designation | null;
   gender: Gender;
   phone: string | null;
+  base_state: string | null;
+  /** The city or constituency they are based in. */
   base_location: string | null;
+  department_id: number | null;
+  department_name: string | null;
+  status: UserStatus;
+  status_changed_at: string | null;
+  /** Mirrors status === 'ACTIVE'. */
   is_active: boolean;
   /** The day they left. Starts the 90-day clock on their identity documents.
-   *  Distinct from is_active: a suspension is not a departure. */
+   *  Distinct from deactivation: a suspension is not a departure. */
   exited_on: string | null;
   last_login_at: string | null;
   created_at: string;
@@ -106,9 +124,34 @@ export const DESIGNATION_LABELS: Record<Designation, string> = {
 export const GENDER_LABELS: Record<Gender, string> = {
   MALE: 'Male',
   FEMALE: 'Female',
-  OTHER: 'Other',
-  UNDISCLOSED: 'Prefer not to say',
+  OTHER: 'Other (old value)',
+  UNDISCLOSED: 'Not set',
 };
+
+/** What a form or import can record. */
+export const SELECTABLE_GENDERS = ['MALE', 'FEMALE'] as const satisfies readonly Gender[];
+
+export const USER_STATUS_LABELS: Record<UserStatus, string> = {
+  ACTIVE: 'Active',
+  DEACTIVATED: 'Deactivated',
+  LEFT: 'Left',
+  DELETED: 'Deleted',
+};
+
+/** One line each, true to what the server does. */
+export const USER_STATUS_HELP: Record<UserStatus, string> = {
+  ACTIVE: 'Can sign in and be added to trips.',
+  DEACTIVATED: 'Cannot sign in. For leave or a suspension; reactivate any time.',
+  LEFT: 'Cannot sign in. Their ID documents are deleted 90 days after the exit date.',
+  DELETED: 'Cannot sign in and is hidden from the team list. Travel history is kept; can be restored.',
+};
+
+export interface Department {
+  id: number;
+  name: string;
+  /** People in it, not counting deleted accounts. */
+  member_count: number;
+}
 
 // --- Phase 2 ---------------------------------------------------------------
 
@@ -128,6 +171,10 @@ export interface Project {
   code: string;
   description: string | null;
   client_name: string | null;
+  state: string | null;
+  /** City or assembly constituency. */
+  city: string | null;
+  /** Free text from before state/city; shown until a state is picked. */
   location: string | null;
   status: ProjectStatus;
   start_date: string | null;
@@ -135,6 +182,12 @@ export interface Project {
   created_at: string;
   /** Whether this campaign still appears in the request dropdowns. */
   accepts_requests: boolean;
+  /** Requests raised against it, of any status. Only one with none can be
+   *  deleted. */
+  request_count: number;
+  /** The built-in "Other / not yet listed" campaign the request form needs.
+   *  It cannot be archived, deleted, recoded or paused. */
+  is_fallback: boolean;
 }
 
 export interface IdProof {
@@ -198,6 +251,17 @@ export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
   PAUSED: 'Paused',
   COMPLETED: 'Completed',
   ARCHIVED: 'Archived',
+};
+
+/** What each status does, in the words shown under the status picker. */
+export const PROJECT_STATUS_HELP: Record<ProjectStatus, string> = {
+  ACTIVE: 'Open: staff can pick it when they raise or edit a travel request.',
+  PAUSED:
+    'On hold: hidden from the request form, so no new requests or edits. Trips already raised can still be approved and booked.',
+  COMPLETED:
+    'Finished: no new requests, like Paused, but marks the work as done. Its trips and costs stay in every report.',
+  ARCHIVED:
+    'Put away: no new requests, hidden from staff and greyed out here. Nothing is deleted; Restore reopens it.',
 };
 
 export const ID_PROOF_LABELS: Record<IdProofType, string> = {
@@ -337,6 +401,8 @@ export interface TravelRequest {
   travel_reason: string | null;
   /** Set when the requester picked "Other" and typed a campaign name. */
   other_project_name: string | null;
+  /** How soon the requester needs a decision. */
+  priority: RequestPriority;
   notes: string | null;
   submitted_at: string | null;
   created_at: string;
@@ -373,6 +439,17 @@ export const TRAVEL_MODE_LABELS: Record<TravelMode, string> = {
   BUS: 'Bus',
   CAB: 'Cab',
 };
+
+export type RequestPriority = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export const PRIORITY_LABELS: Record<RequestPriority, string> = {
+  HIGH: 'High',
+  MEDIUM: 'Medium',
+  LOW: 'Low',
+};
+
+/** High first: the order admins work through them. */
+export const PRIORITY_ORDER: RequestPriority[] = ['HIGH', 'MEDIUM', 'LOW'];
 
 export const REQUEST_STATUS_LABELS: Record<RequestStatus, string> = {
   DRAFT: 'Draft',
@@ -428,6 +505,8 @@ export interface QueueCounts {
   expired: number;
   with_conflicts: number;
   edited: number;
+  /** High-priority requests still waiting on a decision. */
+  high_priority: number;
 }
 
 export interface DecisionBody {
@@ -848,6 +927,7 @@ export interface TravelLogEntry {
   project_code: string | null;
   project_name: string | null;
   travel_reason: string | null;
+  priority: RequestPriority;
   booking_reference: string | null;
   companions: string[];
   cost_amount: string | null;

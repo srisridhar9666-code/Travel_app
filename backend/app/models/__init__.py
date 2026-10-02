@@ -3,6 +3,7 @@ which is what Alembic's autogenerate walks."""
 from app.models.audit import GENESIS_HASH, AuditLog
 from app.models.auth_token import AuthToken
 from app.models.base import TenantMixin, TimestampMixin, UTCDateTime, naive_utcnow, utcnow
+from app.models.department import Department
 from app.models.id_proof import IdProof
 from app.models.location import Location
 from app.models.preference import NotificationPreference
@@ -19,6 +20,7 @@ from app.models.user import User
 __all__ = [
     "AuditLog",
     "AuthToken",
+    "Department",
     "GENESIS_HASH",
     "IdProof",
     "Location",

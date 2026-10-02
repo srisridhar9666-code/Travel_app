@@ -9,9 +9,9 @@ buy a mandatory 1:1 join and nothing else. ID proofs live in their own table
 from datetime import date, datetime
 
 from sqlalchemy import Boolean, Date, Enum as SAEnum, ForeignKey, Index, Integer, String
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
-from app.core.enums import Designation, Gender, Role
+from app.core.enums import Designation, Gender, Role, UserStatus
 from app.database import Base
 from app.models.base import TenantMixin, TimestampMixin, UTCDateTime
 
@@ -23,6 +23,7 @@ class User(Base, TenantMixin, TimestampMixin):
         # onboard someone who already exists under the first.
         Index("uq_users_tenant_email", "tenant_id", "email", unique=True),
         Index("ix_users_tenant_role", "tenant_id", "role"),
+        Index("ix_users_tenant_status", "tenant_id", "status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -58,7 +59,18 @@ class User(Base, TenantMixin, TimestampMixin):
         nullable=False,
     )
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: Where they are based: a state and a city or constituency from the place
+    #: list, like a request's origin. `base_location` is the city; it predates
+    #: `base_state` and may still hold free text on older rows.
+    base_state: Mapped[str | None] = mapped_column(String(80), nullable=True)
     base_location: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    #: Which part of the organisation they work in. Admins add departments as
+    #: they need them; this is reporting only and grants no permissions.
+    department_id: Mapped[int | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
+    )
+    department = relationship("Department", lazy="joined")
 
     # --- preferences --------------------------------------------------------
     # Persisted server-side so the theme follows the user across devices,
@@ -66,10 +78,22 @@ class User(Base, TenantMixin, TimestampMixin):
     theme_preference: Mapped[str] = mapped_column(String(10), default="system", nullable=False)
 
     # --- account state ------------------------------------------------------
+    #: The authority on whether someone can sign in: only ACTIVE can. Change it
+    #: through services/accounts.set_status, which keeps the rules in one place.
+    status: Mapped[UserStatus] = mapped_column(
+        SAEnum(UserStatus, native_enum=False, length=20, validate_strings=True),
+        default=UserStatus.ACTIVE,
+        server_default=UserStatus.ACTIVE.value,
+        nullable=False,
+    )
+    status_changed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    #: Mirrors `status == ACTIVE` (kept in step by `_mirror_status`), so every
+    #: query that filters on it - reminders, co-stay, tagging - keeps working.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    #: The day they left the organisation. Distinct from `is_active`, which only
-    #: says whether they can sign in - a contractor can be suspended for a week
+    #: The day they left the organisation. Distinct from deactivation, which
+    #: only stops them signing in - a contractor can be suspended for a week
     #: without having left. Retention counts from this date, not from
     #: deactivation, so a temporary suspension never triggers a purge.
     exited_on: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -77,10 +101,24 @@ class User(Base, TenantMixin, TimestampMixin):
     failed_login_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     locked_until: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
+    #: Tokens issued before this instant are refused (deps.get_current_user), so
+    #: changing or resetting a password signs out every other device.
+    password_changed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
     created_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_by = relationship("User", remote_side=[id], lazy="noload")
+
+    @validates("status")
+    def _mirror_status(self, _key: str, value: UserStatus | str) -> UserStatus:
+        status = UserStatus(value)
+        self.is_active = status is UserStatus.ACTIVE
+        return status
+
+    @property
+    def department_name(self) -> str | None:
+        return self.department.name if self.department is not None else None
 
     @property
     def has_password(self) -> bool:

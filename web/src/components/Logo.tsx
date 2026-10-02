@@ -62,3 +62,14 @@ export function LogoLockup({ className }: { className?: string }) {
     </div>
   );
 }
+
+/** Whose work this is, shown under the sidebar and on the sign-in screens. */
+export const CREATED_BY = 'Sridhar';
+
+export function CreatorCredit({ className }: { className?: string }) {
+  return (
+    <p className={cn('text-2xs text-text-subtle', className)}>
+      Created by <span className="font-medium text-text-muted">{CREATED_BY}</span>
+    </p>
+  );
+}

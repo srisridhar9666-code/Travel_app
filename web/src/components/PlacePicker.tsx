@@ -71,7 +71,12 @@ export function PlacePicker({
             loading={locations.isPending}
             placeholder={locations.isPending ? 'Loading…' : 'Search a state'}
             emptyText="No state by that name."
+            clearable={!required}
             onChange={(next) => {
+              if (!next) {
+                onChange({ state: '', city: '' });
+                return;
+              }
               // A place belongs to its state. Keep a typed one, since it may
               // simply be the state that was wrong.
               const keep = showText || (byState[next] ?? []).includes(city);
@@ -122,6 +127,7 @@ export function PlacePicker({
               value={city}
               options={places}
               allowCustom
+              clearable={!required}
               placeholder={state ? `Search ${places.length} places` : 'Pick a state first'}
               emptyText="Not on the list - choose Other below to type it."
               onChange={(next) => onChange({ state, city: next })}

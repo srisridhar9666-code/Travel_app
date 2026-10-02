@@ -56,10 +56,11 @@ export const api = axios.create({
   timeout: 30_000,
 });
 
-/** Set by the auth store; kept out of it to avoid an import cycle. */
-let onUnauthorized: (() => void) | null = null;
+/** Set by the auth store; kept out of it to avoid an import cycle. Called
+ *  with the server's reason, e.g. "Your account is deactivated...". */
+let onUnauthorized: ((detail?: string) => void) | null = null;
 
-export function setUnauthorizedHandler(handler: () => void) {
+export function setUnauthorizedHandler(handler: (detail?: string) => void) {
   onUnauthorized = handler;
 }
 
@@ -78,27 +79,82 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (response) => response,
-  (error: AxiosError) => {
-    // A 401 means the session is gone - expired, revoked, or the account was
-    // deactivated. Anything else is the caller's to handle.
-    if (error.response?.status === 401 && onUnauthorized) {
-      onUnauthorized();
+  async (error: AxiosError) => {
+    // Downloads ask for a Blob, so their error body arrives as one too. The
+    // server still sent JSON; read it so the reason reaches the person instead
+    // of "Something went wrong."
+    const body = error.response?.data;
+    if (body instanceof Blob && body.type.includes('json')) {
+      try {
+        error.response!.data = JSON.parse(await body.text());
+      } catch {
+        // Keep the blob; errorMessage falls back.
+      }
+    }
+
+    // A 401 means the session is gone - expired, revoked, a password changed
+    // elsewhere, or the account was deactivated. Only a request that carried
+    // the token in use now counts: one sent just before a password change
+    // (with the old token) must not sign out the person who changed it.
+    const sent = error.config?.headers?.Authorization;
+    if (
+      error.response?.status === 401 &&
+      onUnauthorized &&
+      (!accessToken || !sent || sent === `Bearer ${accessToken}`)
+    ) {
+      const detail = (error.response.data as { detail?: unknown } | undefined)?.detail;
+      onUnauthorized(typeof detail === 'string' ? detail : undefined);
     }
     return Promise.reject(error);
   },
 );
+
+/** "full_name" -> "Full name", for naming the field a 422 is about. */
+function fieldLabel(loc: unknown): string | null {
+  if (!Array.isArray(loc) || loc.length === 0) return null;
+  const last = loc[loc.length - 1];
+  if (typeof last !== 'string' || last === 'body' || last === 'query') return null;
+  const words = last.replace(/_id$/, '').replace(/_/g, ' ').trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : null;
+}
 
 /** Pull a readable message out of a FastAPI error body. */
 export function errorMessage(error: unknown, fallback = 'Something went wrong.'): string {
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail;
     if (typeof detail === 'string') return detail;
-    // 422 bodies are a list of per-field validation errors.
+    // 422 bodies are a list of per-field validation errors. Pydantic's wording
+    // ("Value error, ...", no field name) is for developers; say which field
+    // and what is wrong with it.
     if (Array.isArray(detail) && detail.length > 0) {
-      const first = detail[0];
-      if (typeof first?.msg === 'string') return first.msg;
+      const first = detail[0] as {
+        msg?: unknown;
+        type?: unknown;
+        loc?: unknown;
+        ctx?: Record<string, unknown>;
+      };
+      if (typeof first?.msg === 'string') {
+        const message = first.msg.replace(/^(Value error|Assertion failed), /, '');
+        const label = fieldLabel(first.loc);
+        if (!label) return message;
+        switch (first.type) {
+          case 'missing':
+            return `${label} is required.`;
+          case 'string_too_short':
+            return `${label} must be at least ${first.ctx?.min_length} characters.`;
+          case 'string_too_long':
+            return `${label} must be at most ${first.ctx?.max_length} characters.`;
+          case 'value_error':
+            return message;
+          default:
+            return `${label}: ${message}`;
+        }
+      }
     }
-    if (!error.response) return 'Cannot reach the server. Is the API running?';
+    if (error.code === 'ECONNABORTED') {
+      return 'The server took too long to answer. Please try again.';
+    }
+    if (!error.response) return 'Cannot reach the server. Check your connection and try again.';
   }
   return fallback;
 }
