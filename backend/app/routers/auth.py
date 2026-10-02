@@ -16,10 +16,11 @@ from datetime import timedelta
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings
 from app.core.deps import CurrentUser, DbSession
-from app.core.enums import AuditAction, TokenPurpose
+from app.core.enums import AuditAction, TokenPurpose, UserStatus
 from app.core import ratelimit
 from app.core.security import (
     PasswordPolicyError,
@@ -35,17 +36,20 @@ from app.models.base import naive_utcnow
 from app.models.user import User
 from app.schemas.auth import (
     ChangePasswordRequest,
+    EmailChangeRequest,
     ForgotPasswordRequest,
     InviteLinkResponse,
     LoginRequest,
     LoginResponse,
     MessageResponse,
+    PasswordChangedResponse,
+    ProfileUpdateRequest,
     SetPasswordRequest,
     ThemePreferenceRequest,
     TokenPreview,
     UserProfile,
 )
-from app.services import audit
+from app.services import accounts, audit
 from app.services import email as email_service
 
 logger = logging.getLogger(__name__)
@@ -66,6 +70,13 @@ RESET_VALID_HOURS = 2
 _BAD_CREDENTIALS = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail="Incorrect email or password.",
+)
+
+#: For a dead link, and for a live one whose account has since been switched
+#: off - the person cannot tell the two apart, and should not need to.
+_DEAD_LINK = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="This link is invalid or has expired. Ask an administrator for a new one.",
 )
 
 
@@ -184,22 +195,24 @@ def login(payload: LoginRequest, request: Request, db: DbSession) -> LoginRespon
         db.commit()
         raise _BAD_CREDENTIALS
 
-    if not user.is_active:
+    # Checked only after the password, so the account's status is never told
+    # to someone who does not know it.
+    blocked = accounts.blocked_message(user)
+    if blocked:
+        # An ACTIVE row with is_active off was switched off the old way.
+        state = "deactivated" if user.status is UserStatus.ACTIVE else user.status.value.lower()
         audit.record(
             db,
             action=AuditAction.LOGIN_FAILED,
             entity_type="user",
             entity_id=user.id,
-            summary=f"Sign-in attempt on deactivated account {user.email}",
+            summary=f"Sign-in attempt on {state} account {user.email}",
             tenant_id=user.tenant_id,
             actor=user,
             request=request,
         )
         db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This account has been deactivated. Contact an administrator.",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=blocked)
 
     user.failed_login_count = 0
     user.locked_until = None
@@ -261,32 +274,177 @@ def set_theme(payload: ThemePreferenceRequest, user: CurrentUser, db: DbSession)
     return UserProfile.model_validate(user)
 
 
-@router.post("/change-password", response_model=MessageResponse)
-def change_password(
-    payload: ChangePasswordRequest, user: CurrentUser, request: Request, db: DbSession
-) -> MessageResponse:
-    if not verify_password(payload.current_password, user.password_hash):
+@router.patch("/me", response_model=UserProfile)
+def update_my_profile(
+    payload: ProfileUpdateRequest, user: CurrentUser, request: Request, db: DbSession
+) -> UserProfile:
+    """Anyone may correct their own name and phone number.
+
+    No password needed: neither is a way into the account. Everything else
+    about a person - role, department, gender, base - is the admin's to set.
+    """
+    updates = payload.model_dump(exclude_unset=True)
+    if updates.get("full_name") is None:
+        updates.pop("full_name", None)
+
+    before = {key: getattr(user, key) for key in updates}
+    for key, value in updates.items():
+        setattr(user, key, value)
+    changes = audit.diff(before, {key: getattr(user, key) for key in updates})
+
+    if changes:
         audit.record(
             db,
-            action=AuditAction.LOGIN_FAILED,
+            action=AuditAction.UPDATE,
             entity_type="user",
             entity_id=user.id,
-            summary=f"{user.full_name} gave the wrong current password when changing it",
+            summary=f"{user.full_name} updated their profile ({', '.join(sorted(changes))})",
+            changes=changes,
             tenant_id=user.tenant_id,
             actor=user,
             request=request,
         )
-        db.commit()
+    db.commit()
+    db.refresh(user)
+    return UserProfile.model_validate(user)
+
+
+def _check_current_password(
+    db: DbSession, user: User, password: str, request: Request, *, doing: str
+) -> None:
+    """Re-check the password before a change that could take the account over.
+
+    A wrong answer is 400, never 401: the client signs out on any 401, and
+    mistyping your own password should not end your session. Wrong answers are
+    limited per person, so a session left open on a shared phone cannot be
+    used to guess the password at leisure.
+    """
+    key = f"reauth:user:{user.id}"
+    allowed, retry_after = ratelimit.REAUTH.peek(key)
+    if not allowed:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect."
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many wrong passwords. Try again in about {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
         )
+
+    if verify_password(password, user.password_hash):
+        return
+
+    ratelimit.REAUTH.record(key)
+    audit.record(
+        db,
+        action=AuditAction.LOGIN_FAILED,
+        entity_type="user",
+        entity_id=user.id,
+        summary=f"{user.full_name} gave the wrong current password when {doing}",
+        tenant_id=user.tenant_id,
+        actor=user,
+        request=request,
+    )
+    db.commit()
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect."
+    )
+
+
+@router.post("/me/email", response_model=UserProfile)
+def change_my_email(
+    payload: EmailChangeRequest,
+    user: CurrentUser,
+    request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> UserProfile:
+    """Change the address you sign in with.
+
+    Takes effect at once - there is no confirmation link, because mail may be
+    off in this deployment and the feature would then not work at all. The old
+    address is told, so a change the owner did not make does not go unnoticed.
+    The session carries on: tokens name the person by id, not by email.
+    """
+    new_email = payload.new_email
+    if new_email == user.email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That is already your sign-in email.",
+        )
+
+    _check_current_password(
+        db, user, payload.current_password, request, doing="changing their email"
+    )
+
+    taken = db.execute(
+        select(User.id).where(
+            User.tenant_id == user.tenant_id, User.email == new_email, User.id != user.id
+        )
+    ).first()
+    if taken is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Another account already uses that email.",
+        )
+
+    old_email = user.email
+    user.email = new_email
+    audit.record(
+        db,
+        action=AuditAction.UPDATE,
+        entity_type="user",
+        entity_id=user.id,
+        summary=f"{user.full_name} changed their sign-in email from {old_email} to {new_email}",
+        changes={"email": {"from": old_email, "to": new_email}},
+        tenant_id=user.tenant_id,
+        actor=user,
+        request=request,
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        # Someone took the address between the check and the write.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Another account already uses that email.",
+        ) from None
+    db.refresh(user)
+
+    background.add_task(
+        email_service.send_email_changed_notice, old_email, user.full_name, new_email
+    )
+    return UserProfile.model_validate(user)
+
+
+@router.post("/change-password", response_model=PasswordChangedResponse)
+def change_password(
+    payload: ChangePasswordRequest,
+    user: CurrentUser,
+    request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> PasswordChangedResponse:
+    """Change your own password, and sign out every other device.
+
+    Someone changing their password often suspects another person has it, so
+    tokens issued before now stop working. The caller's own token is one of
+    them; a fresh one comes back in the response for this device to carry on.
+    """
+    _check_current_password(
+        db, user, payload.current_password, request, doing="changing their password"
+    )
 
     try:
         validate_password(payload.new_password, email=user.email, name=user.full_name)
     except PasswordPolicyError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    if verify_password(payload.new_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Choose a password different from your current one.",
+        )
 
     user.password_hash = hash_password(payload.new_password)
+    user.password_changed_at = naive_utcnow()
     audit.record(
         db,
         action=AuditAction.UPDATE,
@@ -300,7 +458,17 @@ def change_password(
         request=request,
     )
     db.commit()
-    return MessageResponse(detail="Password updated.")
+
+    # Minted after the stamp, so its `iat` is not before the cutoff.
+    token, expires_at = create_access_token(
+        user_id=user.id, role=str(user.role), tenant_id=user.tenant_id
+    )
+    background.add_task(email_service.send_password_changed_notice, user.email, user.full_name)
+    return PasswordChangedResponse(
+        detail="Password changed. You have been signed out on your other devices.",
+        access_token=token,
+        expires_at=expires_at,
+    )
 
 
 @router.get("/token/{raw_token}", response_model=TokenPreview)
@@ -311,11 +479,9 @@ def preview_token(raw_token: str, request: Request, db: DbSession) -> TokenPrevi
         select(AuthToken).where(AuthToken.token_hash == hash_url_token(raw_token))
     ).scalar_one_or_none()
 
-    if token is None or not token.is_usable:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="This link is invalid or has expired. Ask an administrator for a new one.",
-        )
+    # A link issued before the account was switched off must not still work.
+    if token is None or not token.is_usable or accounts.blocked_message(token.user):
+        raise _DEAD_LINK
 
     return TokenPreview(
         full_name=token.user.full_name,
@@ -334,11 +500,8 @@ def set_password(payload: SetPasswordRequest, request: Request, db: DbSession) -
         .with_for_update()
     ).scalar_one_or_none()
 
-    if token is None or not token.is_usable:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="This link is invalid or has expired. Ask an administrator for a new one.",
-        )
+    if token is None or not token.is_usable or accounts.blocked_message(token.user):
+        raise _DEAD_LINK
 
     user = token.user
     try:
@@ -349,6 +512,9 @@ def set_password(payload: SetPasswordRequest, request: Request, db: DbSession) -
     first_time = not user.has_password
 
     user.password_hash = hash_password(payload.password)
+    # A reset signs out every other device, as a change does: someone resetting
+    # a password may be locking out whoever else had it.
+    user.password_changed_at = naive_utcnow()
     # Redeeming a reset is also the way out of a lockout.
     user.failed_login_count = 0
     user.locked_until = None
@@ -414,7 +580,9 @@ def forgot_password(
         select(User).where(User.tenant_id == settings.default_tenant, User.email == email)
     ).scalar_one_or_none()
 
-    if user is None or not user.is_active:
+    # Silent for a switched-off account too: the answer must not say which
+    # addresses exist, and a reset link would not let them in anyway.
+    if user is None or accounts.blocked_message(user):
         return generic
 
     raw, _ = _issue_token(db, user, TokenPurpose.PASSWORD_RESET, valid_hours=RESET_VALID_HOURS)

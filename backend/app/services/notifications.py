@@ -154,8 +154,14 @@ def notify(
     db.add(in_app)
     rows.append(in_app)
 
-    wants_email = send_email and bool(user.email) and wants(
-        db, user, category, NotificationChannel.EMAIL
+    # Someone who has left or been switched off still gets the in-app row - it
+    # is the record that they were told - but no more mail. (`is_active`
+    # mirrors status == ACTIVE.)
+    wants_email = (
+        send_email
+        and user.is_active
+        and bool(user.email)
+        and wants(db, user, category, NotificationChannel.EMAIL)
     )
     if wants_email:
         mail = Notification(

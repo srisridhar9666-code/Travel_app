@@ -22,17 +22,27 @@ from fastapi import (
     status,
 )
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.deps import AdminUser, CurrentUser, DbSession
-from app.core.enums import AuditAction, Role, TokenPurpose
+from app.core.enums import AuditAction, Role, TokenPurpose, UserStatus
 from app.models.base import naive_utcnow
+from app.models.department import Department
 from app.models.user import User
 from app.routers.auth import INVITE_VALID_HOURS, _issue_token, build_invite_url
 from app.schemas.auth import InviteLinkResponse
 from app.schemas.bulk import ImportPreview, ImportResult
-from app.schemas.user import UserCreate, UserListResponse, UserRead, UserUpdate
-from app.services import audit, bulk_import, history
+from app.schemas.user import (
+    OpenTrips,
+    UserCreate,
+    UserListResponse,
+    UserRead,
+    UserStatusChange,
+    UserUpdate,
+)
+from app.services import accounts, audit, bulk_import, history, locations
 from app.services import email as email_service
 
 logger = logging.getLogger(__name__)
@@ -52,7 +62,12 @@ def _to_read(user: User) -> UserRead:
         designation=user.designation,
         gender=user.gender,
         phone=user.phone,
+        base_state=user.base_state,
         base_location=user.base_location,
+        department_id=user.department_id,
+        department_name=user.department_name,
+        status=user.status,
+        status_changed_at=user.status_changed_at,
         is_active=user.is_active,
         exited_on=user.exited_on,
         last_login_at=user.last_login_at,
@@ -75,6 +90,51 @@ def _guard_role_assignment(actor: User, target_role: Role | None) -> None:
         )
 
 
+def _get_target(db: Session, actor: User, user_id: int) -> User:
+    user = db.get(User, user_id)
+    if user is None or user.tenant_id != actor.tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return user
+
+
+def _check_department(db: Session, actor: User, department_id: int | None) -> None:
+    """A department from this organisation, or none. 422, because a stale id
+    from another tab is a bad value in the form, not a missing page."""
+    if department_id is None:
+        return
+    found = db.get(Department, department_id)
+    if found is None or found.tenant_id != actor.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown department."
+        )
+
+
+def _email_taken(db: Session, tenant_id: str, email: str, *, other_than: int | None = None) -> None:
+    """409 when the address already belongs to someone.
+
+    A deleted account keeps its address - it can be restored, with its history
+    - so the message says where to find it rather than leaving the admin
+    puzzled that nobody on the list has it.
+    """
+    stmt = select(User).where(User.tenant_id == tenant_id, User.email == email)
+    if other_than is not None:
+        stmt = stmt.where(User.id != other_than)
+    existing = db.execute(stmt).scalar_one_or_none()
+    if existing is None:
+        return
+    if existing.status is UserStatus.DELETED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{email} belongs to a deleted account - restore it from the team list "
+                "(Status: Deleted)."
+            ),
+        )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT, detail=f"{email} already has an account."
+    )
+
+
 @router.get("", response_model=UserListResponse)
 def list_users(
     actor: AdminUser,
@@ -82,24 +142,50 @@ def list_users(
     search: Annotated[str | None, Query(max_length=120)] = None,
     role: Annotated[Role | None, Query()] = None,
     is_active: Annotated[bool | None, Query()] = None,
+    user_status: Annotated[UserStatus | None, Query(alias="status")] = None,
+    department_id: Annotated[int | None, Query()] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 25,
 ) -> UserListResponse:
+    """Everyone except deleted accounts, unless asked for those by status.
+
+    Deactivated and left people stay on the list: they still have history,
+    and an admin looking for them should find them.
+    """
     filters = [User.tenant_id == actor.tenant_id]
     if search:
         like = f"%{search.strip()}%"
         filters.append(
-            or_(User.full_name.like(like), User.email.like(like), User.employee_code.like(like))
+            or_(
+                User.full_name.like(like),
+                User.email.like(like),
+                User.employee_code.like(like),
+                User.base_location.like(like),
+                User.base_state.like(like),
+                Department.name.like(like),
+            )
         )
     if role is not None:
         filters.append(User.role == role)
     if is_active is not None:
         filters.append(User.is_active.is_(is_active))
+    if user_status is None:
+        filters.append(User.status != UserStatus.DELETED)
+    else:
+        filters.append(User.status == user_status)
+    if department_id is not None:
+        filters.append(User.department_id == department_id)
 
-    total = db.execute(select(func.count()).select_from(User).where(*filters)).scalar_one()
+    # Joined for the search on its name; the department itself loads with the
+    # user anyway.
+    joined = Department, Department.id == User.department_id
+    total = db.execute(
+        select(func.count(User.id)).select_from(User).outerjoin(*joined).where(*filters)
+    ).scalar_one()
     rows = (
         db.execute(
             select(User)
+            .outerjoin(*joined)
             .where(*filters)
             .order_by(User.full_name)
             .offset((page - 1) * page_size)
@@ -119,15 +205,12 @@ def create_user(
     payload: UserCreate, actor: AdminUser, request: Request, db: DbSession
 ) -> InviteLinkResponse:
     _guard_role_assignment(actor, payload.role)
-
-    existing = db.execute(
-        select(User).where(User.tenant_id == actor.tenant_id, User.email == payload.email)
-    ).scalar_one_or_none()
-    if existing is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"{payload.email} already has an account.",
-        )
+    _email_taken(db, actor.tenant_id, payload.email)
+    _check_department(db, actor, payload.department_id)
+    # "hyd" under Telangana is stored as Hyderabad, as a request's places are.
+    base_state, base_location = locations.canonical(
+        db, actor.tenant_id, payload.base_state, payload.base_location
+    )
 
     user = User(
         tenant_id=actor.tenant_id,
@@ -138,7 +221,9 @@ def create_user(
         gender=payload.gender,
         phone=payload.phone,
         employee_code=payload.employee_code,
-        base_location=payload.base_location,
+        base_state=base_state,
+        base_location=base_location,
+        department_id=payload.department_id,
         password_hash=None,  # set by the invitee, never by the admin
         created_by_id=actor.id,
     )
@@ -184,6 +269,7 @@ def create_user(
         expires_at=token.expires_at,
         email_sent=sent.ok,
         email_detail=None if sent.ok else sent.detail,
+        purpose=str(TokenPurpose.INVITE),
     )
 
 
@@ -247,12 +333,18 @@ async def import_commit(
     names: dict[str, str] = {}
     errors: list[str] = []
     created = 0
+    departments: dict[str, Department] = {}
 
     for row in preview.rows:
-        if not row.importable or not row.email or not row.full_name:
+        if not row.importable or not row.email or not row.full_name or row.gender is None:
             continue
 
         _guard_role_assignment(actor, row.role)
+        department = (
+            _department_for_import(db, actor, request, row.department, departments)
+            if row.department
+            else None
+        )
 
         user = User(
             tenant_id=actor.tenant_id,
@@ -263,7 +355,9 @@ async def import_commit(
             gender=row.gender,
             phone=row.phone,
             employee_code=row.employee_code,
+            base_state=row.base_state,
             base_location=row.base_location,
+            department_id=department.id if department else None,
             password_hash=None,
             created_by_id=actor.id,
         )
@@ -310,6 +404,43 @@ async def import_commit(
     )
 
 
+def _department_for_import(
+    db: Session,
+    actor: User,
+    request: Request,
+    name: str,
+    cache: dict[str, Department],
+) -> Department:
+    """The department a row names, created the first time the file mentions it.
+
+    Cached by lower-cased name for the request, so fifty rows saying "Field
+    Operations" make one department and one audit line, not fifty.
+    """
+    key = name.casefold()
+    if key in cache:
+        return cache[key]
+    found = db.execute(
+        select(Department).where(Department.tenant_id == actor.tenant_id, Department.name == name)
+    ).scalar_one_or_none()
+    if found is None:
+        found = Department(tenant_id=actor.tenant_id, name=name)
+        db.add(found)
+        db.flush()
+        audit.record(
+            db,
+            action=AuditAction.CREATE,
+            entity_type="department",
+            entity_id=found.id,
+            summary=f"{actor.full_name} added the department {found.name} (bulk import)",
+            changes={"name": {"from": None, "to": found.name}},
+            tenant_id=actor.tenant_id,
+            actor=actor,
+            request=request,
+        )
+    cache[key] = found
+    return found
+
+
 def _email_invites(invite_urls: dict[str, str], names: dict[str, str]) -> None:
     for address, url in invite_urls.items():
         email_service.send_account_link(
@@ -319,37 +450,56 @@ def _email_invites(invite_urls: dict[str, str], names: dict[str, str]) -> None:
 
 @router.get("/{user_id}", response_model=UserRead)
 def get_user(user_id: int, actor: AdminUser, db: DbSession) -> UserRead:
-    user = db.get(User, user_id)
-    if user is None or user.tenant_id != actor.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-    return _to_read(user)
+    return _to_read(_get_target(db, actor, user_id))
 
 
 @router.patch("/{user_id}", response_model=UserRead)
 def update_user(
-    user_id: int, payload: UserUpdate, actor: AdminUser, request: Request, db: DbSession
+    user_id: int,
+    payload: UserUpdate,
+    actor: AdminUser,
+    request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
 ) -> UserRead:
-    user = db.get(User, user_id)
-    if user is None or user.tenant_id != actor.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    user = _get_target(db, actor, user_id)
+    accounts.assert_may_manage(actor, user)
 
     updates = payload.model_dump(exclude_unset=True)
     _guard_role_assignment(actor, updates.get("role"))
 
-    # Nobody edits their own role or switches off their own account - either
-    # would let an admin lock the organisation out of its own admin tier.
+    # Nobody edits their own role - it would let an admin lock the
+    # organisation out of its own admin tier. Nor their own sign-in email from
+    # here: that needs their current password, on My profile, or a stolen
+    # admin session could move the account somewhere its owner cannot reach.
     if user.id == actor.id:
         if "role" in updates and updates["role"] != user.role:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="You cannot change your own role.",
             )
-        if updates.get("is_active") is False:
+        if "email" in updates and updates["email"] != user.email:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="You cannot deactivate your own account.",
+                detail="Change your own sign-in email from My profile - it needs your current password.",
             )
 
+    if "role" in updates:
+        accounts.assert_keeps_a_system_admin(db, user, new_role=updates["role"])
+    if "email" in updates and updates["email"] != user.email:
+        _email_taken(db, actor.tenant_id, updates["email"], other_than=user.id)
+    if "department_id" in updates:
+        _check_department(db, actor, updates["department_id"])
+    if "base_state" in updates or "base_location" in updates:
+        # Checked as a pair, because a city is only canonical inside its state.
+        updates["base_state"], updates["base_location"] = locations.canonical(
+            db,
+            actor.tenant_id,
+            updates.get("base_state", user.base_state),
+            updates.get("base_location", user.base_location),
+        )
+
+    old_email = user.email
     before = {key: getattr(user, key) for key in updates}
     for key, value in updates.items():
         setattr(user, key, value)
@@ -368,23 +518,88 @@ def update_user(
             actor=actor,
             request=request,
         )
+    try:
+        db.commit()
+    except IntegrityError:
+        # The address was taken between the check and the write.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{updates.get('email', 'That email')} already has an account.",
+        ) from None
+    db.refresh(user)
+
+    if user.email != old_email:
+        background.add_task(
+            email_service.send_email_changed_notice,
+            old_email,
+            user.full_name,
+            user.email,
+            by=actor.full_name,
+        )
+    return _to_read(user)
+
+
+@router.post("/{user_id}/status", response_model=UserRead)
+def change_status(
+    user_id: int,
+    payload: UserStatusChange,
+    actor: AdminUser,
+    request: Request,
+    db: DbSession,
+) -> UserRead:
+    """Activate, deactivate, mark as left, or delete.
+
+    Only Active can sign in; the change takes effect on the person's very next
+    request, because every request re-reads their row. Their unused invite or
+    reset links are spent, so none can be redeemed later. Their trips are left
+    alone - the admin is warned about them first (GET .../open-trips).
+    """
+    user = _get_target(db, actor, user_id)
+    if user.id == actor.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot change your own status.",
+        )
+    accounts.assert_may_manage(actor, user)
+    accounts.assert_keeps_a_system_admin(db, user, new_status=payload.status)
+
+    accounts.set_status(
+        db,
+        user=user,
+        new_status=payload.status,
+        actor=actor,
+        exited_on=payload.exited_on,
+        reason=payload.reason,
+        request=request,
+    )
     db.commit()
     db.refresh(user)
     return _to_read(user)
+
+
+@router.get("/{user_id}/open-trips", response_model=OpenTrips)
+def open_trips(user_id: int, actor: AdminUser, db: DbSession) -> OpenTrips:
+    """Trips this person is on that are not over yet, for the status dialog."""
+    return OpenTrips(**accounts.open_trips(db, _get_target(db, actor, user_id)))
 
 
 @router.post("/{user_id}/reinvite", response_model=InviteLinkResponse)
 def reinvite(
     user_id: int, actor: AdminUser, request: Request, db: DbSession
 ) -> InviteLinkResponse:
-    """Issue a fresh invite link, invalidating any earlier one."""
-    user = db.get(User, user_id)
-    if user is None or user.tenant_id != actor.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-    if not user.is_active:
+    """Issue a fresh invite link, or a password reset link once they have a
+    password. Invalidates any earlier link of the same kind.
+
+    This is also how an admin resets someone's password: they never see or set
+    it, they hand over a one-time link.
+    """
+    user = _get_target(db, actor, user_id)
+    accounts.assert_may_manage(actor, user)
+    if accounts.blocked_message(user):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Reactivate this account before inviting them again.",
+            detail=f"Set {user.full_name}'s status to Active before sending a new link.",
         )
 
     purpose = TokenPurpose.INVITE if not user.has_password else TokenPurpose.PASSWORD_RESET
@@ -422,15 +637,15 @@ def reinvite(
         expires_at=token.expires_at,
         email_sent=sent.ok,
         email_detail=None if sent.ok else sent.detail,
+        purpose=str(purpose),
     )
 
 
 @router.post("/{user_id}/unlock", response_model=UserRead)
 def unlock(user_id: int, actor: AdminUser, request: Request, db: DbSession) -> UserRead:
     """Clear a failed-attempt lockout without waiting it out."""
-    user = db.get(User, user_id)
-    if user is None or user.tenant_id != actor.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    user = _get_target(db, actor, user_id)
+    accounts.assert_may_manage(actor, user)
 
     user.locked_until = None
     user.failed_login_count = 0

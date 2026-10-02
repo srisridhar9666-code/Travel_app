@@ -1,38 +1,16 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { AlertCircle, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { AlertCircle, ShieldCheck } from 'lucide-react';
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
-import { LogoLockup } from '@/components/Logo';
+import { CreatorCredit, LogoLockup } from '@/components/Logo';
+import { PasswordChecklist } from '@/components/PasswordChecklist';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button, Field, Input, Spinner } from '@/components/ui';
 import { errorMessage, previewToken, setPassword } from '@/lib/api';
+import { passwordIssues } from '@/lib/password';
 import { useAuth } from '@/store/auth';
-
-const MIN_LENGTH = 10;
-
-/** Mirrors the server-side policy so the user is told before they submit.
- *  The server remains the authority - this is courtesy, not enforcement. */
-function localIssues(password: string, email?: string, name?: string): string[] {
-  const issues: string[] = [];
-  if (password.length < MIN_LENGTH) issues.push(`At least ${MIN_LENGTH} characters`);
-  if (new Set(password).size < 5) issues.push('A greater variety of characters');
-  const lowered = password.toLowerCase();
-  if (email) {
-    const local = email.split('@')[0].toLowerCase();
-    if (local.length >= 4 && lowered.includes(local)) issues.push('Must not contain your email');
-  }
-  if (name) {
-    for (const part of name.toLowerCase().split(/\s+/)) {
-      if (part.length >= 4 && lowered.includes(part)) {
-        issues.push('Must not contain your name');
-        break;
-      }
-    }
-  }
-  return issues;
-}
 
 export default function SetPasswordPage() {
   const [params] = useSearchParams();
@@ -51,7 +29,7 @@ export default function SetPasswordPage() {
   });
 
   const issues = useMemo(
-    () => localIssues(password, preview.data?.email, preview.data?.full_name),
+    () => passwordIssues(password, preview.data?.email, preview.data?.full_name),
     [password, preview.data],
   );
   const mismatch = confirm.length > 0 && password !== confirm;
@@ -59,6 +37,8 @@ export default function SetPasswordPage() {
 
   const mutation = useMutation({
     mutationFn: () => setPassword(token, password),
+    // The error box sits right above the button; a toast would only repeat it.
+    meta: { errorToast: false },
     onSuccess: () => {
       // Whoever redeemed this link is almost certainly not whoever was last
       // signed in on this browser. Without clearing, accepting an invite on a
@@ -146,26 +126,7 @@ export default function SetPasswordPage() {
                   />
                 </Field>
 
-                {password.length > 0 && (
-                  <ul className="space-y-1 rounded-md bg-surface-sunken px-3 py-2.5">
-                    {issues.length === 0 ? (
-                      <li className="flex items-center gap-2 text-xs text-success">
-                        <CheckCircle2 size={13} />
-                        Looks good
-                      </li>
-                    ) : (
-                      issues.map((issue) => (
-                        <li
-                          key={issue}
-                          className="flex items-center gap-2 text-xs text-text-muted"
-                        >
-                          <span className="h-1 w-1 rounded-full bg-text-subtle" />
-                          {issue}
-                        </li>
-                      ))
-                    )}
-                  </ul>
-                )}
+                <PasswordChecklist password={password} issues={issues} />
 
                 {error && (
                   <div
@@ -191,6 +152,8 @@ export default function SetPasswordPage() {
           )}
         </div>
       </div>
+
+      <CreatorCredit className="mx-auto w-full max-w-sm pt-6 text-center" />
     </div>
   );
 }

@@ -31,8 +31,9 @@ Other properties worth knowing:
   and free. Two replicas each allow the quota - stated here rather than
   discovered later. The fix when that matters is Redis behind `check()`, not a
   redesign.
-* **Only unauthenticated endpoints.** An authenticated user hitting the API hard
-  is a bug to find, not an attacker to stop.
+* **Mostly unauthenticated endpoints.** An authenticated user hitting the API
+  hard is a bug to find, not an attacker to stop. The exceptions (EMAIL_TEST,
+  REAUTH) guard something a stolen session could abuse.
 * **429 with `Retry-After`.** A client that cannot tell "slow down" from "wrong
   password" will retry the wrong one forever.
 """
@@ -138,6 +139,11 @@ TOKEN = SlidingWindow(limit=40, window_seconds=300)
 #: account, and a few retries while fixing settings is normal, a loop is not.
 EMAIL_TEST = SlidingWindow(limit=10, window_seconds=900)
 
+#: A wrong current password on change-password or change-email, per user.
+#: Authenticated, like EMAIL_TEST, because a stolen session must not be able to
+#: grind the password that guards the sign-in email.
+REAUTH = SlidingWindow(limit=5, window_seconds=900)
+
 
 def client_key(request: Request) -> str:
     """Who to count against.
@@ -214,5 +220,5 @@ def penalise(window: SlidingWindow, key: str) -> None:
 
 def reset_all() -> None:
     """Clear every window. Used by the test suite between cases."""
-    for window in (LOGIN, LOGIN_BURST, RESET, RESET_BURST, TOKEN, EMAIL_TEST):
+    for window in (LOGIN, LOGIN_BURST, RESET, RESET_BURST, TOKEN, EMAIL_TEST, REAUTH):
         window.reset()

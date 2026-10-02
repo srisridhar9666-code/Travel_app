@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   BarChart3,
   Bell,
@@ -10,17 +10,19 @@ import {
   LogOut,
   Menu,
   ScrollText,
+  UserRound,
   Users,
   X,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import toast from 'react-hot-toast';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
-import { LogoLockup } from '@/components/Logo';
+import { CreatorCredit, LogoLockup } from '@/components/Logo';
 import NotificationBell from '@/components/NotificationBell';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button } from '@/components/ui';
-import { logout, saveThemePreference } from '@/lib/api';
+import { fetchMe, logout, saveThemePreference } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
 import { useTheme } from '@/store/theme';
@@ -41,6 +43,7 @@ const NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, group: 'Workspace' },
   { to: '/requests', label: 'My requests', icon: CalendarCheck, group: 'Workspace' },
   { to: '/notifications', label: 'Notifications', icon: Bell, group: 'Workspace' },
+  { to: '/profile', label: 'My profile', icon: UserRound, group: 'Workspace' },
   { to: '/approvals', label: 'Approvals', icon: CheckSquare, roles: ADMINS, group: 'Operations' },
   { to: '/travel-logs', label: 'Travel logs', icon: History, roles: ADMINS, group: 'Operations' },
   { to: '/analytics', label: 'Cost analytics', icon: BarChart3, roles: ADMINS, group: 'Operations' },
@@ -92,11 +95,25 @@ export default function AppShell() {
       .catch(() => undefined);
   }, [preference, user]);
 
+  // The copy of the user saved at sign-in goes stale: an admin may rename
+  // them, change their role or department, or switch the account off. Reading
+  // it again on load and whenever the tab regains focus keeps the shell
+  // honest, and a switched-off account is signed out there and then (401).
+  const me = useQuery({ queryKey: ['me'], queryFn: fetchMe, refetchOnWindowFocus: true });
+  useEffect(() => {
+    if (me.data) useAuth.getState().setUser(me.data);
+  }, [me.data]);
+
   const signOutMutation = useMutation({
     mutationFn: logout,
     // The session ends locally regardless - a failed call must not trap
-    // someone in a session they have asked to leave.
-    onSettled: () => signOut(),
+    // someone in a session they have asked to leave - so a failure is not
+    // worth a red toast either.
+    meta: { errorToast: false },
+    onSettled: () => {
+      signOut();
+      toast.success('Signed out');
+    },
   });
 
   const visible = NAV.filter((item) => !item.roles || (user && item.roles.includes(user.role)));
@@ -153,7 +170,7 @@ export default function AppShell() {
               <div key={group}>
                 {/* Ground staff see one short list, so a heading would only
                     add noise there. */}
-                {visible.length > 3 && (
+                {visible.length > 4 && (
                   <p className="mb-1.5 px-2.5 text-2xs font-semibold uppercase tracking-wider text-text-subtle">
                     {group}
                   </p>
@@ -192,16 +209,22 @@ export default function AppShell() {
         </nav>
 
         <div className="shrink-0 border-t border-border p-3">
-          <div className="flex items-center gap-2.5 rounded-md px-2 py-2">
-            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand-soft text-xs font-semibold text-brand-strong">
-              {user ? initials(user.full_name) : '?'}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{user?.full_name}</p>
-              <p className="truncate text-xs text-text-subtle">
-                {user ? ROLE_LABELS[user.role] : ''}
-              </p>
-            </div>
+          <div className="flex items-center gap-1">
+            <NavLink
+              to="/profile"
+              title="My profile"
+              className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 py-2 transition-colors hover:bg-surface-sunken"
+            >
+              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand-soft text-xs font-semibold text-brand-strong">
+                {user ? initials(user.full_name) : '?'}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{user?.full_name}</p>
+                <p className="truncate text-xs text-text-subtle">
+                  {user ? ROLE_LABELS[user.role] : ''}
+                </p>
+              </div>
+            </NavLink>
             <Button
               variant="ghost"
               size="icon"
@@ -213,6 +236,7 @@ export default function AppShell() {
               {!signOutMutation.isPending && <LogOut size={15} />}
             </Button>
           </div>
+          <CreatorCredit className="mt-1 px-2" />
         </div>
       </aside>
 

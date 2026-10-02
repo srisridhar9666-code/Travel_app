@@ -10,6 +10,7 @@ import type {
   Colleague,
   CoStayMatch,
   CostPreview,
+  Department,
   EmailStatus,
   EmailTestResult,
   FilterOptions,
@@ -26,7 +27,10 @@ import type {
   LoginResponse,
   NotificationPreferences,
   NotificationLedger,
+  OpenTrips,
   Paginated,
+  PasswordChanged,
+  ProfileUpdate,
   DecisionBody,
   Project,
   QueueCounts,
@@ -45,6 +49,7 @@ import type {
   UncostedRow,
   UserProfile,
   UserRow,
+  UserStatus,
 } from '@/types';
 
 /**
@@ -191,8 +196,20 @@ export const fetchMe = () => api.get<UserProfile>('/auth/me').then((r) => r.data
 export const saveThemePreference = (theme_preference: ThemePreference) =>
   api.patch<UserProfile>('/auth/me/theme', { theme_preference }).then((r) => r.data);
 
+/** Signs out every other device; the answer carries a fresh token for this
+ *  one (swap it in with the auth store's replaceToken). */
 export const changePassword = (current_password: string, new_password: string) =>
-  api.post('/auth/change-password', { current_password, new_password }).then((r) => r.data);
+  api
+    .post<PasswordChanged>('/auth/change-password', { current_password, new_password })
+    .then((r) => r.data);
+
+export const updateMyProfile = (payload: ProfileUpdate) =>
+  api.patch<UserProfile>('/auth/me', payload).then((r) => r.data);
+
+export const changeMyEmail = (new_email: string, current_password: string) =>
+  api
+    .post<UserProfile>('/auth/me/email', { new_email, current_password })
+    .then((r) => r.data);
 
 export const previewToken = (token: string) =>
   api.get<TokenPreview>(`/auth/token/${token}`).then((r) => r.data);
@@ -209,6 +226,9 @@ export interface UserQuery {
   search?: string;
   role?: string;
   is_active?: boolean;
+  /** Without it, everyone except deleted accounts. */
+  status?: UserStatus;
+  department_id?: number;
   page?: number;
   page_size?: number;
 }
@@ -221,23 +241,57 @@ export interface UserPayload {
   full_name: string;
   role: string;
   designation?: string | null;
-  gender?: string;
+  /** MALE or FEMALE; required on create. */
+  gender: string;
   phone?: string | null;
   employee_code?: string | null;
+  base_state?: string | null;
+  /** The city or constituency. */
   base_location?: string | null;
+  department_id?: number | null;
 }
+
+/** A partial update. Status is not here: it has its own endpoint. */
+export type UserUpdatePayload = Partial<UserPayload>;
 
 export const createUser = (payload: UserPayload) =>
   api.post<InviteLink>('/users', payload).then((r) => r.data);
 
-export const updateUser = (id: number, payload: Partial<UserPayload> & { is_active?: boolean }) =>
+export const updateUser = (id: number, payload: UserUpdatePayload) =>
   api.patch<UserRow>(`/users/${id}`, payload).then((r) => r.data);
+
+export interface StatusChange {
+  status: UserStatus;
+  /** Left (or Deleted) only; defaults to today on the server. */
+  exited_on?: string | null;
+  reason?: string | null;
+}
+
+export const changeUserStatus = (id: number, change: StatusChange) =>
+  api.post<UserRow>(`/users/${id}/status`, change).then((r) => r.data);
+
+export const fetchUserOpenTrips = (id: number) =>
+  api.get<OpenTrips>(`/users/${id}/open-trips`).then((r) => r.data);
 
 export const reinviteUser = (id: number) =>
   api.post<InviteLink>(`/users/${id}/reinvite`).then((r) => r.data);
 
 export const unlockUser = (id: number) =>
   api.post<UserRow>(`/users/${id}/unlock`).then((r) => r.data);
+
+// --- departments ----------------------------------------------------------
+
+export const fetchDepartments = () =>
+  api.get<Department[]>('/departments').then((r) => r.data);
+
+/** Returns the existing department when the name is already taken (any case). */
+export const createDepartment = (name: string) =>
+  api.post<Department>('/departments', { name }).then((r) => r.data);
+
+export const renameDepartment = (id: number, name: string) =>
+  api.patch<Department>(`/departments/${id}`, { name }).then((r) => r.data);
+
+export const deleteDepartment = (id: number) => api.delete(`/departments/${id}`);
 
 // --- audit ----------------------------------------------------------------
 

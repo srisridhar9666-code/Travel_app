@@ -1,53 +1,150 @@
 """Request and response bodies for user administration."""
 from __future__ import annotations
 
+import re
 from datetime import date
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.core.enums import Designation, Gender, Role
+from app.core import clock
+from app.core.enums import SELECTABLE_GENDERS, Designation, Gender, Role, UserStatus
 from app.schemas.common import UTCInstant
+
+_PHONE_CHARS = re.compile(r"\+?[\d\s\-()]+")
+
+PHONE_MESSAGE = "Enter a phone number with 10 to 15 digits, e.g. +91 98765 43210."
+GENDER_MESSAGE = "Choose Male or Female."
+
+
+def tidy_name(value: str | None) -> str | None:
+    return " ".join(value.split()) if value else value
+
+
+def tidy_email(value: str | None) -> str | None:
+    return value.strip().lower() if value else value
+
+
+def tidy_phone(value: str | None) -> str | None:
+    """A phone number with its spacing collapsed, or None when it is blank.
+
+    Lenient on format, because people write Indian numbers every way there is -
+    "98765 43210", "+91-98765-43210", "(040) 2345 6789" - but strict on the
+    digit count, which is what catches a number with a digit missing. Ten is a
+    mobile number; fifteen is the international maximum.
+    """
+    if value is None:
+        return None
+    cleaned = " ".join(value.split())
+    if not cleaned:
+        return None
+    digits = sum(ch.isdigit() for ch in cleaned)
+    if not _PHONE_CHARS.fullmatch(cleaned) or not 10 <= digits <= 15:
+        raise ValueError(PHONE_MESSAGE)
+    return cleaned
+
+
+def selectable_gender(value: Gender) -> Gender:
+    """Male or Female. The other two values exist only on rows saved before
+    gender had to be chosen, and room sharing treats them as 'never share'."""
+    if value not in SELECTABLE_GENDERS:
+        raise ValueError(GENDER_MESSAGE)
+    return value
+
+
+#: Shared with the self-service profile schemas, so a phone number or a name is
+#: tidied and checked the same way whoever types it.
+PersonName = Annotated[str, AfterValidator(tidy_name)]
+WorkEmail = Annotated[EmailStr, AfterValidator(tidy_email)]
+PhoneNumber = Annotated[str | None, AfterValidator(tidy_phone)]
+SelectableGender = Annotated[Gender, AfterValidator(selectable_gender)]
 
 
 class UserCreate(BaseModel):
-    email: EmailStr
-    full_name: str = Field(min_length=2, max_length=160)
+    email: WorkEmail
+    full_name: PersonName = Field(min_length=2, max_length=160)
     role: Role = Role.GROUND_STAFF
     designation: Designation | None = None
-    gender: Gender = Gender.UNDISCLOSED
-    phone: str | None = Field(default=None, max_length=32)
+    #: Required: it decides who may share a room, and nobody can guess it later.
+    gender: SelectableGender
+    phone: PhoneNumber = Field(default=None, max_length=32)
     employee_code: str | None = Field(default=None, max_length=40)
+    base_state: str | None = Field(default=None, max_length=80)
+    #: The city or constituency they are based in.
     base_location: str | None = Field(default=None, max_length=120)
+    department_id: int | None = None
 
-    @field_validator("full_name")
-    @classmethod
-    def _tidy_name(cls, value: str) -> str:
-        return " ".join(value.split())
 
-    @field_validator("email")
-    @classmethod
-    def _lower_email(cls, value: str) -> str:
-        return value.strip().lower()
+#: Columns that cannot be emptied. Without this an explicit null reaches the
+#: NOT NULL column and the database answers with a 500.
+_NOT_NULL = {
+    "full_name": "Full name cannot be blank.",
+    "role": "App access cannot be blank.",
+    "gender": GENDER_MESSAGE,
+    "email": "Work email cannot be blank.",
+}
 
 
 class UserUpdate(BaseModel):
-    """Every field optional - this is a partial update."""
+    """Every field optional - this is a partial update.
 
-    full_name: str | None = Field(default=None, min_length=2, max_length=160)
+    Status is not here: it changes through POST /users/{id}/status, which owns
+    the exit date, the sign-in block and the audit line. Unknown fields are
+    refused rather than dropped, so a client still sending `is_active` hears
+    about it instead of believing it worked.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: WorkEmail | None = None
+    full_name: PersonName | None = Field(default=None, min_length=2, max_length=160)
     role: Role | None = None
     designation: Designation | None = None
-    gender: Gender | None = None
-    phone: str | None = Field(default=None, max_length=32)
+    gender: SelectableGender | None = None
+    phone: PhoneNumber = Field(default=None, max_length=32)
     employee_code: str | None = Field(default=None, max_length=40)
+    base_state: str | None = Field(default=None, max_length=80)
     base_location: str | None = Field(default=None, max_length=120)
-    is_active: bool | None = None
-    #: The day they left. Starts the 90-day ID-proof retention clock (C4).
-    exited_on: date | None = None
+    department_id: int | None = None
 
-    @field_validator("full_name")
+    @field_validator(*_NOT_NULL, mode="before")
     @classmethod
-    def _tidy_name(cls, value: str | None) -> str | None:
-        return " ".join(value.split()) if value else value
+    def _not_null(cls, value, info):
+        if value is None:
+            raise ValueError(_NOT_NULL[info.field_name])
+        return value
+
+
+class UserStatusChange(BaseModel):
+    status: UserStatus
+    #: Only for LEFT (and DELETED): the day they left. Defaults to today, India
+    #: time. Starts the 90-day clock on their ID documents.
+    exited_on: date | None = None
+    #: Why, in the admin's words. Kept in the activity log.
+    reason: str | None = Field(default=None, max_length=500)
+
+    @field_validator("exited_on")
+    @classmethod
+    def _not_in_future(cls, value: date | None) -> date | None:
+        if value is not None and value > clock.local_today():
+            raise ValueError("The exit date cannot be in the future.")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def _tidy_reason(cls, value: str | None) -> str | None:
+        cleaned = " ".join((value or "").split())
+        return cleaned or None
+
+
+class OpenTrips(BaseModel):
+    """Trips this person is still on that have not happened yet - what an admin
+    should look at before deactivating them."""
+
+    pending: int
+    approved: int
+    booked: int
+    total: int
 
 
 class UserRead(BaseModel):
@@ -61,7 +158,13 @@ class UserRead(BaseModel):
     designation: Designation | None = None
     gender: Gender
     phone: str | None = None
+    base_state: str | None = None
     base_location: str | None = None
+    department_id: int | None = None
+    department_name: str | None = None
+    status: UserStatus
+    status_changed_at: UTCInstant | None = None
+    #: Mirrors status == ACTIVE.
     is_active: bool
     exited_on: date | None = None
     last_login_at: UTCInstant | None = None

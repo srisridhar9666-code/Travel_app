@@ -3,12 +3,14 @@ import {
   CalendarRange,
   Copy,
   FileText,
+  KeyRound,
   LockOpen,
   MailPlus,
   Pencil,
   Search,
   ShieldAlert,
   Upload,
+  UserCog,
   UserPlus,
   Users as UsersIcon,
 } from 'lucide-react';
@@ -16,7 +18,11 @@ import { useState, type FormEvent } from 'react';
 import toast from 'react-hot-toast';
 
 import { BulkImportModal } from '@/components/BulkImportModal';
+import { ChangeStatusModal } from '@/components/ChangeStatusModal';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { DepartmentPicker } from '@/components/DepartmentPicker';
 import { IdProofsPanel } from '@/components/IdProofsPanel';
+import { PlacePicker } from '@/components/PlacePicker';
 import { TravelHistoryPanel } from '@/components/TravelHistoryPanel';
 import { Modal } from '@/components/Modal';
 import {
@@ -33,6 +39,7 @@ import {
 import {
   createUser,
   errorMessage,
+  fetchDepartments,
   fetchRetentionStatus,
   fetchUsers,
   reinviteUser,
@@ -40,16 +47,21 @@ import {
   unlockUser,
   updateUser,
   type UserPayload,
+  type UserUpdatePayload,
 } from '@/lib/api';
+import { formatInstantDate } from '@/lib/time';
 import { useAuth } from '@/store/auth';
 import {
   DESIGNATION_LABELS,
   GENDER_LABELS,
   ROLE_LABELS,
+  SELECTABLE_GENDERS,
+  USER_STATUS_LABELS,
   type Designation,
-  type Gender,
+  type InviteLink,
   type Role,
   type UserRow,
+  type UserStatus,
 } from '@/types';
 
 const BLANK: UserPayload = {
@@ -57,29 +69,53 @@ const BLANK: UserPayload = {
   full_name: '',
   role: 'GROUND_STAFF',
   designation: 'EXECUTIVE',
-  gender: 'UNDISCLOSED',
+  // Chosen on purpose, every time: it decides who may share a room.
+  gender: '',
   phone: '',
   employee_code: '',
+  base_state: '',
   base_location: '',
+  department_id: null,
 };
 
 interface EditForm {
+  email: string;
   full_name: string;
   role: string;
   designation: string;
   gender: string;
   phone: string;
   employee_code: string;
+  base_state: string;
   base_location: string;
-  exited_on: string;
+  department_id: number | null;
+}
+
+const GENDER_REQUIRED = 'Choose Male or Female.';
+const ROLE_HINT = 'What they can do in this app.';
+const DEPARTMENT_HINT = 'e.g. Field Operations, Data, Finance. Type a new one to add it.';
+
+function isSelectableGender(gender: string): boolean {
+  return (SELECTABLE_GENDERS as readonly string[]).includes(gender);
 }
 
 function StatusBadge({ user }: { user: UserRow }) {
-  if (user.exited_on) return <Badge tone="neutral">Left</Badge>;
-  if (!user.is_active) return <Badge tone="neutral">Deactivated</Badge>;
-  if (user.is_locked) return <Badge tone="danger">Locked</Badge>;
-  if (!user.has_password) return <Badge tone="warning">Invited</Badge>;
-  return <Badge tone="success">Active</Badge>;
+  switch (user.status) {
+    case 'DELETED':
+      return <Badge tone="danger">Deleted</Badge>;
+    case 'LEFT':
+      return (
+        <span title={user.exited_on ? `Left on ${formatInstantDate(user.exited_on)}` : undefined}>
+          <Badge tone="neutral">Left</Badge>
+        </span>
+      );
+    case 'DEACTIVATED':
+      return <Badge tone="warning">Deactivated</Badge>;
+    default:
+      if (user.is_locked) return <Badge tone="danger">Locked</Badge>;
+      if (!user.has_password) return <Badge tone="warning">Invited</Badge>;
+      return <Badge tone="success">Active</Badge>;
+  }
 }
 
 /** Clipboard is unavailable on insecure origins, so always offer the raw link. */
@@ -92,79 +128,125 @@ async function copy(text: string) {
   }
 }
 
+interface IssuedLink {
+  name: string;
+  url: string;
+  emailed: boolean;
+  detail: string | null;
+  kind: 'invite' | 'reset';
+}
+
+function issued(name: string, result: InviteLink, hadPassword: boolean): IssuedLink | null {
+  if (!result.invite_url) return null;
+  // The server says which kind it issued; older answers did not, and then
+  // having a password already means it was a reset.
+  const reset = result.purpose ? result.purpose === 'PASSWORD_RESET' : hadPassword;
+  const kind: IssuedLink['kind'] = reset ? 'reset' : 'invite';
+  return {
+    name,
+    url: result.invite_url,
+    emailed: Boolean(result.email_sent),
+    detail: result.email_detail ?? null,
+    kind,
+  };
+}
+
 export default function TeamPage() {
   const queryClient = useQueryClient();
   const me = useAuth((s) => s.user);
-  const canGrantSystemAdmin = me?.role === 'SYSTEM_ADMIN';
+  const isSystemAdmin = me?.role === 'SYSTEM_ADMIN';
+
+  /** Only a system admin may change another system admin's account; the
+   *  server refuses it too, this just keeps the buttons from offering it. */
+  const canManage = (user: UserRow) =>
+    isSystemAdmin || user.role !== 'SYSTEM_ADMIN' || user.id === me?.id;
 
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState<UserStatus | ''>('');
+  const [departmentFilter, setDepartmentFilter] = useState('');
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [form, setForm] = useState<UserPayload>(BLANK);
   const [formError, setFormError] = useState<string | null>(null);
-  const [issuedLink, setIssuedLink] = useState<{
-    name: string;
-    url: string;
-    emailed: boolean;
-    detail: string | null;
-  } | null>(null);
+  const [issuedLink, setIssuedLink] = useState<IssuedLink | null>(null);
 
   const [importOpen, setImportOpen] = useState(false);
   const [docsUser, setDocsUser] = useState<UserRow | null>(null);
   const [historyUser, setHistoryUser] = useState<UserRow | null>(null);
+  const [statusUser, setStatusUser] = useState<UserRow | null>(null);
+  const [resetUser, setResetUser] = useState<UserRow | null>(null);
+  const [purgeOpen, setPurgeOpen] = useState(false);
   const [editUser, setEditUser] = useState<UserRow | null>(null);
   const [editForm, setEditForm] = useState<EditForm | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
 
   const users = useQuery({
-    queryKey: ['users', search, roleFilter],
+    queryKey: ['users', search, roleFilter, statusFilter, departmentFilter],
     queryFn: () =>
       fetchUsers({
         search: search.trim() || undefined,
         role: roleFilter || undefined,
+        status: statusFilter || undefined,
+        department_id: departmentFilter ? Number(departmentFilter) : undefined,
         page_size: 100,
       }),
   });
 
+  const departments = useQuery({ queryKey: ['departments'], queryFn: fetchDepartments });
   const retention = useQuery({ queryKey: ['retention'], queryFn: fetchRetentionStatus });
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['users'] });
     queryClient.invalidateQueries({ queryKey: ['retention'] });
+    queryClient.invalidateQueries({ queryKey: ['departments'] });
   };
 
   const invite = useMutation({
-    mutationFn: () => createUser({ ...form, email: form.email.trim().toLowerCase() }),
+    mutationFn: () =>
+      createUser({
+        ...form,
+        email: form.email.trim().toLowerCase(),
+        phone: form.phone?.trim() || null,
+        employee_code: form.employee_code?.trim() || null,
+        base_state: form.base_state || null,
+        base_location: form.base_location || null,
+      }),
+    meta: { errorFallback: 'Could not create this account.' },
     onSuccess: (result) => {
+      const name = form.full_name.trim();
+      toast.success(
+        result.email_sent ? `Invitation emailed to ${name}` : `${name} added - share the invitation link`,
+      );
       setInviteOpen(false);
       setForm(BLANK);
       setFormError(null);
       refresh();
-      if (result.invite_url)
-        setIssuedLink({
-          name: form.full_name,
-          url: result.invite_url,
-          emailed: Boolean(result.email_sent),
-          detail: result.email_detail ?? null,
-        });
+      setIssuedLink(issued(name, result, false));
     },
     onError: (err) => setFormError(errorMessage(err, 'Could not create this account.')),
   });
 
   const saveEdit = useMutation({
-    mutationFn: () =>
-      updateUser(editUser!.id, {
+    mutationFn: () => {
+      const payload: UserUpdatePayload = {
         full_name: editForm!.full_name,
         role: editForm!.role,
         designation: editForm!.designation || null,
         gender: editForm!.gender,
-        phone: editForm!.phone || null,
-        employee_code: editForm!.employee_code || null,
+        phone: editForm!.phone.trim() || null,
+        employee_code: editForm!.employee_code.trim() || null,
+        base_state: editForm!.base_state || null,
         base_location: editForm!.base_location || null,
-        // Blank clears the exit date, which stops the retention clock.
-        exited_on: editForm!.exited_on || null,
-      } as never),
+        department_id: editForm!.department_id,
+      };
+      // Sent only when it changed: the server tells the old address, and
+      // refuses a change to your own (that needs your password, on My profile).
+      const email = editForm!.email.trim().toLowerCase();
+      if (email !== editUser!.email) payload.email = email;
+      return updateUser(editUser!.id, payload);
+    },
+    meta: { errorFallback: 'Could not save these changes.' },
     onSuccess: (updated) => {
       toast.success(`${updated.full_name} updated`);
       setEditUser(null);
@@ -178,16 +260,17 @@ export default function TeamPage() {
   const reinvite = useMutation({
     mutationFn: (user: UserRow) => reinviteUser(user.id),
     onSuccess: (result, user) => {
+      const link = issued(user.full_name, result, user.has_password);
+      const what = link?.kind === 'reset' ? 'Password reset link' : 'New invitation';
+      toast.success(
+        result.email_sent
+          ? `${what} emailed to ${user.full_name}`
+          : `${what} ready for ${user.full_name} - share the link`,
+      );
+      setResetUser(null);
       refresh();
-      if (result.invite_url)
-        setIssuedLink({
-          name: user.full_name,
-          url: result.invite_url,
-          emailed: Boolean(result.email_sent),
-          detail: result.email_detail ?? null,
-        });
+      setIssuedLink(link);
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const unlock = useMutation({
@@ -196,56 +279,66 @@ export default function TeamPage() {
       toast.success(`${user.full_name} unlocked`);
       refresh();
     },
-    onError: (err) => toast.error(errorMessage(err)),
-  });
-
-  const toggleActive = useMutation({
-    mutationFn: (user: UserRow) => updateUser(user.id, { is_active: !user.is_active }),
-    onSuccess: (_r, user) => {
-      toast.success(`${user.full_name} ${user.is_active ? 'deactivated' : 'reactivated'}`);
-      refresh();
-    },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const purge = useMutation({
     mutationFn: runRetentionPurge,
     onSuccess: (result) => {
       toast.success(`${result.purged} document(s) purged`);
+      setPurgeOpen(false);
       refresh();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
+
+  /** An invitation just goes again; a reset link asks first, since it is a
+   *  way into someone's account. */
+  const sendLink = (user: UserRow) => {
+    if (user.has_password) setResetUser(user);
+    else reinvite.mutate(user);
+  };
 
   const openEdit = (user: UserRow) => {
     setEditUser(user);
     setEditForm({
+      email: user.email,
       full_name: user.full_name,
       role: user.role,
       designation: user.designation ?? '',
-      gender: user.gender,
+      // A value saved before only Male and Female could be chosen starts
+      // blank, so the required field makes the admin pick one.
+      gender: isSelectableGender(user.gender) ? user.gender : '',
       phone: user.phone ?? '',
       employee_code: user.employee_code ?? '',
+      base_state: user.base_state ?? '',
       base_location: user.base_location ?? '',
-      exited_on: user.exited_on ?? '',
+      department_id: user.department_id,
     });
     setEditError(null);
   };
 
   const submitInvite = (event: FormEvent) => {
     event.preventDefault();
+    if (!isSelectableGender(form.gender)) {
+      setFormError(GENDER_REQUIRED);
+      return;
+    }
     setFormError(null);
     invite.mutate();
   };
 
   const submitEdit = (event: FormEvent) => {
     event.preventDefault();
+    if (!editForm || !isSelectableGender(editForm.gender)) {
+      setEditError(GENDER_REQUIRED);
+      return;
+    }
     setEditError(null);
     saveEdit.mutate();
   };
 
   const rows = users.data?.items ?? [];
   const dueNow = retention.data?.due_now ?? 0;
+  const editingSelf = editUser?.id === me?.id;
 
   return (
     <div className="space-y-6">
@@ -254,6 +347,7 @@ export default function TeamPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Team</h1>
           <p className="mt-1.5 max-w-2xl text-sm text-text-muted">
             Accounts are created here and activated by the person through an invitation link.
+            Only people marked Active can sign in.
           </p>
         </div>
         <div className="flex gap-2">
@@ -276,20 +370,8 @@ export default function TeamPage() {
             {dueNow} identity document{dueNow === 1 ? '' : 's'} belong to people who left more
             than {retention.data?.retention_days} days ago and are due for deletion.
           </span>
-          {me?.role === 'SYSTEM_ADMIN' && (
-            <Button
-              size="sm"
-              variant="secondary"
-              loading={purge.isPending}
-              onClick={() => {
-                if (
-                  window.confirm(
-                    `Permanently purge ${dueNow} document(s)? Numbers and scans are deleted; the audit trail is kept.`,
-                  )
-                )
-                  purge.mutate();
-              }}
-            >
+          {isSystemAdmin && (
+            <Button size="sm" variant="secondary" onClick={() => setPurgeOpen(true)}>
               Purge now
             </Button>
           )}
@@ -300,7 +382,7 @@ export default function TeamPage() {
         <CardHeader
           title={`${users.data?.total ?? 0} ${users.data?.total === 1 ? 'person' : 'people'}`}
           action={
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <div className="relative">
                 <Search
                   size={14}
@@ -309,18 +391,44 @@ export default function TeamPage() {
                 <Input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search name or email"
-                  className="w-48 pl-8"
+                  placeholder="Search name, email, code or place"
+                  className="w-64 pl-8"
                   aria-label="Search team"
                 />
               </div>
               <Select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as UserStatus | '')}
+                aria-label="Filter by status"
+                className="w-44"
+              >
+                <option value="">Everyone but deleted</option>
+                {(Object.keys(USER_STATUS_LABELS) as UserStatus[]).map((status) => (
+                  <option key={status} value={status}>
+                    {USER_STATUS_LABELS[status]}
+                  </option>
+                ))}
+              </Select>
+              <Select
+                value={departmentFilter}
+                onChange={(e) => setDepartmentFilter(e.target.value)}
+                aria-label="Filter by department"
+                className="w-44"
+              >
+                <option value="">All departments</option>
+                {(departments.data ?? []).map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </Select>
+              <Select
                 value={roleFilter}
                 onChange={(e) => setRoleFilter(e.target.value)}
-                aria-label="Filter by role"
+                aria-label="Filter by app access"
                 className="w-36"
               >
-                <option value="">All roles</option>
+                <option value="">Any access</option>
                 {(Object.keys(ROLE_LABELS) as Role[]).map((role) => (
                   <option key={role} value={role}>
                     {ROLE_LABELS[role]}
@@ -347,7 +455,7 @@ export default function TeamPage() {
           <EmptyState
             icon={<UsersIcon size={28} />}
             title="Nobody matches that"
-            description="Try a different search, or invite someone new."
+            description="Try a different search or filter, or invite someone new."
           />
         ) : (
           <div className="overflow-x-auto">
@@ -355,100 +463,116 @@ export default function TeamPage() {
               <thead>
                 <tr className="border-b border-border text-left text-2xs uppercase tracking-widest text-text-subtle">
                   <th className="px-5 py-2.5 font-semibold">Name</th>
-                  <th className="px-5 py-2.5 font-semibold">Role</th>
-                  <th className="hidden px-5 py-2.5 font-semibold md:table-cell">Designation</th>
-                  <th className="hidden px-5 py-2.5 font-semibold lg:table-cell">Location</th>
+                  <th className="px-5 py-2.5 font-semibold">App access</th>
+                  <th className="hidden px-5 py-2.5 font-semibold md:table-cell">Department</th>
+                  <th className="hidden px-5 py-2.5 font-semibold xl:table-cell">Designation</th>
+                  <th className="hidden px-5 py-2.5 font-semibold lg:table-cell">Base</th>
                   <th className="px-5 py-2.5 font-semibold">Status</th>
                   <th className="px-5 py-2.5 text-right font-semibold">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {rows.map((user) => (
-                  <tr key={user.id} className="transition-colors hover:bg-surface-sunken/60">
-                    <td className="px-5 py-3">
-                      <div className="font-medium">
-                        {user.full_name}
-                        {user.id === me?.id && (
-                          <span className="ml-1.5 text-2xs text-text-subtle">(you)</span>
-                        )}
-                      </div>
-                      <div className="text-xs text-text-muted">{user.email}</div>
-                    </td>
-                    <td className="px-5 py-3 text-text-muted">{ROLE_LABELS[user.role]}</td>
-                    <td className="hidden px-5 py-3 text-text-muted md:table-cell">
-                      {user.designation ? DESIGNATION_LABELS[user.designation] : '—'}
-                    </td>
-                    <td className="hidden px-5 py-3 text-text-muted lg:table-cell">
-                      {user.base_location || '—'}
-                    </td>
-                    <td className="px-5 py-3">
-                      <StatusBadge user={user} />
-                    </td>
-                    <td className="px-5 py-3">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          title="Travel history"
-                          onClick={() => setHistoryUser(user)}
-                        >
-                          <CalendarRange size={14} />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          title="Identity documents"
-                          onClick={() => setDocsUser(user)}
-                        >
-                          <FileText size={14} />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          title="Edit profile"
-                          onClick={() => openEdit(user)}
-                        >
-                          <Pencil size={14} />
-                        </Button>
-                        {user.is_locked && (
+                {rows.map((user) => {
+                  const manageable = canManage(user);
+                  return (
+                    <tr key={user.id} className="transition-colors hover:bg-surface-sunken/60">
+                      <td className="px-5 py-3">
+                        <div className="font-medium">
+                          {user.full_name}
+                          {user.id === me?.id && (
+                            <span className="ml-1.5 text-2xs text-text-subtle">(you)</span>
+                          )}
+                          {!isSelectableGender(user.gender) && (
+                            <Badge tone="warning" className="ml-1.5 align-middle">
+                              Gender not set
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="text-xs text-text-muted">{user.email}</div>
+                      </td>
+                      <td className="px-5 py-3 text-text-muted">{ROLE_LABELS[user.role]}</td>
+                      <td className="hidden px-5 py-3 text-text-muted md:table-cell">
+                        {user.department_name || '—'}
+                      </td>
+                      <td className="hidden px-5 py-3 text-text-muted xl:table-cell">
+                        {user.designation ? DESIGNATION_LABELS[user.designation] : '—'}
+                      </td>
+                      <td className="hidden px-5 py-3 text-text-muted lg:table-cell">
+                        {[user.base_location, user.base_state].filter(Boolean).join(', ') || '—'}
+                      </td>
+                      <td className="px-5 py-3">
+                        <StatusBadge user={user} />
+                      </td>
+                      <td className="px-5 py-3">
+                        <div className="flex justify-end gap-1">
                           <Button
                             variant="ghost"
                             size="sm"
-                            title="Unlock"
-                            loading={unlock.isPending && unlock.variables?.id === user.id}
-                            onClick={() => unlock.mutate(user)}
+                            title="Travel history"
+                            onClick={() => setHistoryUser(user)}
                           >
-                            <LockOpen size={14} />
+                            <CalendarRange size={14} />
                           </Button>
-                        )}
-                        {user.is_active && (
                           <Button
                             variant="ghost"
                             size="sm"
-                            title={user.has_password ? 'Send a reset link' : 'Resend invitation'}
-                            loading={reinvite.isPending && reinvite.variables?.id === user.id}
-                            onClick={() => reinvite.mutate(user)}
+                            title="Identity documents"
+                            onClick={() => setDocsUser(user)}
                           >
-                            <MailPlus size={14} />
+                            <FileText size={14} />
                           </Button>
-                        )}
-                        {user.id !== me?.id && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className={user.is_active ? 'text-danger hover:text-danger' : ''}
-                            loading={
-                              toggleActive.isPending && toggleActive.variables?.id === user.id
-                            }
-                            onClick={() => toggleActive.mutate(user)}
-                          >
-                            {user.is_active ? 'Deactivate' : 'Reactivate'}
-                          </Button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          {manageable && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Edit profile"
+                              onClick={() => openEdit(user)}
+                            >
+                              <Pencil size={14} />
+                            </Button>
+                          )}
+                          {manageable && user.is_locked && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Unlock"
+                              loading={unlock.isPending && unlock.variables?.id === user.id}
+                              onClick={() => unlock.mutate(user)}
+                            >
+                              <LockOpen size={14} />
+                            </Button>
+                          )}
+                          {manageable && user.status === 'ACTIVE' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title={user.has_password ? 'Reset password' : 'Resend invitation'}
+                              loading={
+                                reinvite.isPending &&
+                                !resetUser &&
+                                reinvite.variables?.id === user.id
+                              }
+                              onClick={() => sendLink(user)}
+                            >
+                              <MailPlus size={14} />
+                            </Button>
+                          )}
+                          {manageable && user.id !== me?.id && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Change status"
+                              onClick={() => setStatusUser(user)}
+                            >
+                              <UserCog size={14} />
+                              <span className="hidden sm:inline">Status</span>
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -459,7 +583,7 @@ export default function TeamPage() {
       <Modal
         open={Boolean(historyUser)}
         onClose={() => setHistoryUser(null)}
-        title={historyUser ? `${historyUser.full_name} — travel history` : ''}
+        title={historyUser ? `${historyUser.full_name}: travel history` : ''}
         description="Every movement, including trips they were tagged onto by a colleague."
         className="sm:max-w-2xl"
         footer={
@@ -475,7 +599,7 @@ export default function TeamPage() {
       <Modal
         open={Boolean(docsUser)}
         onClose={() => setDocsUser(null)}
-        title={docsUser ? `${docsUser.full_name} — identity documents` : ''}
+        title={docsUser ? `${docsUser.full_name}: identity documents` : ''}
         description={docsUser?.email}
         className="sm:max-w-2xl"
         footer={
@@ -486,6 +610,13 @@ export default function TeamPage() {
       >
         {docsUser && <IdProofsPanel user={docsUser} />}
       </Modal>
+
+      <ChangeStatusModal
+        key={statusUser?.id ?? 'none'}
+        user={statusUser}
+        onClose={() => setStatusUser(null)}
+        onChanged={refresh}
+      />
 
       {/* Edit profile */}
       <Modal
@@ -507,7 +638,7 @@ export default function TeamPage() {
           </>
         }
       >
-        {editForm && (
+        {editForm && editUser && (
           <form id="edit-form" onSubmit={submitEdit} className="space-y-4" noValidate>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Full name" htmlFor="edit_name" required className="sm:col-span-2">
@@ -519,16 +650,39 @@ export default function TeamPage() {
                 />
               </Field>
 
-              <Field label="Role" htmlFor="edit_role">
+              <Field
+                label="Work email"
+                htmlFor="edit_email"
+                required
+                className="sm:col-span-2"
+                hint={
+                  editingSelf
+                    ? 'Change your own email from My profile.'
+                    : !editUser.has_password
+                      ? 'They have not accepted their invitation yet. Send a new one after changing this.'
+                      : 'They will sign in with the new address. We will let the old address know.'
+                }
+              >
+                <Input
+                  id="edit_email"
+                  type="email"
+                  required
+                  disabled={editingSelf}
+                  value={editForm.email}
+                  onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                />
+              </Field>
+
+              <Field label="App access" htmlFor="edit_role" hint={ROLE_HINT}>
                 <Select
                   id="edit_role"
                   value={editForm.role}
-                  disabled={editUser?.id === me?.id}
+                  disabled={editingSelf}
                   onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
                 >
                   <option value="GROUND_STAFF">{ROLE_LABELS.GROUND_STAFF}</option>
                   <option value="ADMIN">{ROLE_LABELS.ADMIN}</option>
-                  {canGrantSystemAdmin && (
+                  {(isSystemAdmin || editForm.role === 'SYSTEM_ADMIN') && (
                     <option value="SYSTEM_ADMIN">{ROLE_LABELS.SYSTEM_ADMIN}</option>
                   )}
                 </Select>
@@ -549,13 +703,40 @@ export default function TeamPage() {
                 </Select>
               </Field>
 
-              <Field label="Gender" htmlFor="edit_gender" hint="Room-sharing policy only.">
+              <Field
+                label="Department"
+                htmlFor="edit_department"
+                hint={DEPARTMENT_HINT}
+                className="sm:col-span-2"
+              >
+                <DepartmentPicker
+                  id="edit_department"
+                  value={editForm.department_id}
+                  onChange={(department_id) => setEditForm({ ...editForm, department_id })}
+                />
+              </Field>
+
+              <Field
+                label="Gender"
+                htmlFor="edit_gender"
+                required
+                hint="Decides who may share a room."
+                error={
+                  editForm.gender === '' && !isSelectableGender(editUser.gender)
+                    ? `Recorded as "${GENDER_LABELS[editUser.gender]}". Choose Male or Female.`
+                    : null
+                }
+              >
                 <Select
                   id="edit_gender"
+                  required
                   value={editForm.gender}
                   onChange={(e) => setEditForm({ ...editForm, gender: e.target.value })}
                 >
-                  {(Object.keys(GENDER_LABELS) as Gender[]).map((g) => (
+                  <option value="" disabled>
+                    Choose…
+                  </option>
+                  {SELECTABLE_GENDERS.map((g) => (
                     <option key={g} value={g}>
                       {GENDER_LABELS[g]}
                     </option>
@@ -563,21 +744,26 @@ export default function TeamPage() {
                 </Select>
               </Field>
 
-              <Field label="Base location" htmlFor="edit_location">
-                <Input
-                  id="edit_location"
-                  value={editForm.base_location}
-                  onChange={(e) => setEditForm({ ...editForm, base_location: e.target.value })}
-                />
-              </Field>
-
               <Field label="Phone" htmlFor="edit_phone">
                 <Input
                   id="edit_phone"
+                  type="tel"
                   value={editForm.phone}
                   onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                  placeholder="+91 98765 43210"
                 />
               </Field>
+
+              <PlacePicker
+                label="Base"
+                id="edit_base"
+                className="sm:col-span-2"
+                state={editForm.base_state}
+                city={editForm.base_location}
+                onChange={({ state, city }) =>
+                  setEditForm({ ...editForm, base_state: state, base_location: city })
+                }
+              />
 
               <Field label="Employee code" htmlFor="edit_code">
                 <Input
@@ -586,21 +772,35 @@ export default function TeamPage() {
                   onChange={(e) => setEditForm({ ...editForm, employee_code: e.target.value })}
                 />
               </Field>
-
-              <Field
-                label="Exit date"
-                htmlFor="edit_exit"
-                className="sm:col-span-2"
-                hint="Starts the 90-day clock on their identity documents. Leave blank for current staff — deactivating alone does not count as leaving."
-              >
-                <Input
-                  id="edit_exit"
-                  type="date"
-                  value={editForm.exited_on}
-                  onChange={(e) => setEditForm({ ...editForm, exited_on: e.target.value })}
-                />
-              </Field>
             </div>
+
+            {/* An admin never sees or sets anyone's password: they hand over a
+                one-time link, emailed and shown here to share on WhatsApp. */}
+            {!editingSelf && editUser.status === 'ACTIVE' && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-surface-sunken px-3 py-3">
+                <p className="max-w-sm text-xs text-text-muted">
+                  {editUser.has_password
+                    ? 'You never see their password. A reset link (valid 72 hours) is emailed to them and shown to you, so you can share it if email is off.'
+                    : 'They have not set a password yet. Send a fresh invitation link (valid 72 hours).'}
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    // One dialog at a time: the confirmation and the link
+                    // replace this form rather than stacking on top of it.
+                    const target = editUser;
+                    setEditUser(null);
+                    setEditForm(null);
+                    sendLink(target);
+                  }}
+                >
+                  {editUser.has_password ? <KeyRound size={14} /> : <MailPlus size={14} />}
+                  {editUser.has_password ? 'Reset password' : 'Resend invitation'}
+                </Button>
+              </div>
+            )}
 
             {editError && (
               <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-xs text-danger">
@@ -619,7 +819,7 @@ export default function TeamPage() {
           setFormError(null);
         }}
         title="Invite someone"
-        description="They set their own password from the link — you never see it."
+        description="They set their own password from the link. You never see it."
         footer={
           <>
             <Button variant="secondary" onClick={() => setInviteOpen(false)}>
@@ -654,7 +854,7 @@ export default function TeamPage() {
               />
             </Field>
 
-            <Field label="Role" htmlFor="role" required>
+            <Field label="App access" htmlFor="role" required hint={ROLE_HINT}>
               <Select
                 id="role"
                 value={form.role}
@@ -662,16 +862,14 @@ export default function TeamPage() {
               >
                 <option value="GROUND_STAFF">{ROLE_LABELS.GROUND_STAFF}</option>
                 <option value="ADMIN">{ROLE_LABELS.ADMIN}</option>
-                {canGrantSystemAdmin && (
-                  <option value="SYSTEM_ADMIN">{ROLE_LABELS.SYSTEM_ADMIN}</option>
-                )}
+                {isSystemAdmin && <option value="SYSTEM_ADMIN">{ROLE_LABELS.SYSTEM_ADMIN}</option>}
               </Select>
             </Field>
 
             <Field
               label="Designation"
               htmlFor="designation"
-              hint="Hierarchy only — it does not affect approvals."
+              hint="Hierarchy only. It does not affect approvals."
             >
               <Select
                 id="designation"
@@ -687,13 +885,30 @@ export default function TeamPage() {
               </Select>
             </Field>
 
-            <Field label="Gender" htmlFor="gender" hint="Used only for the room-sharing policy.">
+            <Field
+              label="Department"
+              htmlFor="department"
+              hint={DEPARTMENT_HINT}
+              className="sm:col-span-2"
+            >
+              <DepartmentPicker
+                id="department"
+                value={form.department_id ?? null}
+                onChange={(department_id) => setForm({ ...form, department_id })}
+              />
+            </Field>
+
+            <Field label="Gender" htmlFor="gender" required hint="Decides who may share a room.">
               <Select
                 id="gender"
+                required
                 value={form.gender}
                 onChange={(e) => setForm({ ...form, gender: e.target.value })}
               >
-                {(Object.keys(GENDER_LABELS) as Gender[]).map((g) => (
+                <option value="" disabled>
+                  Choose…
+                </option>
+                {SELECTABLE_GENDERS.map((g) => (
                   <option key={g} value={g}>
                     {GENDER_LABELS[g]}
                   </option>
@@ -701,23 +916,26 @@ export default function TeamPage() {
               </Select>
             </Field>
 
-            <Field label="Base location" htmlFor="base_location">
-              <Input
-                id="base_location"
-                value={form.base_location ?? ''}
-                onChange={(e) => setForm({ ...form, base_location: e.target.value })}
-                placeholder="Hyderabad"
-              />
-            </Field>
-
             <Field label="Phone" htmlFor="phone">
               <Input
                 id="phone"
+                type="tel"
                 value={form.phone ?? ''}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
                 placeholder="+91 98765 43210"
               />
             </Field>
+
+            <PlacePicker
+              label="Base"
+              id="base"
+              className="sm:col-span-2"
+              state={form.base_state ?? ''}
+              city={form.base_location ?? ''}
+              onChange={({ state, city }) =>
+                setForm({ ...form, base_state: state, base_location: city })
+              }
+            />
 
             <Field label="Employee code" htmlFor="employee_code">
               <Input
@@ -737,11 +955,49 @@ export default function TeamPage() {
         </form>
       </Modal>
 
-      {/* The invite link, shown once. It is emailed too; this is the fallback. */}
+      <ConfirmDialog
+        open={Boolean(resetUser)}
+        title={resetUser ? `Reset ${resetUser.full_name}'s password?` : ''}
+        confirmLabel="Send reset link"
+        tone="primary"
+        loading={reinvite.isPending}
+        onConfirm={() => resetUser && reinvite.mutate(resetUser)}
+        onClose={() => setResetUser(null)}
+      >
+        <p>
+          They get a one-time link to choose a new password, valid for 72 hours. Their current
+          password keeps working until they use it. You will also see the link, to share if email
+          is off.
+        </p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={purgeOpen}
+        title={`Purge ${dueNow} identity document${dueNow === 1 ? '' : 's'}?`}
+        confirmLabel="Purge permanently"
+        loading={purge.isPending}
+        onConfirm={() => purge.mutate()}
+        onClose={() => setPurgeOpen(false)}
+      >
+        <p>
+          The numbers and scans are deleted for good. The activity log keeps a record that they
+          existed and were purged.
+        </p>
+      </ConfirmDialog>
+
+      {/* The link, shown once. It is emailed too; this is the fallback. */}
       <Modal
         open={Boolean(issuedLink)}
         onClose={() => setIssuedLink(null)}
-        title={issuedLink?.emailed ? 'Invitation emailed' : 'Invitation link'}
+        title={
+          issuedLink?.kind === 'reset'
+            ? issuedLink.emailed
+              ? 'Password reset link emailed'
+              : 'Password reset link'
+            : issuedLink?.emailed
+              ? 'Invitation emailed'
+              : 'Invitation link'
+        }
         description={
           issuedLink?.emailed
             ? 'They will get an email with this link. You can also send it yourself.'
@@ -766,8 +1022,10 @@ export default function TeamPage() {
         )}
         <p className="text-sm text-text-muted">
           {issuedLink?.emailed ? 'Sent to' : 'Send this to'}{' '}
-          <span className="font-medium text-text">{issuedLink?.name}</span>. It can be used once and
-          expires in 72 hours.
+          <span className="font-medium text-text">{issuedLink?.name}</span>.{' '}
+          {issuedLink?.kind === 'reset'
+            ? 'They choose a new password from it. It can be used once and expires in 72 hours.'
+            : 'It can be used once and expires in 72 hours.'}
         </p>
         <code className="mt-3 block max-h-32 overflow-auto break-all rounded-md bg-surface-sunken px-3 py-2.5 font-mono text-xs text-text-muted">
           {issuedLink?.url}

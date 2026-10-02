@@ -47,12 +47,14 @@ export function BulkImportModal({ open, onClose, onImported }: BulkImportModalPr
 
   const runPreview = useMutation({
     mutationFn: (chosen: File) => previewImport(chosen),
+    meta: { errorFallback: 'Could not read that file.' },
     onSuccess: setPreview,
     onError: (err) => setError(errorMessage(err, 'Could not read that file.')),
   });
 
   const runCommit = useMutation({
     mutationFn: () => commitImport(file!),
+    meta: { errorFallback: 'Import failed.' },
     onSuccess: (data) => {
       setResult(data);
       onImported();
@@ -70,8 +72,8 @@ export function BulkImportModal({ open, onClose, onImported }: BulkImportModalPr
       anchor.download = 'team-import-template.csv';
       anchor.click();
       URL.revokeObjectURL(url);
+      toast.success('Template downloaded');
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const choose = (chosen: File | null) => {
@@ -159,7 +161,7 @@ export function BulkImportModal({ open, onClose, onImported }: BulkImportModalPr
               <div>
                 <div className="text-sm font-medium">{file ? file.name : 'Choose a CSV'}</div>
                 <div className="text-xs text-text-subtle">
-                  Columns: full_name and email are required
+                  Required columns: full_name, email and gender (Male or Female)
                 </div>
               </div>
             </div>

@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
-import { Logo, LogoLockup } from '@/components/Logo';
+import { CreatorCredit, Logo, LogoLockup } from '@/components/Logo';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button, Field, Input } from '@/components/ui';
 import { errorMessage, forgotPassword, login } from '@/lib/api';
@@ -15,6 +15,10 @@ export default function LoginPage() {
   const location = useLocation();
   const signIn = useAuth((s) => s.signIn);
   const authenticated = useAuth((s) => s.isAuthenticated());
+  // Why the last session ended ("Your account is deactivated..."), set by the
+  // store when the server refused a request. Shown until they try again.
+  const notice = useAuth((s) => s.notice);
+  const clearNotice = useAuth((s) => s.clearNotice);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -23,8 +27,12 @@ export default function LoginPage() {
 
   const signInMutation = useMutation({
     mutationFn: () => login(email.trim(), password),
+    // These two show their error in the box right above the button; a toast
+    // would only repeat it.
+    meta: { errorToast: false },
     onSuccess: (result) => {
       signIn(result);
+      toast.success(`Welcome, ${result.user.full_name.split(' ')[0]}`);
       const from = (location.state as { from?: string } | null)?.from ?? '/';
       navigate(from, { replace: true });
     },
@@ -33,6 +41,7 @@ export default function LoginPage() {
 
   const forgotMutation = useMutation({
     mutationFn: () => forgotPassword(email.trim()),
+    meta: { errorToast: false },
     onSuccess: (result) => {
       toast.success(result.detail);
       setMode('signin');
@@ -46,11 +55,13 @@ export default function LoginPage() {
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setError(null);
+    clearNotice();
     if (mode === 'signin') signInMutation.mutate();
     else forgotMutation.mutate();
   };
 
   const busy = signInMutation.isPending || forgotMutation.isPending;
+  const shown = error ?? notice;
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-[1fr_1.1fr]">
@@ -83,7 +94,7 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@designboxed.com"
-                  aria-invalid={Boolean(error)}
+                  aria-invalid={Boolean(shown)}
                 />
               </Field>
 
@@ -97,18 +108,18 @@ export default function LoginPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••••"
-                    aria-invalid={Boolean(error)}
+                    aria-invalid={Boolean(shown)}
                   />
                 </Field>
               )}
 
-              {error && (
+              {shown && (
                 <div
                   role="alert"
                   className="flex items-start gap-2 rounded-md bg-danger-soft px-3 py-2.5 text-xs text-danger"
                 >
                   <AlertCircle size={14} className="mt-px shrink-0" />
-                  <span>{error}</span>
+                  <span>{shown}</span>
                 </div>
               )}
 
@@ -123,6 +134,7 @@ export default function LoginPage() {
               onClick={() => {
                 setMode(mode === 'signin' ? 'forgot' : 'signin');
                 setError(null);
+                clearNotice();
               }}
               className="mt-5 text-xs text-text-muted underline-offset-4 hover:text-text hover:underline"
             >
@@ -135,6 +147,9 @@ export default function LoginPage() {
             </p>
           </div>
         </div>
+
+        {/* Under the form rather than on the brand panel, which phones never see. */}
+        <CreatorCredit className="pt-6 text-center" />
       </div>
 
       {/* Brand side. Hidden on small screens - ground staff sign in from phones,

@@ -7,6 +7,7 @@ and the requirement shows up in the OpenAPI schema.
 """
 from __future__ import annotations
 
+from datetime import timezone
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
@@ -18,6 +19,7 @@ from app.core.enums import Role
 from app.core.security import decode_access_token
 from app.database import get_db
 from app.models.user import User
+from app.services import accounts
 
 settings = get_settings()
 
@@ -65,12 +67,27 @@ def get_current_user(
     if user is None:
         raise _UNAUTHENTICATED
 
-    # A token outlives a deactivation, so the live row is the authority - not
-    # the claims baked into the token when it was signed.
-    if not user.is_active:
+    # A password change or reset signs out every other device: a token minted
+    # before it no longer counts. `iat` is whole seconds, so a token issued in
+    # the same second as the change survives - acceptable, and it is what lets
+    # the device that made the change carry on with its fresh token.
+    if user.password_changed_at is not None:
+        cutoff = int(user.password_changed_at.replace(tzinfo=timezone.utc).timestamp())
+        issued = payload.get("iat")
+        if not isinstance(issued, int) or issued < cutoff:
+            raise _UNAUTHENTICATED
+
+    # A token outlives a status change, so the live row is the authority - not
+    # the claims baked into the token when it was signed. 401 rather than 403,
+    # so the client drops the session at once (it signs out on any 401) and
+    # shows the person why, instead of leaving them in a shell where every
+    # call fails.
+    blocked = accounts.blocked_message(user)
+    if blocked:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This account has been deactivated.",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=blocked,
+            headers={"WWW-Authenticate": "Bearer"},
         )
     if not user.has_password:
         raise HTTPException(
