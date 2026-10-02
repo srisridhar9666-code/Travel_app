@@ -170,9 +170,12 @@ class TestVersionHandshake:
     """The web app reads /health to spot an API process older than itself -
     one that was not restarted after an update - and says so to admins."""
 
-    def test_health_reports_the_version_and_pending_migrations(self, client, monkeypatch):
+    def test_health_reports_the_version_and_pending_migrations(self, client, engine, monkeypatch):
         from app import main
 
+        # The suite's scratch database, not DATABASE_URL's: CI never creates
+        # the latter, and /health only checks migrations on a reachable one.
+        monkeypatch.setattr(main, "engine", engine)
         monkeypatch.setattr(main, "schema_behind", lambda: None)
         body = client.get("/health").json()
         assert body["version"] == main.API_VERSION
