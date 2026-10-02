@@ -16,6 +16,7 @@ import { useState } from 'react';
 import toast from 'react-hot-toast';
 
 import { Modal } from '@/components/Modal';
+import { PriorityBadge } from '@/components/PriorityBadge';
 import RequestForm, { ConflictList } from '@/components/RequestForm';
 import {
   Badge,
@@ -39,6 +40,7 @@ import {
   submitRequest,
 } from '@/lib/api';
 import { routeLabel } from '@/lib/places';
+import { campaignLabel, revisionValue } from '@/lib/requests';
 import { formatInstant } from '@/lib/time';
 import { useAuth } from '@/store/auth';
 import {
@@ -130,9 +132,13 @@ function RevisionHistory({ requestId }: { requestId: number }) {
                 <div key={field} className="flex flex-wrap gap-x-1.5 text-2xs">
                   <dt className="text-text-subtle">{field.replace(/_/g, ' ')}</dt>
                   <dd className="text-text-muted">
-                    <span className="line-through opacity-70">{String(change.from ?? '—')}</span>
+                    <span className="line-through opacity-70">
+                      {revisionValue(field, change.from)}
+                    </span>
                     {' → '}
-                    <span className="font-medium text-text">{String(change.to ?? '—')}</span>
+                    <span className="font-medium text-text">
+                      {revisionValue(field, change.to)}
+                    </span>
                   </dd>
                 </div>
               ))}
@@ -181,11 +187,10 @@ export default function RequestsPage() {
 
   const submit = useMutation({
     mutationFn: (id: number) => submitRequest(id),
-    onSuccess: () => {
-      toast.success('Request submitted');
+    onSuccess: (saved) => {
+      toast.success(`Request #${saved.id} submitted`);
       refresh();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const share = useMutation({
@@ -203,18 +208,16 @@ export default function RequestsPage() {
       );
       refresh();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const cancel = useMutation({
     mutationFn: () => cancelRequest(cancelling!.id, cancelReason),
-    onSuccess: () => {
-      toast.success('Request cancelled');
+    onSuccess: (saved) => {
+      toast.success(`Request #${saved.id} cancelled`);
       setCancelling(null);
       setCancelReason('');
       refresh();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const rows = requests.data?.items ?? [];
@@ -368,6 +371,7 @@ export default function RequestsPage() {
                         <Badge tone={STATUS_TONE[request.status]}>
                           {REQUEST_STATUS_LABELS[request.status]}
                         </Badge>
+                        <PriorityBadge priority={request.priority} />
                         {request.edit_count > 0 && (
                           <button
                             type="button"
@@ -382,7 +386,7 @@ export default function RequestsPage() {
                       </div>
 
                       <p className="mt-1 text-xs text-text-muted">
-                        {request.project_code}
+                        {campaignLabel(request)}
                         {request.mode && ` · ${TRAVEL_MODE_LABELS[request.mode]}`}
                         {!isOwner && ` · raised by ${request.requester_name}`}
                         {request.notes && ` · ${request.notes}`}

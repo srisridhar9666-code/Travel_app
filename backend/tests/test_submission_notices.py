@@ -16,6 +16,7 @@ from app.core.enums import (
     NotificationCategory,
     NotificationChannel,
     NotificationStatus,
+    RequestPriority,
     RequestType,
     Role,
     TravelMode,
@@ -53,13 +54,14 @@ def world(db):
     return project, people
 
 
-def raise_flight(db, project, requester, travellers=None):
+def raise_flight(db, project, requester, travellers=None, priority=RequestPriority.MEDIUM):
     row = TravelRequest(
         tenant_id=TENANT, request_type=RequestType.LONG_DISTANCE, project_id=project.id,
         requester_id=requester.id, mode=TravelMode.FLIGHT,
         origin="Hyderabad", origin_state="Telangana",
         destination="Pune", destination_state="Maharashtra",
         start_at=datetime(2026, 10, 5, 6, 0), travel_reason="Store audit",
+        priority=priority,
     )
     row.travellers = [
         RequestTraveller(user_id=p.id, status=TravellerStatus.PENDING)
@@ -122,7 +124,30 @@ class TestWhoIsTold:
         assert "Travellers: Ravi Kumar, Meena Iyer" in mail.body
         assert "Campaign: MON-1 - Monsoon Survey" in mail.body
         assert "Reason: Store audit" in mail.body
+        assert "Priority: Medium" in mail.body
         assert mail.body.rstrip().endswith("/approvals")
+
+    def test_a_high_priority_request_stands_out_in_the_inbox(self, db, world):
+        project, p = world
+        raise_flight(db, project, p["ravi"], priority=RequestPriority.HIGH)
+        mail = notices(db, channel=NotificationChannel.EMAIL)[0]
+        notice = notices(db, channel=NotificationChannel.IN_APP)[0]
+
+        assert mail.subject == (
+            "High priority - New travel request: Flight: Hyderabad to Pune, 05 Oct 2026, 06:00"
+        )
+        assert "Priority: High" in mail.body
+        assert notice.title == "High-priority request from Ravi Kumar"
+
+    def test_a_low_priority_request_keeps_the_plain_subject(self, db, world):
+        project, p = world
+        raise_flight(db, project, p["ravi"], priority=RequestPriority.LOW)
+        mail = notices(db, channel=NotificationChannel.EMAIL)[0]
+        assert mail.subject.startswith("New travel request:")
+        assert "Priority: Low" in mail.body
+        assert notices(db, channel=NotificationChannel.IN_APP)[0].title == (
+            "New request from Ravi Kumar"
+        )
 
 
 class TestDelivery:

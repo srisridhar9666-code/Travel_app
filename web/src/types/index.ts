@@ -539,6 +539,15 @@ export interface QueueCounts {
   high_priority: number;
 }
 
+/** Every request in one admin queue tab, read as the admin (so with cost), for
+ *  the CSV. Capped on the server; `truncated` says when the cap was hit. */
+export interface QueueExport {
+  status: RequestStatus;
+  total: number;
+  truncated: boolean;
+  items: TravelRequest[];
+}
+
 export interface DecisionBody {
   to_status: TravellerStatus;
   reason?: string | null;

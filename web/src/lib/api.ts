@@ -34,7 +34,9 @@ import type {
   DecisionBody,
   Project,
   QueueCounts,
+  QueueExport,
   RequestConflict,
+  RequestPriority,
   RequestRevision,
   RequestType,
   RetentionStatus,
@@ -423,6 +425,9 @@ export interface RequestQuery {
   type?: string;
   project_id?: number;
   search?: string;
+  priority?: RequestPriority;
+  /** 'priority' puts high first, then medium, then low; newest first within each. */
+  sort?: 'newest' | 'priority';
   page?: number;
   page_size?: number;
 }
@@ -448,6 +453,11 @@ export interface RequestPayload {
   hotel_city?: string | null;
   check_in?: string | null;
   check_out?: string | null;
+  travel_reason?: string;
+  /** Only with the fallback "Other" campaign: the name the requester typed. */
+  other_project_name?: string | null;
+  /** Defaults to MEDIUM on the server when left out. */
+  priority?: RequestPriority;
   notes?: string | null;
   is_draft?: boolean;
 }
@@ -504,6 +514,17 @@ export const fetchColleagues = () =>
 
 export const fetchQueueCounts = () =>
   api.get<QueueCounts>('/requests/queue/counts').then((r) => r.data);
+
+/** Every request in one queue tab, not just a page, for the CSV export. Given
+ *  longer than the default timeout: a big tab is read row by row as the admin. */
+export const exportQueue = (params: {
+  status: string;
+  search?: string;
+  priority?: RequestPriority;
+}) =>
+  api
+    .get<QueueExport>('/requests/queue/export', { params, timeout: 120_000 })
+    .then((r) => r.data);
 
 export const decideTraveller = (requestId: number, travellerId: number, body: DecisionBody) =>
   api

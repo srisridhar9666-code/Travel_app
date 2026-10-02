@@ -1,20 +1,25 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
   BedDouble,
   Car,
   CheckSquare,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Flag,
   History,
   IndianRupee,
   Plane,
   Ticket,
   Gavel,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import { Modal } from '@/components/Modal';
+import { PriorityBadge } from '@/components/PriorityBadge';
 import { ConflictList } from '@/components/RequestForm';
 import CostPanel from '@/components/CostPanel';
 import TicketPanel from '@/components/TicketPanel';
@@ -26,23 +31,32 @@ import {
   EmptyState,
   Field,
   Input,
+  Select,
   Skeleton,
 } from '@/components/ui';
 import {
   decideBatch,
   errorMessage,
+  exportQueue,
   fetchQueueCounts,
   fetchRequests,
   fetchRevisions,
 } from '@/lib/api';
+import { downloadCsv, slug, type CsvCell } from '@/lib/csv';
 import { routeLabel } from '@/lib/places';
-import { formatInstant } from '@/lib/time';
+import { campaignLabel, revisionValue } from '@/lib/requests';
+import { fileStamp, formatInstant, parseInstant, sheetInstant } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import {
+  DESIGNATION_LABELS,
+  PRIORITY_LABELS,
+  PRIORITY_ORDER,
   REQUEST_STATUS_LABELS,
+  REQUEST_TYPE_LABELS,
   TRAVELLER_STATUS_LABELS,
   TRAVEL_MODE_LABELS,
   type BatchDecisionItem,
+  type RequestPriority,
   type RequestStatus,
   type RequestTraveller,
   type TravelRequest,
@@ -70,15 +84,24 @@ const TRAVELLER_TONE: Record<TravellerStatus, 'neutral' | 'success' | 'danger' |
   CANCELLED: 'neutral',
 };
 
+type TabKey = Exclude<RequestStatus, 'DRAFT'>;
+
 /** The queue tabs, in the order an admin works through them. */
-const TABS: { key: string; label: string; countKey: keyof CountShape }[] = [
+const TABS: { key: TabKey; label: string; countKey: keyof CountShape }[] = [
   { key: 'SUBMITTED', label: 'Awaiting', countKey: 'awaiting' },
   { key: 'PARTIALLY_APPROVED', label: 'Partly approved', countKey: 'partially_approved' },
   { key: 'APPROVED', label: 'Approved', countKey: 'approved' },
   { key: 'BOOKED', label: 'Booked', countKey: 'booked' },
   { key: 'EXPIRED', label: 'Expired', countKey: 'expired' },
   { key: 'REJECTED', label: 'Rejected', countKey: 'rejected' },
+  // Nowhere else shows other people's cancelled requests: My requests is only
+  // the admin's own, and the travel log leaves cancelled trips out.
+  { key: 'CANCELLED', label: 'Cancelled', countKey: 'cancelled' },
 ];
+
+/** The server caps a page at 100. */
+const PAGE_SIZES = [25, 50, 100];
+const DEFAULT_PAGE_SIZE = 25;
 
 type CountShape = {
   awaiting: number;
@@ -112,6 +135,203 @@ function itinerary(request: TravelRequest): string {
     return `${request.hotel_city} · ${nights}`;
   }
   return `${routeLabel(request)} · ${request.start_at ? dayTime(request.start_at) : ''}`;
+}
+
+// --- CSV export ------------------------------------------------------------
+//
+// One row per traveller, with the request's columns repeated and Request #
+// first, so a sheet can be grouped back into requests. Decisions, PNRs and cost
+// all live on the traveller, and one request can mix outcomes.
+
+interface ExportColumn {
+  header: string;
+  value: (request: TravelRequest, traveller: RequestTraveller) => CsvCell;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Whole days between two calendar dates ("2026-10-02"), as typed. */
+function daysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY_MS);
+}
+
+/** Trip times are wall-clock values as the requester typed them, so they are
+ *  cut from the string rather than converted through a time zone. */
+const tripDate = (iso: string | null) => (iso ? iso.slice(0, 10) : '');
+const tripTime = (iso: string | null) => (iso ? iso.slice(11, 16) : '');
+const isCab = (r: TravelRequest) => r.request_type === 'LOCAL_CAB';
+
+const COMMON_COLUMNS: ExportColumn[] = [
+  { header: 'Request #', value: (r) => r.id },
+  // Seeded and very old rows have no submitted_at; created_at is the honest
+  // stand-in.
+  { header: 'Raised on (IST)', value: (r) => sheetInstant(r.submitted_at ?? r.created_at) },
+  { header: 'Raised by', value: (r) => r.requester_name },
+  { header: 'Priority', value: (r) => PRIORITY_LABELS[r.priority] ?? r.priority },
+  { header: 'Campaign code', value: (r) => r.project_code },
+  { header: 'Campaign', value: (r) => campaignLabel(r) },
+  {
+    header: 'Type',
+    value: (r) =>
+      r.request_type === 'LONG_DISTANCE' && r.mode
+        ? TRAVEL_MODE_LABELS[r.mode]
+        : REQUEST_TYPE_LABELS[r.request_type],
+  },
+  { header: 'From', value: (r) => r.origin },
+  { header: 'From city', value: (r) => (isCab(r) ? r.pickup_city : r.origin) },
+  { header: 'From state', value: (r) => r.origin_state },
+  { header: 'To', value: (r) => r.destination },
+  { header: 'To city', value: (r) => (isCab(r) ? r.drop_city : r.destination) },
+  { header: 'To state', value: (r) => r.destination_state },
+  { header: 'Hotel', value: (r) => r.hotel_city },
+  { header: 'Hotel state', value: (r) => r.hotel_state },
+  { header: 'Departs or check-in date', value: (r) => r.check_in ?? tripDate(r.start_at) },
+  { header: 'Departs time', value: (r) => tripTime(r.start_at) },
+  {
+    header: 'Arrives or check-out',
+    value: (r) =>
+      r.request_type === 'HOTEL'
+        ? r.check_out
+        : r.end_at
+          ? `${tripDate(r.end_at)} ${tripTime(r.end_at)}`
+          : '',
+  },
+  {
+    header: 'Nights',
+    value: (r) => (r.check_in && r.check_out ? daysBetween(r.check_in, r.check_out) : ''),
+  },
+  { header: 'Reason for travel', value: (r) => r.travel_reason },
+  { header: 'Notes', value: (r) => r.notes },
+  { header: 'Traveller', value: (_, t) => t.full_name },
+  { header: 'Traveller email', value: (_, t) => t.email },
+  { header: 'Designation', value: (_, t) => (t.designation ? DESIGNATION_LABELS[t.designation] : '') },
+  { header: 'Traveller status', value: (_, t) => TRAVELLER_STATUS_LABELS[t.status] },
+  { header: 'Request status', value: (r) => REQUEST_STATUS_LABELS[r.status] },
+  { header: 'Times edited', value: (r) => r.edit_count },
+];
+
+const WAITING_DAYS: ExportColumn = {
+  header: 'Waiting (days)',
+  value: (r) =>
+    Math.max(0, Math.floor((Date.now() - parseInstant(r.submitted_at ?? r.created_at).getTime()) / DAY_MS)),
+};
+const CLASHES: ExportColumn = {
+  header: 'Clash warnings',
+  value: (r, t) =>
+    r.conflicts
+      .filter((c) => c.user_id === t.user_id)
+      .map((c) => c.message)
+      .join('; '),
+};
+// "Decided", not "Approved": each traveller keeps only their latest decision,
+// so on a booked row this is whoever marked it booked.
+const DECIDED: ExportColumn[] = [
+  { header: 'Decided by', value: (_, t) => t.decided_by_name },
+  { header: 'Decided on (IST)', value: (_, t) => sheetInstant(t.decided_at) },
+  { header: 'Decision reason', value: (_, t) => t.decision_reason },
+];
+const PNR: ExportColumn = { header: 'PNR or booking ref', value: (_, t) => t.booking_reference };
+const COST: ExportColumn = { header: 'Cost (INR)', value: (_, t) => t.cost_amount };
+const COST_NOTE: ExportColumn = { header: 'Cost note', value: (_, t) => t.cost_note };
+const COST_BY: ExportColumn = { header: 'Cost entered by', value: (_, t) => t.cost_entered_by_name };
+
+/** What each tab adds to the common columns: what an admin on that tab would
+ *  want next to the trip. */
+const TAB_COLUMNS: Record<TabKey, ExportColumn[]> = {
+  SUBMITTED: [WAITING_DAYS, CLASHES],
+  PARTIALLY_APPROVED: [CLASHES, ...DECIDED, PNR, COST],
+  APPROVED: [...DECIDED, COST, COST_NOTE],
+  BOOKED: [...DECIDED, PNR, COST, COST_NOTE, COST_BY],
+  EXPIRED: [WAITING_DAYS],
+  REJECTED: DECIDED,
+  CANCELLED: [{ header: 'Cancel reason', value: (r) => r.cancel_reason }, ...DECIDED],
+};
+
+function exportTab(tab: TabKey, label: string, items: TravelRequest[]): number {
+  const columns = [...COMMON_COLUMNS, ...TAB_COLUMNS[tab]];
+  const rows = items.flatMap((request) =>
+    request.travellers.map((traveller) => columns.map((c) => c.value(request, traveller))),
+  );
+  downloadCsv(
+    `approvals-${slug(label)}-${fileStamp()}.csv`,
+    columns.map((c) => c.header),
+    rows,
+  );
+  return rows.length;
+}
+
+function Pager({
+  page,
+  pages,
+  total,
+  pageSize,
+  shown,
+  busy,
+  onPage,
+  onPageSize,
+}: {
+  page: number;
+  pages: number;
+  total: number;
+  pageSize: number;
+  shown: number;
+  busy: boolean;
+  onPage: (page: number) => void;
+  onPageSize: (size: number) => void;
+}) {
+  const first = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const last = (page - 1) * pageSize + shown;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border px-4 py-3 sm:px-5">
+      <p className="text-sm text-text-muted tabular-nums" aria-live="polite">
+        Showing <span className="font-medium text-text">{first}–{last}</span> of{' '}
+        <span className="font-medium text-text">{total}</span>
+      </p>
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        <label className="flex items-center gap-2 text-sm text-text-muted">
+          <span className="hidden sm:inline">Rows per page</span>
+          <span className="sm:hidden">Rows</span>
+          <Select
+            aria-label="Rows per page"
+            value={String(pageSize)}
+            onChange={(e) => onPageSize(Number(e.target.value))}
+            className="h-9 w-20"
+          >
+            {PAGE_SIZES.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <span className="text-sm text-text-muted tabular-nums">
+          Page {page} of {pages}
+        </span>
+        <div className="flex gap-1.5">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={page <= 1 || busy}
+            onClick={() => onPage(page - 1)}
+            aria-label="Previous page"
+          >
+            <ChevronLeft size={16} />
+            <span className="hidden sm:inline">Previous</span>
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={page >= pages || busy}
+            onClick={() => onPage(page + 1)}
+            aria-label="Next page"
+          >
+            <span className="hidden sm:inline">Next</span>
+            <ChevronRight size={16} />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function DecisionLog({ travellers }: { travellers: RequestTraveller[] }) {
@@ -190,9 +410,13 @@ function RevisionHistory({ requestId }: { requestId: number }) {
                 <div key={field} className="flex flex-wrap gap-x-1.5 text-2xs">
                   <dt className="text-text-subtle">{field.replace(/_/g, ' ')}</dt>
                   <dd className="text-text-muted">
-                    <span className="line-through opacity-70">{String(change.from ?? '—')}</span>
+                    <span className="line-through opacity-70">
+                      {revisionValue(field, change.from)}
+                    </span>
                     {' → '}
-                    <span className="font-medium text-text">{String(change.to ?? '—')}</span>
+                    <span className="font-medium text-text">
+                      {revisionValue(field, change.to)}
+                    </span>
                   </dd>
                 </div>
               ))}
@@ -216,24 +440,52 @@ interface PendingDecision {
 export default function ApprovalsPage() {
   const queryClient = useQueryClient();
 
-  const [tab, setTab] = useState('SUBMITTED');
-  const [search, setSearch] = useState('');
+  const [tab, setTabState] = useState<TabKey>('SUBMITTED');
+  const [search, setSearchState] = useState('');
+  const [priority, setPriorityState] = useState<RequestPriority | ''>('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [pending, setPending] = useState<PendingDecision | null>(null);
   const [reason, setReason] = useState('');
   const [notify, setNotify] = useState(true);
   const [reference, setReference] = useState('');
 
+  // Any change to what is being looked at starts again from page 1; page 3 of
+  // a different tab is not a place anyone meant to go.
+  const setTab = (next: TabKey) => {
+    setTabState(next);
+    setPage(1);
+  };
+  const setSearch = (next: string) => {
+    setSearchState(next);
+    setPage(1);
+  };
+  const setPriority = (next: RequestPriority | '') => {
+    setPriorityState(next);
+    setPage(1);
+  };
+
+  const tabLabel = TABS.find((item) => item.key === tab)?.label ?? REQUEST_STATUS_LABELS[tab];
+  const filters = {
+    status: tab,
+    search: search.trim() || undefined,
+    priority: priority || undefined,
+  };
+
   const counts = useQuery({ queryKey: ['queue-counts'], queryFn: fetchQueueCounts });
   const requests = useQuery({
-    queryKey: ['queue', tab, search],
+    queryKey: ['queue', tab, search, priority, page, pageSize],
     queryFn: () =>
       fetchRequests({
         mine: false,
-        status: tab,
-        search: search.trim() || undefined,
-        page_size: 100,
+        ...filters,
+        // High first on every tab, newest first within each.
+        sort: 'priority',
+        page,
+        page_size: pageSize,
       }),
+    placeholderData: keepPreviousData,
   });
 
   const refresh = () => {
@@ -241,7 +493,32 @@ export default function ApprovalsPage() {
     queryClient.invalidateQueries({ queryKey: ['queue-counts'] });
     queryClient.invalidateQueries({ queryKey: ['requests'] });
     queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    // A decision moves the dashboard and the travel log too.
+    queryClient.invalidateQueries({ queryKey: ['insights'] });
+    queryClient.invalidateQueries({ queryKey: ['travel-logs'] });
   };
+
+  // Every row of the tab that matches the search and priority, fetched afresh,
+  // not just the page on screen.
+  const exporting = useMutation({
+    // The tab rides along with the result, so switching tabs while a big export
+    // is loading cannot put one tab's rows under another tab's columns.
+    mutationFn: (vars: { tab: TabKey; label: string }) =>
+      exportQueue({ ...filters, status: vars.tab }).then((all) => ({ ...vars, all })),
+    meta: { errorFallback: 'Could not export this tab.' },
+    onSuccess: ({ tab: exported, label, all }) => {
+      const written = exportTab(exported, label, all.items);
+      if (all.truncated) {
+        // Cut in the tab's own order, high priority first, so what is left
+        // out is the oldest low-priority work.
+        toast(
+          `Exported the first ${all.items.length} of ${all.total} requests. Search or filter for the rest.`,
+        );
+      } else {
+        toast.success(`Exported ${written} ${written === 1 ? 'row' : 'rows'}`);
+      }
+    },
+  });
 
   const decide = useMutation({
     // The request and traveller travel with the mutation rather than being read
@@ -254,8 +531,13 @@ export default function ApprovalsPage() {
       to: TravellerStatus;
       items: BatchDecisionItem[];
     }) => decideBatch(vars.request.id, vars.items),
-    onSuccess: () => {
-      toast.success('Decision recorded');
+    // This flow has its own error handling below (it can turn a refusal into
+    // the override dialog), so the global toast stays out of it.
+    meta: { errorToast: false },
+    onSuccess: (_, vars) => {
+      toast.success(
+        `${vars.traveller.full_name} ${TRAVELLER_STATUS_LABELS[vars.to].toLowerCase()}`,
+      );
       close();
       refresh();
     },
@@ -312,7 +594,16 @@ export default function ApprovalsPage() {
   };
 
   const rows = requests.data?.items ?? [];
+  const total = requests.data?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / (requests.data?.page_size ?? pageSize)));
   const countData = counts.data;
+  const urgent = countData?.high_priority ?? 0;
+
+  // Deciding the last row on the last page moves it to another tab; step back
+  // rather than leave the admin looking at an empty page with work behind it.
+  useEffect(() => {
+    if (requests.data && page > pages) setPage(pages);
+  }, [requests.data, page, pages]);
 
   const dialogTitle = !pending
     ? ''
@@ -334,8 +625,29 @@ export default function ApprovalsPage() {
         </p>
       </div>
 
-      {countData && (countData.expired > 0 || (counts.data?.with_conflicts ?? 0) > 0) && (
+      {countData && (urgent > 0 || countData.expired > 0 || countData.with_conflicts > 0) && (
         <div className="flex flex-wrap gap-3">
+          {urgent > 0 && (
+            <Card className="flex-1 border-danger/40 bg-danger-soft">
+              <button
+                type="button"
+                onClick={() => {
+                  // Straight to the work: high only, on a tab that still
+                  // waits on a decision (awaiting, unless already partly approved).
+                  if (tab !== 'SUBMITTED' && tab !== 'PARTIALLY_APPROVED') setTab('SUBMITTED');
+                  setPriority('HIGH');
+                }}
+                className="flex w-full items-center gap-2.5 px-4 py-3 text-left"
+                title="Show the high-priority requests awaiting a decision"
+              >
+                <Flag size={15} className="shrink-0 text-danger" />
+                <p className="text-xs text-text-muted">
+                  <span className="font-semibold text-danger">{urgent}</span> high-priority{' '}
+                  {urgent === 1 ? 'request is' : 'requests are'} waiting for a decision.
+                </p>
+              </button>
+            </Card>
+          )}
           {counts.data!.with_conflicts > 0 && (
             <Card className="flex-1 border-warning/40 bg-warning-soft">
               <div className="flex items-center gap-2.5 px-4 py-3">
@@ -388,16 +700,44 @@ export default function ApprovalsPage() {
           ))}
         </div>
 
-        <CardHeader title={`${requests.data?.total ?? 0} in this view`} />
+        <CardHeader
+          title={`${total} in this view`}
+          action={
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={exporting.isPending}
+              disabled={!requests.data || total === 0}
+              onClick={() => exporting.mutate({ tab, label: tabLabel })}
+              title={`Download every request in ${tabLabel} that matches the search, not just this page`}
+            >
+              {!exporting.isPending && <Download size={15} />}
+              Export CSV
+            </Button>
+          }
+        />
 
-        <div className="border-b border-border px-5 py-3">
+        <div className="flex flex-wrap gap-2 border-b border-border px-5 py-3">
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search place or notes"
-            className="w-full sm:max-w-64"
+            className="min-w-40 flex-1 sm:max-w-64"
             aria-label="Search the queue"
           />
+          <Select
+            value={priority}
+            onChange={(e) => setPriority(e.target.value as RequestPriority | '')}
+            aria-label="Filter by priority"
+            className="w-40"
+          >
+            <option value="">All priorities</option>
+            {PRIORITY_ORDER.map((value) => (
+              <option key={value} value={value}>
+                {PRIORITY_LABELS[value]} priority
+              </option>
+            ))}
+          </Select>
         </div>
 
         {requests.isPending ? (
@@ -417,9 +757,11 @@ export default function ApprovalsPage() {
             icon={<CheckSquare size={28} />}
             title="Nothing here"
             description={
-              tab === 'SUBMITTED'
-                ? 'No requests are waiting on a decision.'
-                : 'No requests in this state.'
+              search.trim() || priority
+                ? 'Nothing in this tab matches that search or priority.'
+                : tab === 'SUBMITTED'
+                  ? 'No requests are waiting on a decision.'
+                  : 'No requests in this state.'
             }
           />
         ) : (
@@ -441,6 +783,7 @@ export default function ApprovalsPage() {
                         <Badge tone={STATUS_TONE[request.status]}>
                           {REQUEST_STATUS_LABELS[request.status]}
                         </Badge>
+                        <PriorityBadge priority={request.priority} />
                         {request.edit_count > 0 && (
                           <button
                             type="button"
@@ -455,7 +798,7 @@ export default function ApprovalsPage() {
                         )}
                       </div>
                       <p className="mt-1 text-xs text-text-muted">
-                        {request.project_code} · raised by {request.requester_name}
+                        {campaignLabel(request)} · raised by {request.requester_name}
                         {request.mode && ` · ${TRAVEL_MODE_LABELS[request.mode]}`}
                         {request.notes && ` · ${request.notes}`}
                       </p>
@@ -596,6 +939,22 @@ export default function ApprovalsPage() {
               );
             })}
           </ul>
+        )}
+
+        {requests.data && total > 0 && (
+          <Pager
+            page={requests.data.page}
+            pages={pages}
+            total={total}
+            pageSize={requests.data.page_size}
+            shown={rows.length}
+            busy={requests.isFetching}
+            onPage={setPage}
+            onPageSize={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+          />
         )}
       </Card>
 
