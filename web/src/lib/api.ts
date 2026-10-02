@@ -560,8 +560,8 @@ export const runReminderJobs = () =>
 
 // --- cost and analytics ---------------------------------------------------
 
-export const fetchAnalytics = (params: { days?: number; months?: number } = {}) =>
-  api.get<AnalyticsBundle>('/analytics', { params }).then((r) => r.data);
+export const fetchAnalytics = (params: InsightFilters = {}) =>
+  api.get<AnalyticsBundle>('/analytics', { params: repeatParams({ ...params }) }).then((r) => r.data);
 
 export const fetchCampaignSpend = () =>
   api.get<CampaignSpend[]>('/analytics/campaigns').then((r) => r.data);

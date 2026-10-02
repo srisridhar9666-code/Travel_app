@@ -96,6 +96,8 @@ async def lifespan(app: FastAPI):
         ("bootstrap admin", lambda db: ensure_bootstrap_admin(db)),
         ("'Other' campaign", lambda db: ensure_other_project(db, settings.default_tenant)),
         ("place list", lambda db: location_service.seed(db, settings.default_tenant)),
+        # After the place list, which it reads. Fills only empty states.
+        ("request states", lambda db: location_service.backfill_request_states(db, settings.default_tenant)),
     ):
         db = SessionLocal()
         try:

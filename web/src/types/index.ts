@@ -756,7 +756,6 @@ export const JOB_LABELS: Record<string, string> = {
  *  number is a float, and a float is how a report starts disagreeing with an
  *  invoice. */
 export interface Overview {
-  window_days: number;
   spent: string;
   committed: string;
   average_per_traveller: string;
@@ -787,10 +786,34 @@ export interface TypeSpend {
   travellers: number;
 }
 
-export interface MonthSpend {
-  month: string;
+/** One bucket of booked spend: "2026-10" for a month, or a day (a week's
+ *  Monday) as "2026-10-05". */
+export interface TrendPoint {
+  period: string;
   spent: string;
   travellers: number;
+}
+
+export interface PersonSpend {
+  user_id: number;
+  full_name: string;
+  employee_code: string | null;
+  spent: string;
+  committed: string;
+  trips: number;
+  uncosted: number;
+}
+
+/** Spend by destination state or city. `state`/`city` are null on the
+ *  "not recorded" row, which is not a filter. */
+export interface PlaceSpend {
+  label: string;
+  state: string | null;
+  city: string | null;
+  spent: string;
+  travellers: number;
+  trips: number;
+  uncosted: number;
 }
 
 export interface DeploymentRow {
@@ -810,10 +833,18 @@ export interface UncostedRow {
 }
 
 export interface AnalyticsBundle {
+  /** The span the trend covers: the chosen dates, or the data's own span
+   *  where a side was left open. */
+  since: string;
+  until: string;
+  grain: 'day' | 'week' | 'month';
   overview: Overview;
+  trend: TrendPoint[];
   by_campaign: CampaignSpend[];
   by_type: TypeSpend[];
-  by_month: MonthSpend[];
+  by_person: PersonSpend[];
+  by_state: PlaceSpend[];
+  by_city: PlaceSpend[];
   deployment: DeploymentRow[];
   uncosted: UncostedRow[];
 }
@@ -889,6 +920,8 @@ export interface TravelHistory {
 
 // --- travel logs and the dashboard ------------------------------------------
 
+/** The slice every report takes. State and city are the destination: where
+ *  the trip goes (a hotel's own state and city), never where it starts. */
 export interface InsightFilters {
   since?: string;
   until?: string;
@@ -896,6 +929,7 @@ export interface InsightFilters {
   project_id?: number;
   request_type?: RequestType;
   state?: string;
+  city?: string;
 }
 
 export interface TravelLogEntry {
@@ -977,7 +1011,12 @@ export interface Insights {
     committed: string;
     uncosted: number;
     average_per_booking: string;
+    /** Travelled movements with no destination state on record. */
+    unstated: number;
   };
+  /** Requests in this slice still waiting on a decision (status Submitted),
+   *  plus partly-approved ones with someone still pending. */
+  awaiting: { requests: number; people: number; partly_approved: number; with_conflicts: number };
   trend: { period: string; movements: number; people: number; spent: string }[];
   by_status: { status: TravellerStatus; count: number }[];
   by_type: { request_type: RequestType; count: number; spent: string }[];
@@ -1003,6 +1042,15 @@ export interface Insights {
 
 export interface FilterOptions {
   projects: { id: number; code: string; name: string; status: ProjectStatus }[];
-  people: { id: number; full_name: string; employee_code: string | null; is_active: boolean }[];
+  people: {
+    id: number;
+    full_name: string;
+    employee_code: string | null;
+    is_active: boolean;
+    status: UserStatus;
+  }[];
+  /** Destination states in use. */
   states: string[];
+  /** Destination cities in use, with the state each is in. */
+  cities: { state: string | null; city: string }[];
 }
