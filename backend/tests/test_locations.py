@@ -103,6 +103,19 @@ class TestCanonical:
         locations.seed(db, TENANT)
         assert locations.canonical(db, TENANT, "Bihar", "aurangabad") == ("Bihar", "Aurangabad")
 
+    def test_a_typed_place_stays_in_the_state_that_was_picked(self, db):
+        """Shamshabad, typed under Telangana, is near Hyderabad airport - not
+        the listed Shamshabad in Madhya Pradesh."""
+        locations.seed(db, TENANT)
+        assert locations.canonical(db, TENANT, "Telangana", "Shamshabad") == (
+            "Telangana",
+            "Shamshabad",
+        )
+
+    def test_an_abbreviation_resolves_inside_the_picked_state(self, db):
+        locations.seed(db, TENANT)
+        assert locations.canonical(db, TENANT, "telangana", "hyd") == ("Telangana", "Hyderabad")
+
     def test_an_ambiguous_name_with_no_state_is_not_guessed(self, db):
         locations.seed(db, TENANT)
         state, place = locations.canonical(db, TENANT, None, "Aurangabad")

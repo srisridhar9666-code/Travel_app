@@ -29,6 +29,7 @@ import {
   fetchLedgerGrants,
   verifyAuditChain,
 } from '@/lib/api';
+import { formatInstant, formatInstantDate, todayInIndia } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import type { AuditRow } from '@/types';
 
@@ -46,14 +47,14 @@ function actionTone(action: string) {
 }
 
 function timestamp(iso: string) {
-  // Stored as naive UTC; mark it so the browser renders it in local time.
-  const date = new Date(iso.endsWith('Z') ? iso : `${iso}Z`);
-  return date.toLocaleString(undefined, {
+  // 24-hour, so the seconds an audit trail needs still fit the column.
+  return formatInstant(iso, {
     day: '2-digit',
     month: 'short',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
+    hourCycle: 'h23',
   });
 }
 
@@ -151,7 +152,7 @@ export default function AuditPage() {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = `activity-log-${new Date().toISOString().slice(0, 10)}.csv`;
+      anchor.download = `activity-log-${todayInIndia()}.csv`;
       anchor.click();
       URL.revokeObjectURL(url);
       toast.success('Exported — the download is recorded in the log');
@@ -238,8 +239,8 @@ export default function AuditPage() {
           title={`${total} ${total === 1 ? 'entry' : 'entries'}`}
           description={
             summary.data?.oldest
-              ? `Covering ${new Date(summary.data.oldest + 'Z').toLocaleDateString()} to today.`
-              : undefined
+              ? `Covering ${formatInstantDate(summary.data.oldest)} to today. Times are India time (IST).`
+              : 'Times are India time (IST).'
           }
           action={
             <div className="flex gap-2">

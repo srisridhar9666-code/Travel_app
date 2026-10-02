@@ -9,6 +9,7 @@ from datetime import date, timedelta
 import pytest
 from sqlalchemy import create_engine
 
+from app.core import clock
 from app.core import pii
 from app.core.enums import AuditAction, IdProofType, Role
 from app.models.audit import AuditLog
@@ -63,22 +64,22 @@ class TestWhatIsDue:
         assert retention.count_due(db, TENANT) == 0
 
     def test_recent_leaver_is_not_yet_due(self, db):
-        user = make_user(db, exited_on=date.today() - timedelta(days=30))
+        user = make_user(db, exited_on=clock.local_today() - timedelta(days=30))
         make_proof(db, user)
         assert retention.count_due(db, TENANT) == 0
 
     def test_day_before_the_window_closes(self, db):
-        user = make_user(db, exited_on=date.today() - timedelta(days=89))
+        user = make_user(db, exited_on=clock.local_today() - timedelta(days=89))
         make_proof(db, user)
         assert retention.count_due(db, TENANT) == 0
 
     def test_exactly_at_the_window(self, db):
-        user = make_user(db, exited_on=date.today() - timedelta(days=90))
+        user = make_user(db, exited_on=clock.local_today() - timedelta(days=90))
         make_proof(db, user)
         assert retention.count_due(db, TENANT) == 1
 
     def test_long_past_the_window(self, db):
-        user = make_user(db, exited_on=date.today() - timedelta(days=400))
+        user = make_user(db, exited_on=clock.local_today() - timedelta(days=400))
         make_proof(db, user)
         assert retention.count_due(db, TENANT) == 1
 
@@ -88,7 +89,7 @@ class TestWhatIsDue:
 
 class TestPurge:
     def test_purge_empties_the_record(self, db):
-        user = make_user(db, exited_on=date.today() - timedelta(days=100))
+        user = make_user(db, exited_on=clock.local_today() - timedelta(days=100))
         proof = make_proof(db, user)
 
         result = retention.purge_expired(db, TENANT)
@@ -104,7 +105,7 @@ class TestPurge:
 
     def test_the_row_survives_as_a_tombstone(self, db):
         """Deleting the row would break every ledger entry that references it."""
-        user = make_user(db, exited_on=date.today() - timedelta(days=100))
+        user = make_user(db, exited_on=clock.local_today() - timedelta(days=100))
         proof = make_proof(db, user)
         proof_id = proof.id
 
@@ -117,7 +118,7 @@ class TestPurge:
         assert surviving.purged_at is not None
 
     def test_purge_is_audited(self, db):
-        user = make_user(db, exited_on=date.today() - timedelta(days=100))
+        user = make_user(db, exited_on=clock.local_today() - timedelta(days=100))
         make_proof(db, user)
 
         retention.purge_expired(db, TENANT)
@@ -129,7 +130,7 @@ class TestPurge:
         assert "retention" in (entries[0].reason or "").lower()
 
     def test_purge_does_not_record_the_number(self, db):
-        user = make_user(db, exited_on=date.today() - timedelta(days=100))
+        user = make_user(db, exited_on=clock.local_today() - timedelta(days=100))
         make_proof(db, user)
         retention.purge_expired(db, TENANT)
         db.commit()
@@ -140,7 +141,7 @@ class TestPurge:
         assert NUMBER not in blob
 
     def test_purge_is_idempotent(self, db):
-        user = make_user(db, exited_on=date.today() - timedelta(days=100))
+        user = make_user(db, exited_on=clock.local_today() - timedelta(days=100))
         make_proof(db, user)
 
         first = retention.purge_expired(db, TENANT)
@@ -152,7 +153,7 @@ class TestPurge:
         assert second["purged"] == 0
 
     def test_only_expired_records_are_touched(self, db):
-        stale = make_user(db, exited_on=date.today() - timedelta(days=100), email="gone@designboxed.com")
+        stale = make_user(db, exited_on=clock.local_today() - timedelta(days=100), email="gone@designboxed.com")
         current = make_user(db, email="here@designboxed.com")
         stale_proof = make_proof(db, stale)
         current_proof = make_proof(db, current)
@@ -167,7 +168,7 @@ class TestPurge:
         assert current_proof.number_encrypted is not None
 
     def test_another_tenant_is_untouched(self, db):
-        user = make_user(db, exited_on=date.today() - timedelta(days=100))
+        user = make_user(db, exited_on=clock.local_today() - timedelta(days=100))
         proof = make_proof(db, user)
 
         retention.purge_expired(db, "anomality")
@@ -177,7 +178,7 @@ class TestPurge:
         assert proof.is_purged is False
 
     def test_the_ledger_stays_verifiable_after_a_purge(self, db):
-        user = make_user(db, exited_on=date.today() - timedelta(days=100))
+        user = make_user(db, exited_on=clock.local_today() - timedelta(days=100))
         make_proof(db, user)
         retention.purge_expired(db, TENANT)
         db.commit()

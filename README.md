@@ -154,8 +154,9 @@ cd "D:\Travel Management System\V1\backend"
 | `GET /health/email` | Authenticates against SMTP without sending anything |
 | `GET /audit/grants` | Tries a write the ledger grant should forbid, and rolls it back |
 
-The dashboard runs all of these against the live stack, so a green row means that layer is
-genuinely wired rather than stubbed.
+Each one runs against the live stack, so a green answer means that layer is genuinely wired
+rather than stubbed. The email one is also on screen for admins: **Notifications → Delivery
+ledger → Email delivery**.
 
 ---
 
@@ -276,16 +277,27 @@ credentials for compose and nothing else.
 
 ```dotenv
 EMAIL_ENABLED=true
+SMTP_PORT=587                           # 587 (STARTTLS); use 465 (SSL) if 587 is blocked
 SMTP_USERNAME="you@gmail.com"
 SMTP_APP_PASSWORD="abcdefghijklmnop"   # a Gmail App Password, not your account password
 EMAIL_FROM="you@gmail.com"
 EMAIL_ALLOWLIST=""                      # empty, or only those addresses receive mail
 ```
 
-Restart the API afterwards; settings are read once at start-up. The start-up log says in one
-line whether mail will go out and, if not, which setting is missing, and `GET /health/email`
-signs in to SMTP to prove the password works. A Gmail App Password needs 2-Step Verification
-on the account: Google Account, Security, App passwords.
+Restart the API afterwards; settings are read once at start-up. Then, as an admin, open
+**Notifications → Delivery ledger → Email delivery** and press **Send test email**. It shows
+the settings the running API is actually using (the password only as "set (16 characters)"),
+warns about a restart that is still needed, a misspelt key or an allowlist that holds mail
+back, and sends one real message, reporting where it stopped and the mail server's own words
+if it fails. The start-up log says the same in one line. A Gmail App Password needs 2-Step
+Verification on the account: Google Account, Security, App passwords.
+
+`backend/.env` saved by Windows Notepad as UTF-16 or with a byte-order mark is read either
+way.
+
+Admins are emailed when someone raises a request ("New requests to approve" in their
+notification settings turns that off). The email goes out after the response, so a slow
+mail server never slows down Submit; one stranded by a restart is sent by the retry job.
 
 ---
 
@@ -401,6 +413,15 @@ ones would put two people in a room neither agreed to.
 everyone is in one country, and comparing wall-clock values is exactly what the conflict
 rules need. `UTCDateTime` is used on those columns for its microsecond precision only.
 
+**Recorded moments are UTC, and shown in India time.** When something was submitted,
+decided, emailed or signed in is stored as naive UTC and sent to the browser with a `Z`
+(`schemas/common.py`, `UTCInstant`); the web app converts it to `Asia/Kolkata` whatever the
+device's clock says (`web/src/lib/time.ts`). Without the `Z` a browser reads UTC as its own
+local time, which put every log entry 5h30m early. "Today" - for expiry, reminders,
+retention and date presets - is India's today (`core/clock.py`, `APP_TIMEZONE`), and the
+console log and the activity-log CSV are in India time too. Trip times are the other kind of
+time and are never converted.
+
 **Revisions begin at submission, not at creation.** Revision 1 is the request as the admin
 queue first sees it; edits to a private draft write nothing, because draft churn would bury
 the amendments that matter. `edit_count` is therefore `max(revision_number) - 1`.
@@ -449,7 +470,8 @@ them would bounce off one Gmail account and take its sending reputation with it.
 **`SUPPRESSED` and `FAILED` are different facts.** Suppressed means nobody tried, on
 purpose. Failed means we tried and were refused. Collapsing them would make "was this person
 told?" unanswerable, which is the whole reason the notification ledger exists. Retry picks up
-`FAILED` only, and gives up after three attempts.
+`FAILED` only (plus a `QUEUED` email left behind by a restart), and gives up after three
+attempts.
 
 **Ticket documents are as private as ID proof scans.** They carry a PNR and a passenger name,
 so they are stored outside any static mount, are admin-only, and reach a browser only through
@@ -526,7 +548,7 @@ filter the sender. Running the jobs by hand is therefore safe to press repeatedl
 
 **Notification categories can be switched off, except the ones that matter.**
 `OPTIONAL_CATEGORIES` in `core/enums.py` lists what a person may silence: bookings, room
-sharing, reminders. `DECISIONS` is deliberately absent — an opt-out there produces staff who
+sharing, reminders, and (admins only) new requests. `DECISIONS` is deliberately absent — an opt-out there produces staff who
 turn up at airports. The guard is in `notifications.wants()` as well as the setter, so a
 hand-edited preferences table cannot silence a decision either.
 

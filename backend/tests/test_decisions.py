@@ -8,12 +8,13 @@ half - conflicts warn the requester, but an admin who approves over one has to
 type a reason, and that reason reaches the ledger before the approval it
 justifies.
 """
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 
+from app.core import clock
 from app.core.enums import (
     AuditAction,
     Gender,
@@ -69,8 +70,8 @@ def make_stay(db, project, users, *, check_in=None, check_out=None):
         project_id=project.id,
         requester_id=users[0].id,
         hotel_city="Mumbai",
-        check_in=check_in or date.today() + timedelta(days=30),
-        check_out=check_out or date.today() + timedelta(days=33),
+        check_in=check_in or clock.local_today() + timedelta(days=30),
+        check_out=check_out or clock.local_today() + timedelta(days=33),
     )
     row.travellers = [
         RequestTraveller(user_id=u.id, status=TravellerStatus.PENDING) for u in users
@@ -562,8 +563,8 @@ def test_a_request_nobody_decided_expires_once_the_date_passes(db, world):
     project, admin, ravi, meera = world
     row = make_stay(
         db, project, [ravi, meera],
-        check_in=date.today() - timedelta(days=10),
-        check_out=date.today() - timedelta(days=7),
+        check_in=clock.local_today() - timedelta(days=10),
+        check_out=clock.local_today() - timedelta(days=7),
     )
     assert svc.status_of(row) is RequestStatus.EXPIRED
 
@@ -573,8 +574,8 @@ def test_a_partly_decided_request_does_not_expire(db, world):
     project, admin, ravi, meera = world
     row = make_stay(
         db, project, [ravi, meera],
-        check_in=date.today() - timedelta(days=10),
-        check_out=date.today() - timedelta(days=7),
+        check_in=clock.local_today() - timedelta(days=10),
+        check_out=clock.local_today() - timedelta(days=7),
     )
     decide(db, actor=admin, request=row, traveller=row.travellers[0],
            to_status=TravellerStatus.APPROVED,
@@ -592,8 +593,8 @@ def test_a_cancelled_past_request_stays_cancelled(db, world):
     project, _, ravi, _ = world
     row = make_stay(
         db, project, [ravi],
-        check_in=date.today() - timedelta(days=5),
-        check_out=date.today() - timedelta(days=3),
+        check_in=clock.local_today() - timedelta(days=5),
+        check_out=clock.local_today() - timedelta(days=3),
     )
     row.is_cancelled = True
     db.commit()
@@ -604,8 +605,8 @@ def test_a_draft_that_went_stale_is_still_a_draft(db, world):
     project, _, ravi, _ = world
     row = make_stay(
         db, project, [ravi],
-        check_in=date.today() - timedelta(days=5),
-        check_out=date.today() - timedelta(days=3),
+        check_in=clock.local_today() - timedelta(days=5),
+        check_out=clock.local_today() - timedelta(days=3),
     )
     row.is_draft = True
     db.commit()

@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
+from app.core import clock
 from app.core.enums import (
     ProjectStatus,
     RequestType,
@@ -218,7 +219,7 @@ class TestOrderingAndWindow:
 
     def test_the_window_excludes_older_movements(self, db, project):
         ravi = make_user(db, "Ravi Kumar", "ravi@designboxed.com")
-        long_ago = datetime.combine(date.today() - timedelta(days=400), datetime.min.time())
+        long_ago = datetime.combine(clock.local_today() - timedelta(days=400), datetime.min.time())
         make_trip(db, project, ravi, travellers=[ravi], start=long_ago)
 
         # Default window is 90 days.

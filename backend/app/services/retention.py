@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.core import clock
 from app.core.enums import AuditAction
 from app.models.base import naive_utcnow
 from app.models.id_proof import IdProof
@@ -31,7 +32,7 @@ settings = get_settings()
 
 def cutoff_date(on: date | None = None) -> date:
     """Exit dates on or before this are past their retention window."""
-    return (on or date.today()) - timedelta(days=settings.id_proof_retention_days)
+    return (on or clock.local_today()) - timedelta(days=settings.id_proof_retention_days)
 
 
 def _due_query(tenant_id: str, cutoff: date):

@@ -30,6 +30,10 @@ from app.core.enums import AuditAction, NotificationChannel, NotificationStatus
 from app.models.request import Notification
 from app.models.user import User
 from app.schemas.ticket import (
+    EmailSettings,
+    EmailStatus,
+    EmailTestRequest,
+    EmailTestResult,
     JobResult,
     NotificationLedger,
     NotificationRow,
@@ -37,7 +41,9 @@ from app.schemas.ticket import (
     PreferenceUpdate,
     SchedulerStatus,
 )
+from app.core import ratelimit
 from app.services import audit, notifications, reminders, scheduler
+from app.services import email as email_service
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -265,6 +271,68 @@ def run_jobs(actor: AdminUser, http_request: Request, db: DbSession) -> list[Job
     )
     db.commit()
     return [JobResult(**r) for r in results]
+
+
+# ---------------------------------------------------------------------------
+# Admin: is email actually going out?
+# ---------------------------------------------------------------------------
+
+
+@router.get("/email/status", response_model=EmailStatus)
+def email_status(actor: AdminUser) -> EmailStatus:
+    """The email settings this server is running with, and what is missing.
+
+    Cheap - no connection to the mail server - so the page can load it on open.
+    Exists because "emails are not going" otherwise has to be debugged by reading
+    a server log on someone else's machine.
+    """
+    return EmailStatus(
+        problem=email_service.configuration_problem(),
+        settings=EmailSettings(**email_service.effective_settings()),
+    )
+
+
+@router.post("/email/test", response_model=EmailTestResult)
+def send_test_email(
+    payload: EmailTestRequest, actor: AdminUser, http_request: Request, db: DbSession
+) -> EmailTestResult:
+    """Send one real message and report how far it got, in the server's words.
+
+    To the admin's own address unless another is given. Rate limited, since it
+    makes the server sign in to the mail account each time, and audited, since
+    it sends mail from the company account.
+    """
+    # Per admin, not per address: the address comes from a header anyone can set.
+    allowed, retry_after = ratelimit.EMAIL_TEST.check(f"test email:{actor.id}")
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many test emails. Try again in about {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    to = str(payload.to or actor.email or "").strip()
+    if not to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Your account has no email address - type one to send the test to.",
+        )
+
+    result = email_service.send_test(to)
+    audit.record(
+        db,
+        action=AuditAction.NOTIFY,
+        entity_type="notification",
+        summary=(
+            f"{actor.full_name} sent a test email to {to}: "
+            f"{'delivered to the mail server' if result['ok'] else 'failed at ' + result['stage']}"
+        ),
+        changes={"stage": result["stage"], "error": result["error"]},
+        tenant_id=actor.tenant_id,
+        actor=actor,
+        request=http_request,
+    )
+    db.commit()
+    return EmailTestResult(**result, settings=EmailSettings(**email_service.effective_settings()))
 
 
 # ---------------------------------------------------------------------------

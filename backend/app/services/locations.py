@@ -158,19 +158,28 @@ def canonical(db: Session, tenant_id: str, state: str | None, typed: str | None)
         select(Location.state, Location.city).where(Location.tenant_id == tenant_id)
     ).all()
     key = normalise(place)
+    aliased = ALIASES.get(key)
+    known_states = {normalise(row_state): row_state for row_state, _ in rows}
+    if state:
+        # "telangana" is Telangana: the state filter and reports group by name.
+        state = known_states.get(normalise(state), state)
 
-    # Within the chosen state first, so "Aurangabad" stays in whichever of
-    # Bihar or Maharashtra the requester picked. Then anywhere, but only when
-    # exactly one state has that name - a guess between two would be worse
-    # than keeping what they typed.
-    for row_state, city in rows:
-        if row_state == state and normalise(city) == key:
-            return row_state, city
+    if state in known_states.values():
+        # The state was picked from the list, so it is not a guess to second-
+        # guess: "Aurangabad" stays in whichever of Bihar or Maharashtra was
+        # chosen, and "Shamshabad" typed under Telangana stays in Telangana
+        # rather than moving to the Shamshabad in Madhya Pradesh.
+        for row_state, city in rows:
+            if row_state == state and (normalise(city) == key or city == aliased):
+                return row_state, city
+        return state, place
+
+    # No state, or one not on the list (rows from before the picker): match
+    # anywhere, but only when exactly one state has that name - a guess
+    # between two would be worse than keeping what they typed.
     anywhere = [(row_state, city) for row_state, city in rows if normalise(city) == key]
     if len(anywhere) == 1:
         return anywhere[0]
-
-    aliased = ALIASES.get(key)
     if aliased:
         for row_state, city in rows:
             if city == aliased:

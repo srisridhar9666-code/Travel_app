@@ -16,6 +16,7 @@ from app.core.enums import (
     TravelMode,
     TravellerStatus,
 )
+from app.schemas.common import UTCInstant
 
 #: Which fields each request type actually uses. Also the list the revision diff
 #: is taken over, so a field absent here is a field no one can amend.
@@ -29,6 +30,8 @@ EDITABLE_FIELDS = (
     "mode",
     "origin",
     "destination",
+    "pickup_city",
+    "drop_city",
     "start_at",
     "end_at",
     "hotel_city",
@@ -58,6 +61,10 @@ class RequestBody(BaseModel):
 
     origin: str | None = Field(default=None, max_length=160)
     destination: str | None = Field(default=None, max_length=160)
+    #: A cab's city or constituency, beside its street address. The state is
+    #: origin_state / destination_state.
+    pickup_city: str | None = Field(default=None, max_length=120)
+    drop_city: str | None = Field(default=None, max_length=120)
     start_at: datetime | None = None
     end_at: datetime | None = None
 
@@ -89,6 +96,8 @@ class RequestBody(BaseModel):
             # which decide by shape rather than by request type alone.
             self.mode = None
             self.origin = self.destination = None
+            self.origin_state = self.destination_state = None
+            self.pickup_city = self.drop_city = None
             self.start_at = self.end_at = None
         else:
             if not self.origin:
@@ -101,9 +110,15 @@ class RequestBody(BaseModel):
                 raise ValueError("Arrival cannot be before departure.")
             if self.request_type is RequestType.LOCAL_CAB:
                 self.mode = TravelMode.CAB
-            elif self.mode is None or self.mode is TravelMode.CAB:
-                raise ValueError("Choose flight, train or bus for a long-distance request.")
-            self.hotel_city = None
+                if not (self.origin_state and self.pickup_city):
+                    raise ValueError("Pick the state and city the cab picks up in.")
+                if not (self.destination_state and self.drop_city):
+                    raise ValueError("Pick the state and city the cab drops in.")
+            else:
+                if self.mode is None or self.mode is TravelMode.CAB:
+                    raise ValueError("Choose flight, train or bus for a long-distance request.")
+                self.pickup_city = self.drop_city = None
+            self.hotel_city = self.hotel_state = None
             self.check_in = self.check_out = None
 
         # Naive datetimes throughout: these are wall-clock values, and a browser
@@ -157,7 +172,7 @@ class TravellerRead(BaseModel):
 
     # --- the decision, once one has been taken (Phase 4) -------------------
     decided_by_name: str | None = None
-    decided_at: datetime | None = None
+    decided_at: UTCInstant | None = None
     decision_reason: str | None = None
     booking_reference: str | None = None
 
@@ -199,7 +214,7 @@ class CoStayMatchRead(BaseModel):
 class RevisionRead(BaseModel):
     revision_number: int
     editor_name: str | None = None
-    created_at: datetime
+    created_at: UTCInstant
     summary: str
     changes: dict[str, dict] | None = None
 
@@ -225,6 +240,8 @@ class RequestRead(BaseModel):
     mode: TravelMode | None = None
     origin: str | None = None
     destination: str | None = None
+    pickup_city: str | None = None
+    drop_city: str | None = None
     start_at: datetime | None = None
     end_at: datetime | None = None
 
@@ -238,9 +255,9 @@ class RequestRead(BaseModel):
     destination_state: str | None = None
     hotel_state: str | None = None
     notes: str | None = None
-    submitted_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime
+    submitted_at: UTCInstant | None = None
+    created_at: UTCInstant
+    updated_at: UTCInstant
 
     travellers: list[TravellerRead]
     #: How many amendments have been saved since submission. The admin queue
@@ -278,8 +295,8 @@ class NotificationRead(BaseModel):
     title: str
     body: str
     request_id: int | None = None
-    created_at: datetime
-    read_at: datetime | None = None
+    created_at: UTCInstant
+    read_at: UTCInstant | None = None
 
 
 class ColleagueRead(BaseModel):

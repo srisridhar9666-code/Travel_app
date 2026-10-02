@@ -38,6 +38,8 @@ import {
   setRoomSharing,
   submitRequest,
 } from '@/lib/api';
+import { routeLabel } from '@/lib/places';
+import { formatInstant } from '@/lib/time';
 import { useAuth } from '@/store/auth';
 import {
   REQUEST_STATUS_LABELS,
@@ -85,9 +87,7 @@ function itinerary(request: TravelRequest): string {
       : dayMonth(request.check_in!);
     return `${request.hotel_city} · ${nights}`;
   }
-  return `${request.origin} → ${request.destination} · ${
-    request.start_at ? dayTime(request.start_at) : ''
-  }`;
+  return `${routeLabel(request)} · ${request.start_at ? dayTime(request.start_at) : ''}`;
 }
 
 /** Co-stay offers are not in the list response - they are only actionable on one
@@ -121,7 +121,7 @@ function RevisionHistory({ requestId }: { requestId: number }) {
               #{revision.revision_number} {revision.summary}
             </span>
             <span className="text-2xs text-text-subtle">
-              {revision.editor_name} · {new Date(revision.created_at).toLocaleString()}
+              {revision.editor_name} · {formatInstant(revision.created_at)}
             </span>
           </div>
           {revision.changes && (
@@ -169,7 +169,8 @@ export default function RequestsPage() {
       }),
   });
 
-  const notifications = useQuery({ queryKey: ['notifications'], queryFn: fetchNotifications });
+  // The same query as the bell, so reading a notice there clears it here.
+  const notifications = useQuery({ queryKey: ['my-notices'], queryFn: fetchNotifications });
   const detail = useExpandedDetail(expanded);
 
   const refresh = () => {
@@ -217,7 +218,10 @@ export default function RequestsPage() {
   });
 
   const rows = requests.data?.items ?? [];
-  const coStayNotices = (notifications.data ?? []).filter((n) => n.kind === 'COSTAY_REQUESTED');
+  // Unread only: an ask that has been read - or answered - is not still waiting.
+  const coStayNotices = (notifications.data ?? []).filter(
+    (n) => n.kind === 'COSTAY_REQUESTED' && n.read_at === null,
+  );
 
   return (
     <div className="space-y-6">

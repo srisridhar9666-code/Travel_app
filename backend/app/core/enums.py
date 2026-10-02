@@ -199,6 +199,7 @@ class NotificationCategory(StrEnum):
     BOOKINGS = "BOOKINGS"         # tickets confirmed, references issued
     ROOM_SHARING = "ROOM_SHARING"  # a colleague asked to share your room
     REMINDERS = "REMINDERS"       # nudges: travel coming up, requests going stale
+    NEW_REQUESTS = "NEW_REQUESTS"  # admins: someone raised a request to decide
 
 
 #: Which category each notification kind belongs to. A kind that is missing here
@@ -213,6 +214,7 @@ NOTIFICATION_CATEGORIES: dict[str, NotificationCategory] = {
     "COSTAY_REQUESTED": NotificationCategory.ROOM_SHARING,
     "TRAVEL_REMINDER": NotificationCategory.REMINDERS,
     "REQUEST_STALE": NotificationCategory.REMINDERS,
+    "REQUEST_SUBMITTED": NotificationCategory.NEW_REQUESTS,
 }
 
 
@@ -227,7 +229,11 @@ OPTIONAL_CATEGORIES = {
     NotificationCategory.BOOKINGS,
     NotificationCategory.ROOM_SHARING,
     NotificationCategory.REMINDERS,
+    NotificationCategory.NEW_REQUESTS,
 }
+
+#: Categories only an admin receives, so only an admin is offered the switch.
+ADMIN_CATEGORIES = {NotificationCategory.NEW_REQUESTS}
 
 
 class NotificationStatus(StrEnum):

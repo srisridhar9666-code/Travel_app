@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -49,7 +49,7 @@ from app.schemas.request import (
     RevisionRead,
     RoomSharingChoicePayload,
 )
-from app.services import audit, costay, decisions
+from app.services import audit, costay, decisions, notifications
 from app.services import requests as svc
 
 router = APIRouter(prefix="/requests", tags=["requests"])
@@ -164,6 +164,8 @@ def list_requests(
             or_(
                 TravelRequest.origin.like(like),
                 TravelRequest.destination.like(like),
+                TravelRequest.pickup_city.like(like),
+                TravelRequest.drop_city.like(like),
                 TravelRequest.hotel_city.like(like),
                 TravelRequest.notes.like(like),
             )
@@ -201,9 +203,26 @@ def list_requests(
     )
 
 
+def _read_and_release(db: Session, row: TravelRequest, user: User) -> RequestRead:
+    """The response, built before the request's session is let go.
+
+    For the endpoints that queue emails to send after the response: FastAPI
+    closes `get_db`'s session only after background tasks finish, so otherwise
+    this connection would stay checked out for as long as those sends take -
+    a mail server timeout per admin, when it cannot be reached.
+    """
+    result = svc.to_read(db, row, tenant_id=user.tenant_id, viewer=user, with_conflicts=True)
+    db.close()
+    return result
+
+
 @router.post("", response_model=RequestRead, status_code=status.HTTP_201_CREATED)
 def create_request(
-    payload: RequestCreate, user: CurrentUser, http_request: Request, db: DbSession
+    payload: RequestCreate,
+    user: CurrentUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
 ) -> RequestRead:
     """Raise a request, as a draft or straight into the queue.
 
@@ -244,13 +263,14 @@ def create_request(
             request=http_request,
         )
     else:
-        svc.record_submission(
+        queued = svc.record_submission(
             db, request=row, actor=user, tenant_id=user.tenant_id, http_request=http_request
         )
+        background.add_task(notifications.deliver_queued, queued)
 
     db.commit()
     db.refresh(row)
-    return svc.to_read(db, row, tenant_id=user.tenant_id, viewer=user, with_conflicts=True)
+    return _read_and_release(db, row, user)
 
 
 @router.get("/queue/counts", response_model=QueueCounts)
@@ -345,6 +365,7 @@ def edit_request(
     user: CurrentUser,
     http_request: Request,
     db: DbSession,
+    background: BackgroundTasks,
 ) -> RequestRead:
     """Amend a request while it is still unlocked, recording what changed.
 
@@ -377,9 +398,10 @@ def edit_request(
     if was_draft and not payload.is_draft:
         # Leaving draft is a submission, not an amendment: revision 1 is the
         # version the admin queue first sees, whatever churn preceded it.
-        svc.record_submission(
+        queued = svc.record_submission(
             db, request=row, actor=user, tenant_id=user.tenant_id, http_request=http_request
         )
+        background.add_task(notifications.deliver_queued, queued)
     elif changes and not row.is_draft:
         svc.write_revision(
             db,
@@ -402,12 +424,16 @@ def edit_request(
 
     db.commit()
     db.refresh(row)
-    return svc.to_read(db, row, tenant_id=user.tenant_id, viewer=user, with_conflicts=True)
+    return _read_and_release(db, row, user)
 
 
 @router.post("/{request_id}/submit", response_model=RequestRead)
 def submit_request(
-    request_id: int, user: CurrentUser, http_request: Request, db: DbSession
+    request_id: int,
+    user: CurrentUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
 ) -> RequestRead:
     """Move a draft into the admin queue."""
     row = _load(db, request_id, user)
@@ -417,12 +443,13 @@ def submit_request(
             status_code=status.HTTP_409_CONFLICT, detail="This request has already been submitted."
         )
 
-    svc.record_submission(
+    queued = svc.record_submission(
         db, request=row, actor=user, tenant_id=user.tenant_id, http_request=http_request
     )
+    background.add_task(notifications.deliver_queued, queued)
     db.commit()
     db.refresh(row)
-    return svc.to_read(db, row, tenant_id=user.tenant_id, viewer=user, with_conflicts=True)
+    return _read_and_release(db, row, user)
 
 
 @router.post("/{request_id}/cancel", response_model=RequestRead)

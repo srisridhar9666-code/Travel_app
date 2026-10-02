@@ -21,16 +21,35 @@ caused it - the booking happened whether or not the email did.
 """
 from __future__ import annotations
 
+import difflib
 import logging
+import os
+import re
 import smtplib
 import ssl
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from email.message import EmailMessage
 
-from app.config import ENV_FILE, get_settings
+from dotenv import dotenv_values
+
+from app.config import ENV_FILE, Settings, env_file_encoding, get_settings
 
 logger = logging.getLogger(__name__)
+
+#: Seconds to wait on the mail server. Long enough for a slow office link, short
+#: enough that a blocked port fails while someone is still looking at the page.
+SMTP_TIMEOUT = 15
+
+#: When this process read its settings. A .env changed after this needs a
+#: restart before it means anything - the commonest "I fixed it and nothing
+#: changed".
+_STARTED_AT = time.time()
+
+#: What a setting's name looks like in .env.
+ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 @dataclass
@@ -98,6 +117,7 @@ def send(to_address: str, subject: str, body: str) -> Sent:
         return Sent(ok=True)
 
     if not settings.email_enabled:
+        logger.info("Mail to %s not sent: EMAIL_ENABLED is off", to_address)
         return Sent(
             ok=False,
             suppressed=True,
@@ -106,6 +126,7 @@ def send(to_address: str, subject: str, body: str) -> Sent:
 
     if not _may_send_to(to_address):
         # Not an error. Someone chose to confine this environment.
+        logger.info("Mail to %s not sent: outside EMAIL_ALLOWLIST", to_address)
         return Sent(
             ok=False,
             suppressed=True,
@@ -114,16 +135,12 @@ def send(to_address: str, subject: str, body: str) -> Sent:
 
     missing = missing_settings()
     if missing:
-        return Sent(
-            ok=False,
-            detail=f"SMTP is enabled but not configured: {', '.join(missing)} is not set",
-        )
+        detail = f"SMTP is enabled but not configured: {', '.join(missing)} is not set"
+        logger.warning("Mail to %s not sent: %s", to_address, detail)
+        return Sent(ok=False, detail=detail)
 
     try:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
-            smtp.ehlo()
-            smtp.starttls(context=ssl.create_default_context())
-            smtp.ehlo()
+        with _connect(settings) as smtp:
             smtp.login(settings.smtp_username, settings.smtp_app_password)
             smtp.send_message(build(to_address, subject, body))
         logger.info("Mail sent to %s: %s", to_address, subject)
@@ -132,8 +149,86 @@ def send(to_address: str, subject: str, body: str) -> Sent:
         # Deliberately broad: DNS, TLS, auth and refusal are all the same
         # outcome here, and none of them may take down the caller.
         # The message body is never logged - it carries a PNR and a full name.
-        logger.warning("Mail to %s failed: %s", to_address, type(exc).__name__)
-        return Sent(ok=False, detail=f"{type(exc).__name__}: {exc}"[:400])
+        detail = error_text(exc)
+        hint = hint_for(detail, settings)
+        logger.warning(
+            "Mail to %s failed: %s%s", to_address, detail, f" - {hint}" if hint else ""
+        )
+        return Sent(ok=False, detail=detail[:400])
+
+
+def _connect(settings: Settings) -> smtplib.SMTP:
+    """An open, encrypted connection, ready for login.
+
+    Port 465 speaks TLS from the first byte and needs SMTP_SSL; 587 (and 25)
+    start in plain text and upgrade with STARTTLS. Sending STARTTLS to 465
+    does not fail - it waits for a reply that never comes, then times out.
+    """
+    context = ssl.create_default_context()
+    if settings.smtp_port == 465:
+        smtp: smtplib.SMTP = smtplib.SMTP_SSL(
+            settings.smtp_host, settings.smtp_port, timeout=SMTP_TIMEOUT, context=context
+        )
+    else:
+        smtp = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=SMTP_TIMEOUT)
+    try:
+        smtp.ehlo()
+        if settings.smtp_port != 465:
+            smtp.starttls(context=context)
+            smtp.ehlo()
+    except BaseException:
+        smtp.close()   # not handed to a `with` yet, so nothing else would
+        raise
+    return smtp
+
+
+def error_text(exc: BaseException) -> str:
+    """The server's own words. `str()` of an SMTP error is a tuple repr with the
+    reply as bytes; the code and the text are what a person can search for."""
+    if isinstance(exc, smtplib.SMTPResponseException):
+        reply = exc.smtp_error
+        if isinstance(reply, bytes):
+            reply = reply.decode(errors="replace")
+        return f"{type(exc).__name__}: {exc.smtp_code} {' '.join(str(reply).split())}"
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+def hint_for(error: str, settings: Settings) -> str | None:
+    """What to do about an error, in the terms of this app's settings."""
+    lowered = error.lower()
+    gmail = "gmail" in settings.smtp_host.lower()
+    if "535" in error or "534" in error or "username and password not accepted" in lowered:
+        if gmail:
+            return (
+                "Gmail refused SMTP_USERNAME / SMTP_APP_PASSWORD. Use a 16-letter App "
+                "Password made on that same Google account (it needs 2-Step "
+                "Verification), not the account's normal password."
+            )
+        return "The mail server refused SMTP_USERNAME / SMTP_APP_PASSWORD."
+    if "5.4.5" in error or "daily user sending limit" in lowered:
+        return "Gmail's daily sending limit was reached. It resets within 24 hours."
+    # Before the connection checks below: "SMTPSenderRefused" contains "refused".
+    if "recipientsrefused" in lowered or "5.1.1" in error:
+        return "The mail server refused the recipient address. Check it is spelled correctly."
+    if "senderrefused" in lowered or "sender address rejected" in lowered or "553" in error:
+        return "The server rejected the sender. EMAIL_FROM should be the SMTP_USERNAME address."
+    if "timed out" in lowered or "timeout" in lowered or "serverdisconnected" in lowered:
+        return (
+            f"Could not talk to {settings.smtp_host}:{settings.smtp_port}. An office "
+            "network, ISP or antivirus may block outgoing mail ports - try SMTP_PORT=465 "
+            "(or 587 if 465 is the one set), or another network."
+        )
+    if "gaierror" in lowered or "name or service not known" in lowered or "getaddrinfo" in lowered:
+        return f"{settings.smtp_host} could not be found. Check SMTP_HOST and the internet connection."
+    if "connectionrefused" in lowered or "connection refused" in lowered:
+        return f"Nothing is accepting mail at {settings.smtp_host}:{settings.smtp_port}. Check SMTP_HOST and SMTP_PORT."
+    if "certificate" in lowered or "ssl" in lowered:
+        return (
+            "The secure connection failed. Antivirus or a company proxy that inspects "
+            "TLS can cause this; so can SMTP_PORT=465 on a server that expects 587."
+        )
+    return None
 
 
 def missing_settings() -> list[str]:
@@ -157,16 +252,20 @@ def configuration_problem() -> str | None:
     credentials are right - `check()` proves that against the server.
     """
     settings = get_settings()
-    if not ENV_FILE.exists():
-        return (
-            f"there is no {ENV_FILE} - the API reads its settings from backend/.env, "
-            "not from the .env beside docker-compose.yml"
-        )
+    # Settings can arrive as real environment variables (Docker, Cloud Run)
+    # with no file at all, so a missing file is only the problem when the
+    # settings it would have held are missing too.
+    no_file = (
+        f" - and there is no {ENV_FILE}: the API reads backend/.env, not the .env "
+        "beside docker-compose.yml"
+        if not ENV_FILE.exists()
+        else ""
+    )
     if not settings.email_enabled:
-        return "EMAIL_ENABLED is not true in backend/.env"
+        return f"EMAIL_ENABLED is not true in backend/.env{no_file}"
     missing = missing_settings()
     if missing:
-        return f"{', '.join(missing)} is not set in backend/.env"
+        return f"{', '.join(missing)} is not set in backend/.env{no_file}"
     return None
 
 
@@ -177,18 +276,37 @@ def log_configuration() -> None:
     outside; this puts the answer in the first screen of the server log.
     """
     settings = get_settings()
+    report = env_file_report()
+    for key, guess in report["unknown_keys"].items():
+        logger.warning(
+            "backend/.env has %s, which this app does not read%s.",
+            key, f" - did you mean {guess}?" if guess else "",
+        )
+    if report["encoding"] == "utf-16":
+        logger.warning("backend/.env is saved as UTF-16; it was read, but save it as UTF-8.")
+
     problem = configuration_problem()
     if problem:
-        logger.warning("Email will NOT be sent: %s. GET /health/email re-checks.", problem)
+        logger.warning(
+            "Email will NOT be sent: %s. Admins: Notifications > Delivery ledger > "
+            "Email delivery shows the settings in use and can send a test.",
+            problem,
+        )
         return
     allowlist = settings.allowed_email_recipients
     logger.info(
-        "Email delivery on: %s:%s as %s%s",
+        "Email delivery on: %s:%s (%s) as %s",
         settings.smtp_host,
         settings.smtp_port,
+        "SSL" if settings.smtp_port == 465 else "STARTTLS",
         settings.email_from,
-        f" (only to EMAIL_ALLOWLIST: {', '.join(sorted(allowlist))})" if allowlist else "",
     )
+    if allowlist:
+        logger.warning(
+            "EMAIL_ALLOWLIST is set, so mail goes ONLY to: %s. Everyone else's is "
+            "recorded as Not sent. Empty it to email everyone.",
+            ", ".join(sorted(allowlist)),
+        )
 
 
 def send_account_link(
@@ -230,10 +348,7 @@ def check() -> dict:
         return {"ok": False, "detail": problem}
 
     try:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
-            smtp.ehlo()
-            smtp.starttls(context=ssl.create_default_context())
-            smtp.ehlo()
+        with _connect(settings) as smtp:
             smtp.login(settings.smtp_username, settings.smtp_app_password)
         return {
             "ok": True,
@@ -242,4 +357,147 @@ def check() -> dict:
             "restricted_to": sorted(settings.allowed_email_recipients) or None,
         }
     except Exception as exc:
-        return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"[:300]}
+        return {"ok": False, "detail": error_text(exc)[:300]}
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics: what an admin needs to fix delivery without reading server logs
+# ---------------------------------------------------------------------------
+
+
+def env_file_report() -> dict:
+    """Which .env this process reads, and what is wrong with it, if anything.
+
+    Key names only - never values.
+    """
+    exists = ENV_FILE.exists()
+    report: dict = {
+        "path": str(ENV_FILE),
+        "exists": exists,
+        "encoding": None,
+        "modified_at": None,
+        "keys": [],
+        "unknown_keys": {},
+    }
+    if not exists:
+        return report
+
+    encoding = env_file_encoding(ENV_FILE)
+    try:
+        raw = ENV_FILE.read_bytes()
+        mtime = ENV_FILE.stat().st_mtime
+    except OSError:
+        return report
+    report["encoding"] = (
+        "utf-16" if encoding == "utf-16"
+        else "utf-8 with BOM" if raw.startswith(b"\xef\xbb\xbf")
+        else "utf-8"
+    )
+    report["modified_at"] = datetime.fromtimestamp(mtime, tz=timezone.utc)
+    try:
+        # A line with no "=" parses as a key with no value - and is as likely to
+        # be a pasted password as a name, so it is never reported.
+        keys = [
+            k for k, v in dotenv_values(ENV_FILE, encoding=encoding).items()
+            if k and v is not None and ENV_KEY.fullmatch(k)
+        ]
+    except Exception:   # an unreadable file is reported, not raised
+        keys = []
+    report["keys"] = keys
+
+    known = {name.upper() for name in Settings.model_fields}
+    for key in keys:
+        if key.upper() not in known:
+            guess = difflib.get_close_matches(key.upper(), sorted(known), n=1, cutoff=0.6)
+            report["unknown_keys"][key] = guess[0] if guess else None
+    return report
+
+
+def effective_settings() -> dict:
+    """The email settings this process is actually using. The password is
+    described, never shown."""
+    settings = get_settings()
+    password = settings.smtp_app_password
+    env = env_file_report()
+    modified = env["modified_at"]
+    started = datetime.fromtimestamp(_STARTED_AT, tz=timezone.utc)
+    overridden = sorted(
+        name for name in (
+            "EMAIL_ENABLED", "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME",
+            "SMTP_APP_PASSWORD", "EMAIL_FROM", "EMAIL_ALLOWLIST",
+        )
+        if name in os.environ
+    )
+    return {
+        "enabled": settings.email_enabled,
+        "host": settings.smtp_host,
+        "port": settings.smtp_port,
+        "security": "SSL" if settings.smtp_port == 465 else "STARTTLS",
+        "username": settings.smtp_username or None,
+        "password": f"set ({len(password)} characters)" if password else "not set",
+        "password_looks_wrong": bool(
+            password and "gmail" in settings.smtp_host.lower() and len(password) != 16
+        ),
+        "from_address": settings.email_from or None,
+        "from_name": settings.email_from_name,
+        "allowlist": sorted(settings.allowed_email_recipients),
+        "links_point_to": settings.frontend_base_url,
+        "env_file": env,
+        "from_environment": overridden,
+        "started_at": started,
+        "restart_needed": bool(modified and modified > started),
+    }
+
+
+def send_test(to_address: str) -> dict:
+    """Send one real message and report exactly how far it got.
+
+    Ignores EMAIL_ALLOWLIST - an admin typed this address on purpose - but
+    says whether ordinary notices to it would be held back by it.
+    """
+    settings = get_settings()
+    result: dict = {
+        "ok": False,
+        "to": to_address,
+        "stage": "config",
+        "error": None,
+        "hint": None,
+        "allowlisted": _may_send_to(to_address),
+    }
+
+    problem = configuration_problem()
+    if problem:
+        result["error"] = problem
+        result["hint"] = (
+            "Edit backend/.env, save it, and restart the API - settings are read "
+            "once, when it starts."
+        )
+        return result
+
+    subject = f"Test email from {settings.app_name}"
+    body = (
+        "This is a test sent from Notifications > Delivery ledger.\n\n"
+        "If you are reading it, email delivery works: approvals, bookings and "
+        "invites will reach people at their account addresses.\n\n"
+        f"- {settings.email_from_name}"
+    )
+
+    if _outbox is not None:   # tests
+        _outbox.messages.append({"to": to_address, "subject": subject, "body": body})
+        result.update(ok=True, stage="done")
+        return result
+
+    try:
+        result["stage"] = "connect"
+        with _connect(settings) as smtp:
+            result["stage"] = "login"
+            smtp.login(settings.smtp_username, settings.smtp_app_password)
+            result["stage"] = "send"
+            smtp.send_message(build(to_address, subject, body))
+        result.update(ok=True, stage="done")
+        logger.info("Test mail sent to %s", to_address)
+    except Exception as exc:   # every failure is a result to show, not a 500
+        result["error"] = error_text(exc)[:500]
+        result["hint"] = hint_for(result["error"], settings)
+        logger.warning("Test mail to %s failed at %s: %s", to_address, result["stage"], result["error"])
+    return result

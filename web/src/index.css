@@ -28,6 +28,9 @@
      rest of the app stays dark. */
   :root,
   [data-theme='light'] {
+    /* Native controls - date pickers, select menus, scrollbars - follow too. */
+    color-scheme: light;
+
     /* Surfaces, from furthest back to closest */
     --canvas:        250 250 251;
     --surface:       255 255 255;
@@ -82,6 +85,8 @@
   }
 
   [data-theme='dark'] {
+    color-scheme: dark;
+
     /* Stepped for the dark surface, not flipped: #3987e5 is the same hue chosen
        against #131316 rather than #ffffff. */
     --chart-1:       57 135 229;

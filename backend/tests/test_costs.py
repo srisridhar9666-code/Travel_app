@@ -6,12 +6,13 @@ is about arithmetic that looks obvious and is not: an even split that does not
 sum to the total, a float that arrives as 0.30000000000000004, a campaign that
 looks cheap because one fare was never entered.
 """
-from datetime import date, timedelta
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine
 
+from app.core import clock
 from app.core.enums import ProjectStatus, RequestType, Role, TravellerStatus
 from app.models.base import naive_utcnow
 from app.models.project import Project
@@ -142,7 +143,7 @@ def trip(
     db, project, people, *, status=TravellerStatus.BOOKED, cost="1000.00",
     days_out=10, kind=RequestType.LONG_DISTANCE, cancelled=False, draft=False,
 ):
-    start = date.today() + timedelta(days=days_out)
+    start = clock.local_today() + timedelta(days=days_out)
     row = TravelRequest(
         tenant_id=TENANT,
         request_type=kind,
@@ -370,11 +371,9 @@ def test_an_odd_split_across_three_trips_still_totals_exactly(db, world):
 def test_the_monthly_window_is_centred_on_today(db, world):
     """A backwards-only window showed an empty chart for a team that books ahead
     - which is every field team. Half history, half already ticketed."""
-    from datetime import date as _date
-
     monsoon, _, ravi, _ = world
     rows = analytics.by_month(db, TENANT, months=6)
-    this_month = f"{_date.today().year:04d}-{_date.today().month:02d}"
+    this_month = f"{clock.local_today().year:04d}-{clock.local_today().month:02d}"
 
     assert len(rows) == 6
     assert this_month in [r["month"] for r in rows]

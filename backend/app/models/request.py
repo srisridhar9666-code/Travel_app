@@ -47,6 +47,15 @@ def _enum(cls, length: int = 20):
     return SAEnum(cls, native_enum=False, length=length, validate_strings=True)
 
 
+def _with_city(place: str | None, city: str | None) -> str:
+    """"Banjara Hills, Hyderabad" - unless the address already names the city."""
+    place = (place or "").strip()
+    city = (city or "").strip()
+    if not city or city.lower() in place.lower():
+        return place or city
+    return f"{place}, {city}" if place else city
+
+
 class TravelRequest(Base, TenantMixin, TimestampMixin):
     __tablename__ = "travel_requests"
     __table_args__ = (
@@ -80,8 +89,15 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
     destination_state: Mapped[str | None] = mapped_column(String(80), nullable=True)
     hotel_state: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
-    origin: Mapped[str | None] = mapped_column(String(160), nullable=True)       # cab: pickup
-    destination: Mapped[str | None] = mapped_column(String(160), nullable=True)  # cab: drop
+    origin: Mapped[str | None] = mapped_column(String(160), nullable=True)       # cab: pickup address
+    destination: Mapped[str | None] = mapped_column(String(160), nullable=True)  # cab: drop address
+    #: A cab's pickup and drop are street addresses ("Banjara Hills"), which no
+    #: report can group. These hold the city or constituency each is in, from
+    #: the same list a flight's cities come from; the state is in origin_state
+    #: and destination_state. Null on flights and hotels, and on cabs raised
+    #: before the fields existed.
+    pickup_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    drop_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     start_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     end_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
@@ -117,6 +133,19 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
         order_by="RequestRevision.revision_number",
         lazy="noload",
     )
+
+    @property
+    def origin_label(self) -> str:
+        """Where it starts, as a person would say it: a cab's address with its
+        city ("Banjara Hills, Hyderabad"), otherwise the origin city."""
+        return _with_city(self.origin, self.pickup_city)
+
+    @property
+    def destination_label(self) -> str:
+        return _with_city(self.destination, self.drop_city)
+
+    def route_label(self, sep: str = " → ") -> str:
+        return f"{self.origin_label}{sep}{self.destination_label}"
 
     @property
     def traveller_statuses(self) -> list[TravellerStatus]:

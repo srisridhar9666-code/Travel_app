@@ -9,6 +9,7 @@ import {
 } from 'date-fns';
 
 import { Input, Select } from '@/components/ui';
+import { todayInIndia } from '@/lib/time';
 import { cn } from '@/lib/utils';
 
 export type RangePreset =
@@ -24,7 +25,7 @@ export type RangePreset =
 
 export interface DateRange {
   preset: RangePreset;
-  /** yyyy-MM-dd, local. Empty means unbounded on that side. */
+  /** yyyy-MM-dd, India dates. Empty means unbounded on that side. */
   since: string;
   until: string;
 }
@@ -45,7 +46,9 @@ const day = (d: Date) => format(d, 'yyyy-MM-dd');
 
 /** The concrete dates a preset stands for, as of today. */
 export function rangeFor(preset: RangePreset, custom?: { since: string; until: string }): DateRange {
-  const today = new Date();
+  // Today in India, not on this device's clock: "last month" must mean the
+  // same days for everyone, and match the server's idea of today.
+  const today = new Date(`${todayInIndia()}T00:00:00`);
   switch (preset) {
     case 'this_month':
       return { preset, since: day(startOfMonth(today)), until: day(endOfMonth(today)) };

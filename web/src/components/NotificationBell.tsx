@@ -5,20 +5,8 @@ import { Link } from 'react-router-dom';
 
 import { Button } from '@/components/ui';
 import { fetchMyNotices, fetchUnreadCount, markAllRead, markNoticeRead } from '@/lib/api';
+import { timeAgo } from '@/lib/time';
 import { cn } from '@/lib/utils';
-
-/** How long ago, in the shortest form that is still true. */
-function ago(iso: string): string {
-  const seconds = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (seconds < 60) return 'just now';
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
-}
 
 /**
  * The bell and its dropdown.
@@ -134,7 +122,7 @@ export default function NotificationBell() {
                         <p className="mt-0.5 text-2xs leading-relaxed text-text-muted">
                           {notice.body}
                         </p>
-                        <p className="mt-1 text-2xs text-text-subtle">{ago(notice.created_at)}</p>
+                        <p className="mt-1 text-2xs text-text-subtle">{timeAgo(notice.created_at)}</p>
                       </div>
                       {notice.read_at === null && (
                         <button

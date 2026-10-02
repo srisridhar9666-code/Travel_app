@@ -1,11 +1,11 @@
 """Request and response bodies for the authentication endpoints."""
 from __future__ import annotations
 
-from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.core.enums import Designation, Gender, Role
+from app.schemas.common import UTCInstant
 
 
 class LoginRequest(BaseModel):
@@ -29,13 +29,13 @@ class UserProfile(BaseModel):
     base_location: str | None = None
     theme_preference: str
     is_active: bool
-    last_login_at: datetime | None = None
+    last_login_at: UTCInstant | None = None
 
 
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    expires_at: datetime
+    expires_at: UTCInstant
     user: UserProfile
 
 
@@ -85,7 +85,7 @@ class InviteLinkResponse(BaseModel):
 
     detail: str
     invite_url: str | None = None
-    expires_at: datetime | None = None
+    expires_at: UTCInstant | None = None
     #: Whether the link reached the mail server. None on the forgot-password
     #: answer, which must not reveal anything about the account.
     email_sent: bool | None = None

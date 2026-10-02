@@ -136,7 +136,7 @@ def _notify(
     where = (
         request.hotel_city
         if request.request_type is RequestType.HOTEL
-        else f"{request.origin} to {request.destination}"
+        else request.route_label(" to ")
     )
     kind_of_trip = str(request.request_type).replace("_", " ").lower()
     short = f"Your {kind_of_trip} request for {where} was {_VERB[target]}."

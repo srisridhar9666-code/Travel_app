@@ -133,6 +133,11 @@ RESET_BURST = SlidingWindow(limit=40, window_seconds=900)
 #: someone trying anyway at speed.
 TOKEN = SlidingWindow(limit=40, window_seconds=300)
 
+#: The admin "send a test email" button, per admin. The one authenticated
+#: endpoint here: each press makes the server sign in to the company mail
+#: account, and a few retries while fixing settings is normal, a loop is not.
+EMAIL_TEST = SlidingWindow(limit=10, window_seconds=900)
+
 
 def client_key(request: Request) -> str:
     """Who to count against.
@@ -209,5 +214,5 @@ def penalise(window: SlidingWindow, key: str) -> None:
 
 def reset_all() -> None:
     """Clear every window. Used by the test suite between cases."""
-    for window in (LOGIN, LOGIN_BURST, RESET, RESET_BURST, TOKEN):
+    for window in (LOGIN, LOGIN_BURST, RESET, RESET_BURST, TOKEN, EMAIL_TEST):
         window.reset()

@@ -25,6 +25,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import clock
 from app.core.enums import RequestType, TravellerStatus
 from app.models.project import Project
 from app.models.request import RequestTraveller, TravelRequest
@@ -74,7 +75,7 @@ def overview(db: Session, tenant_id: str, *, days: int = 90) -> dict:
     Ninety days by default, matching the retention view in addendum B11 - the
     default *view* is 90 days even though all history is kept.
     """
-    since = date.today() - timedelta(days=days)
+    since = clock.local_today() - timedelta(days=days)
     rows = _rows(db, tenant_id)
 
     spent = Decimal("0.00")
@@ -200,7 +201,7 @@ def by_month(db: Session, tenant_id: str, *, months: int = 6) -> list[dict]:
     that was planning perfectly well. Half the window is history, half is what is
     already committed to a ticket.
     """
-    today = date.today()
+    today = clock.local_today()
     ahead = months // 2
     behind = months - ahead - 1
 
@@ -244,7 +245,7 @@ def deployment(db: Session, tenant_id: str) -> list[dict]:
     Hyderabad-based auditor working a Pune campaign is in Maharashtra.
     """
     buckets: dict[str, dict] = {}
-    today = date.today()
+    today = clock.local_today()
 
     for traveller, request, project, _user in _rows(db, tenant_id):
         if traveller.status not in SPENT_STATUSES | COMMITTED_STATUSES:

@@ -11,7 +11,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.config import get_settings
+from app.config import BACKEND_DIR, get_settings
+from app.core import clock
 from app.core.hardening import SecurityHeadersMiddleware, check_startup
 from app.core.logging import RequestIdMiddleware, configure as configure_logging
 from app.database import SessionLocal, engine
@@ -38,6 +39,31 @@ configure_logging(json_output=settings.json_logs, level=settings.log_level)
 logger = logging.getLogger("travel_ops")
 
 
+def schema_behind() -> str | None:
+    """Say so when the database has not been migrated to match this code.
+
+    A new column in a model makes every query on that table fail until
+    `alembic upgrade head` has run, and the error a person sees ("Unknown
+    column") does not say what to do. This does, once, at start-up.
+    """
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    config = Config()
+    config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    wanted = set(ScriptDirectory.from_config(config).get_heads())
+    with engine.connect() as connection:
+        current = set(MigrationContext.configure(connection).get_current_heads())
+    if current == wanted:
+        return None
+    return (
+        f"the database is at {', '.join(sorted(current)) or 'no version'} but this code "
+        f"needs {', '.join(sorted(wanted))}. Stop the API and run: "
+        "cd backend && alembic upgrade head"
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Before anything else: refuse to start in production with the development
@@ -47,6 +73,16 @@ async def lifespan(app: FastAPI):
 
     settings.upload_path.mkdir(parents=True, exist_ok=True)
     logger.info("Starting %s (%s)", settings.app_name, settings.environment)
+    zone = clock.zone_problem()
+    if zone:
+        logger.warning(zone)
+
+    try:
+        behind = schema_behind()
+    except Exception:   # unreachable database: the steps below report it
+        behind = None
+    if behind:
+        logger.error("Database needs migrating: %s", behind)
 
     # Schema comes from Alembic, never from create_all. If the tables are not
     # there yet the app should say so loudly rather than invent them.

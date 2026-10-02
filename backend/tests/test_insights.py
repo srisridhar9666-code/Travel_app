@@ -151,6 +151,50 @@ class TestTravelLog:
         assert log(db)["summary"]["spent"] == "4500.00"
 
 
+class TestTravelLogPages:
+    """The page on screen is a window; the totals above it are not."""
+
+    @pytest.fixture
+    def five(self, db, project, people):
+        ravi, priya = people
+        for day in range(1, 6):
+            trip(db, project, [ravi if day % 2 else priya], start=datetime(2026, 8, day, 9),
+                 cost=Decimal("100"))
+
+    def test_a_page_is_a_slice_newest_first(self, db, five):
+        result = insights.travel_log(db, TENANT, insights.Filters(statuses=insights.TRAVELLED),
+                                     page=2, page_size=2)
+        assert [e["started_on"] for e in result["entries"]] == ["2026-08-03", "2026-08-02"]
+        assert (result["page"], result["pages"], result["total"]) == (2, 3, 5)
+        assert result["truncated"] is True
+
+    def test_the_summary_counts_every_page(self, db, five):
+        result = insights.travel_log(db, TENANT, insights.Filters(statuses=insights.TRAVELLED),
+                                     page=3, page_size=2)
+        assert len(result["entries"]) == 1
+        assert result["truncated"] is False
+        assert result["summary"]["movements"] == 5
+        assert result["summary"]["people"] == 2
+        assert result["summary"]["spent"] == "500.00"
+
+    def test_a_page_past_the_end_shows_the_last_one(self, db, five):
+        """Narrowing the filters while on page 9 should not leave an empty table."""
+        result = insights.travel_log(db, TENANT, insights.Filters(statuses=insights.TRAVELLED),
+                                     page=9, page_size=2)
+        assert result["page"] == 3
+        assert [e["started_on"] for e in result["entries"]] == ["2026-08-01"]
+
+    def test_no_matches_is_one_empty_page(self, db):
+        result = insights.travel_log(db, TENANT, insights.Filters(statuses=insights.TRAVELLED))
+        assert (result["page"], result["pages"], result["total"]) == (1, 1, 0)
+        assert result["entries"] == []
+
+    def test_the_page_size_is_capped(self, db, five):
+        result = insights.travel_log(db, TENANT, insights.Filters(statuses=insights.TRAVELLED),
+                                     page_size=insights.MAX_LOG_ROWS + 1)
+        assert result["page_size"] == insights.MAX_LOG_ROWS
+
+
 class TestDashboard:
     def board(self, db, **kwargs):
         return insights.dashboard(db, TENANT, insights.Filters(**kwargs))

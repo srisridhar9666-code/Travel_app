@@ -28,12 +28,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.enums import (
+    ADMIN_CATEGORIES,
     OPTIONAL_CATEGORIES,
     NotificationCategory,
     NotificationChannel,
@@ -51,6 +53,10 @@ logger = logging.getLogger(__name__)
 #: Beyond this many tries an address is not going to start working, and retrying
 #: forever just hammers the SMTP server.
 MAX_ATTEMPTS = 3
+
+#: A QUEUED email this old was owed an after-response send that never happened
+#: - the server restarted first - so the retry job sends it instead.
+STRANDED_AFTER = timedelta(minutes=5)
 
 
 def _send_email(to_address: str, subject: str, body: str) -> email.Sent:
@@ -109,6 +115,7 @@ def notify(
     email_body: str | None = None,
     send_email: bool = True,
     dedupe_key: str | None = None,
+    deliver_now: bool = True,
 ) -> list[Notification]:
     """Record a notice and try to deliver it.
 
@@ -119,6 +126,10 @@ def notify(
     With a `dedupe_key`, a second call for the same event and person is a no-op
     and returns nothing. That is what makes the reminder jobs safe to run on a
     loop.
+
+    `deliver_now=False` leaves the email row QUEUED for `deliver_queued` to send
+    after the response, so the person who caused it is not kept waiting on the
+    mail server - or on its timeout, when the mail server is unreachable.
     """
     category = category_of(kind)
 
@@ -163,7 +174,8 @@ def notify(
         )
         db.add(mail)
         db.flush()
-        deliver(mail)
+        if deliver_now:
+            deliver(mail)
         rows.append(mail)
 
     db.flush()
@@ -217,19 +229,58 @@ def deliver(notification: Notification) -> Notification:
     return notification
 
 
-def retry_failed(db: Session, tenant_id: str, *, limit: int = 50) -> dict:
-    """Re-attempt refused messages.
+def deliver_queued(notification_ids: list[int], session_factory=None) -> None:
+    """Send email rows left QUEUED by `notify(deliver_now=False)`.
 
-    Only FAILED rows under the attempt cap: SUPPRESSED was a decision, not a
-    fault, and retrying it would defeat the guard that produced it.
+    Runs after the response, in a session of its own (the endpoint releases its
+    session before returning). Rows already handled - by a retry, say - are
+    skipped, and each row is committed as soon as it is sent so the retry job,
+    which picks up QUEUED rows a few minutes old, never sends one twice.
     """
+    if not notification_ids:
+        return
+    if session_factory is None:
+        from app.database import SessionLocal
+
+        session_factory = SessionLocal
+    with session_factory() as db:
+        rows = (
+            db.execute(
+                select(Notification).where(
+                    Notification.id.in_(notification_ids),
+                    Notification.status == NotificationStatus.QUEUED,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for row in rows:
+            deliver(row)
+            db.commit()
+
+
+def retry_failed(db: Session, tenant_id: str, *, limit: int = 50) -> dict:
+    """Re-attempt refused messages, and any left QUEUED by a restart.
+
+    FAILED rows under the attempt cap, plus QUEUED rows old enough that the
+    after-response send (`deliver_queued`) clearly never ran. SUPPRESSED was a
+    decision, not a fault, and retrying it would defeat the guard that produced
+    it.
+    """
+    stranded = naive_utcnow() - STRANDED_AFTER
     rows = (
         db.execute(
             select(Notification)
             .where(
                 Notification.tenant_id == tenant_id,
                 Notification.channel.in_(list(SENDERS)),
-                Notification.status == NotificationStatus.FAILED,
+                or_(
+                    Notification.status == NotificationStatus.FAILED,
+                    and_(
+                        Notification.status == NotificationStatus.QUEUED,
+                        Notification.created_at < stranded,
+                    ),
+                ),
                 Notification.attempts < MAX_ATTEMPTS,
             )
             .order_by(Notification.id)
@@ -298,7 +349,8 @@ def preferences_for(db: Session, user: User) -> dict[str, bool]:
         .all()
     )
     stored = {str(r.category): r.enabled for r in rows}
-    return {str(c): stored.get(str(c), True) for c in sorted(OPTIONAL_CATEGORIES, key=str)}
+    offered = OPTIONAL_CATEGORIES if user.is_admin else OPTIONAL_CATEGORIES - ADMIN_CATEGORIES
+    return {str(c): stored.get(str(c), True) for c in sorted(offered, key=str)}
 
 
 def set_preference(

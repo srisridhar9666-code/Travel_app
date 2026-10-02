@@ -16,6 +16,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import and_, func, or_, select
 
+from app.core import clock
 from app.core.deps import DbSession, SystemAdminUser
 from app.core.enums import AuditAction
 from app.models.audit import AuditLog
@@ -51,9 +52,9 @@ def list_audit(
     if actor_user_id is not None:
         filters.append(AuditLog.actor_user_id == actor_user_id)
     if since is not None:
-        filters.append(AuditLog.created_at >= since.replace(tzinfo=None))
+        filters.append(AuditLog.created_at >= clock.to_utc_naive(since))
     if until is not None:
-        filters.append(AuditLog.created_at <= until.replace(tzinfo=None))
+        filters.append(AuditLog.created_at <= clock.to_utc_naive(until))
 
     total = db.execute(select(func.count()).select_from(AuditLog).where(*filters)).scalar_one()
     rows = (
@@ -190,9 +191,9 @@ def export_csv(
     if entity_type:
         filters.append(AuditLog.entity_type == entity_type)
     if since is not None:
-        filters.append(AuditLog.created_at >= since.replace(tzinfo=None))
+        filters.append(AuditLog.created_at >= clock.to_utc_naive(since))
     if until is not None:
-        filters.append(AuditLog.created_at <= until.replace(tzinfo=None))
+        filters.append(AuditLog.created_at <= clock.to_utc_naive(until))
 
     rows = (
         db.execute(select(AuditLog).where(*filters).order_by(AuditLog.id.desc()).limit(limit))
@@ -215,12 +216,15 @@ def export_csv(
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(
-        ["id", "when_utc", "actor", "actor_email", "role", "action",
+        # India time first, because that is what a person reading the sheet
+        # means by "when"; UTC kept beside it as the exact recorded value.
+        ["id", "when_ist", "when_utc", "actor", "actor_email", "role", "action",
          "entity_type", "entity_id", "summary", "reason", "ip", "changes"]
     )
     for row in rows:
         writer.writerow([
             row.id,
+            clock.to_local(row.created_at).strftime("%Y-%m-%d %H:%M:%S"),
             row.created_at.isoformat(),
             row.actor_name or "",
             row.actor_email or "",
@@ -234,7 +238,7 @@ def export_csv(
             json.dumps(row.changes, separators=(",", ":")) if row.changes else "",
         ])
 
-    stamp = datetime.utcnow().strftime("%Y%m%d-%H%M")
+    stamp = clock.now_local().strftime("%Y%m%d-%H%M")
     return Response(
         content=buffer.getvalue(),
         media_type="text/csv",
@@ -273,6 +277,6 @@ def summary(actor: SystemAdminUser, db: DbSession) -> dict:
         "total": sum(by_action.values()),
         "by_action": {str(k): v for k, v in by_action.items()},
         "by_entity": {str(k): v for k, v in by_entity.items()},
-        "oldest": oldest.isoformat() if oldest else None,
-        "newest": newest.isoformat() if newest else None,
+        "oldest": clock.utc_iso(oldest) if oldest else None,
+        "newest": clock.utc_iso(newest) if newest else None,
     }

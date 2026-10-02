@@ -1,11 +1,12 @@
 """Request and response bodies for projects and campaigns."""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.enums import ProjectStatus
+from app.schemas.common import UTCInstant
 
 
 class ProjectCreate(BaseModel):
@@ -69,7 +70,7 @@ class ProjectRead(BaseModel):
     status: ProjectStatus
     start_date: date | None = None
     end_date: date | None = None
-    created_at: datetime
+    created_at: UTCInstant
 
     #: Whether this campaign still appears in the request dropdowns.
     accepts_requests: bool

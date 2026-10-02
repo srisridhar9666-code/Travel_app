@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.core.enums import (
     NotificationCategory,
@@ -12,6 +12,7 @@ from app.core.enums import (
     NotificationStatus,
     TicketStatus,
 )
+from app.schemas.common import UTCInstant
 
 
 class ExtractedField(BaseModel):
@@ -40,7 +41,7 @@ class TicketRead(BaseModel):
     file_size: int | None = None
     content_type: str | None = None
     uploaded_by_name: str | None = None
-    created_at: datetime
+    created_at: UTCInstant
 
     # --- what the model proposed --------------------------------------------
     booking_reference: str | None = None
@@ -64,11 +65,11 @@ class TicketRead(BaseModel):
     needs_review: list[str] = Field(default_factory=list)
     model_id: str | None = None
     extraction_error: str | None = None
-    extracted_at: datetime | None = None
+    extracted_at: UTCInstant | None = None
 
     # --- the human step ------------------------------------------------------
     confirmed_by_name: str | None = None
-    confirmed_at: datetime | None = None
+    confirmed_at: UTCInstant | None = None
     confirmed_reference: str | None = None
 
     #: Differences between the ticket and what was asked for. Advisory: a ticket
@@ -112,11 +113,11 @@ class NotificationRow(BaseModel):
     to_address: str | None = None
     subject: str | None = None
     attempts: int
-    sent_at: datetime | None = None
+    sent_at: UTCInstant | None = None
     last_error: str | None = None
     request_id: int | None = None
-    read_at: datetime | None = None
-    created_at: datetime
+    read_at: UTCInstant | None = None
+    created_at: UTCInstant
 
 
 class NotificationLedger(BaseModel):
@@ -163,3 +164,55 @@ class SchedulerStatus(BaseModel):
     travel_reminder_days: int
     stale_after_days: int
     failed_email: int
+
+
+class EmailEnvFile(BaseModel):
+    """The .env this process reads. Key names only, never values."""
+
+    path: str
+    exists: bool
+    encoding: str | None = None
+    modified_at: UTCInstant | None = None
+    keys: list[str] = Field(default_factory=list)
+    #: Keys the app does not read, mapped to the setting it probably meant.
+    unknown_keys: dict[str, str | None] = Field(default_factory=dict)
+
+
+class EmailSettings(BaseModel):
+    enabled: bool
+    host: str
+    port: int
+    security: str
+    username: str | None = None
+    #: "set (16 characters)" or "not set" - the value itself never leaves.
+    password: str
+    password_looks_wrong: bool
+    from_address: str | None = None
+    from_name: str
+    allowlist: list[str]
+    links_point_to: str
+    env_file: EmailEnvFile
+    from_environment: list[str]
+    started_at: UTCInstant
+    restart_needed: bool
+
+
+class EmailStatus(BaseModel):
+    problem: str | None = None
+    settings: EmailSettings
+
+
+class EmailTestRequest(BaseModel):
+    to: EmailStr | None = None
+
+
+class EmailTestResult(BaseModel):
+    ok: bool
+    to: str
+    #: How far it got: config, connect, login, send, done.
+    stage: str
+    error: str | None = None
+    hint: str | None = None
+    #: False when EMAIL_ALLOWLIST would hold back ordinary notices to this address.
+    allowlisted: bool
+    settings: EmailSettings
