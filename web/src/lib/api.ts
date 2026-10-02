@@ -266,10 +266,14 @@ export interface ProjectQuery {
 
 export interface ProjectPayload {
   name: string;
-  code: string;
+  /** Blank or null: the server makes one from the name's initials and the
+   *  start year. */
+  code?: string | null;
   description?: string | null;
   client_name?: string | null;
-  location?: string | null;
+  state?: string | null;
+  /** City or assembly constituency. */
+  city?: string | null;
   status?: string;
   start_date?: string | null;
   end_date?: string | null;
@@ -289,6 +293,10 @@ export const archiveProject = (id: number) =>
 
 export const restoreProject = (id: number) =>
   api.post<Project>(`/projects/${id}/restore`).then((r) => r.data);
+
+/** Only a campaign with no requests; the server answers 409 otherwise. */
+export const deleteProject = (id: number) =>
+  api.delete(`/projects/${id}`).then(() => undefined);
 
 // --- identity documents ---------------------------------------------------
 

@@ -172,6 +172,11 @@ function dropPlace(form: FormState): { state: string; city: string } {
  *  alongside for an admin to triage. */
 const OTHER_CODE = 'OTHER';
 
+/** The server flags it; the code check only covers a server that predates the
+ *  flag. */
+const isFallbackCampaign = (project: { code: string; is_fallback?: boolean }) =>
+  project.is_fallback ?? project.code === OTHER_CODE;
+
 /** Enough filled in for a conflict check to mean anything. */
 function worthChecking(form: FormState): boolean {
   if (!form.project_id) return false;
@@ -246,13 +251,13 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
   // fewer decision on a phone.
   useEffect(() => {
     const list = projects.data?.items ?? [];
-    const real = list.filter((p) => p.code !== OTHER_CODE);
+    const real = list.filter((p) => !isFallbackCampaign(p));
     if (!editing && !form.project_id && real.length === 1) {
       setForm((f) => (f.project_id ? f : { ...f, project_id: String(real[0].id) }));
     }
   }, [projects.data, editing, form.project_id]);
 
-  const otherProject = (projects.data?.items ?? []).find((p) => p.code === OTHER_CODE);
+  const otherProject = (projects.data?.items ?? []).find(isFallbackCampaign);
   const isOther = Boolean(otherProject && form.project_id === String(otherProject.id));
 
   const payload = useMemo(() => toPayload(form, false), [form]);
@@ -390,10 +395,11 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
           >
             <option value="">Choose a campaign</option>
             {(projects.data?.items ?? [])
-              .filter((project) => project.code !== OTHER_CODE)
+              .filter((project) => !isFallbackCampaign(project))
               .map((project) => (
+                // The name leads: staff should never need to decode a code.
                 <option key={project.id} value={project.id}>
-                  {project.code} — {project.name}
+                  {project.state ? `${project.name} · ${project.state}` : project.name}
                 </option>
               ))}
             {otherProject && (
