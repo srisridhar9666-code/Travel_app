@@ -12,11 +12,11 @@ import {
 import { useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Badge, Button, Field, Input, Skeleton } from '@/components/ui';
 import {
   confirmTicket,
   discardTicket,
-  errorMessage,
   fetchTicketFile,
   fetchTickets,
   reextractTicket,
@@ -113,6 +113,7 @@ function ExtractedFields({ ticket }: { ticket: Ticket }) {
 function TicketCard({ ticket, onChanged }: { ticket: Ticket; onChanged: () => void }) {
   const [reference, setReference] = useState(ticket.booking_reference ?? '');
   const [notify, setNotify] = useState(true);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
 
   const view = useMutation({
     mutationFn: () => fetchTicketFile(ticket.id),
@@ -123,7 +124,6 @@ function TicketCard({ ticket, onChanged }: { ticket: Ticket; onChanged: () => vo
       window.open(url, '_blank', 'noopener');
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const confirm = useMutation({
@@ -138,25 +138,23 @@ function TicketCard({ ticket, onChanged }: { ticket: Ticket; onChanged: () => vo
       toast.success(notify ? 'Booked — the traveller has been told' : 'Booked, no notice sent');
       onChanged();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const reread = useMutation({
     mutationFn: () => reextractTicket(ticket.id),
     onSuccess: () => {
-      toast.success('Read again');
+      toast.success('Ticket read again — check the fields');
       onChanged();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const discard = useMutation({
     mutationFn: () => discardTicket(ticket.id),
     onSuccess: () => {
-      toast.success('Ticket discarded');
+      toast.success(`Ticket for ${ticket.traveller_name} discarded`);
+      setConfirmingDiscard(false);
       onChanged();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const corrected =
@@ -285,7 +283,7 @@ function TicketCard({ ticket, onChanged }: { ticket: Ticket; onChanged: () => vo
               size="sm"
               variant="ghost"
               loading={discard.isPending}
-              onClick={() => discard.mutate()}
+              onClick={() => setConfirmingDiscard(true)}
             >
               <Trash2 size={13} />
               Discard
@@ -300,7 +298,12 @@ function TicketCard({ ticket, onChanged }: { ticket: Ticket; onChanged: () => vo
             <RefreshCw size={13} />
             Read again
           </Button>
-          <Button size="sm" variant="ghost" loading={discard.isPending} onClick={() => discard.mutate()}>
+          <Button
+            size="sm"
+            variant="ghost"
+            loading={discard.isPending}
+            onClick={() => setConfirmingDiscard(true)}
+          >
             <Trash2 size={13} />
             Discard
           </Button>
@@ -314,6 +317,20 @@ function TicketCard({ ticket, onChanged }: { ticket: Ticket; onChanged: () => vo
           {corrected && ' — corrected from what the model read'}.
         </p>
       )}
+
+      <ConfirmDialog
+        open={confirmingDiscard}
+        title={`Discard this ticket for ${ticket.traveller_name}?`}
+        confirmLabel="Discard ticket"
+        loading={discard.isPending}
+        onConfirm={() => discard.mutate()}
+        onClose={() => setConfirmingDiscard(false)}
+      >
+        <p>
+          The uploaded file is deleted and nothing is booked. Upload the right file again
+          if this was a mistake.
+        </p>
+      </ConfirmDialog>
     </div>
   );
 }
@@ -349,14 +366,15 @@ export default function TicketPanel({
     mutationFn: (vars: { travellerId: number; file: File }) =>
       uploadTicket(requestId, vars.travellerId, vars.file),
     onSuccess: (ticket) => {
-      toast.success(
-        ticket.status === 'FAILED'
-          ? 'Uploaded, but the document could not be read'
-          : 'Uploaded and read — check the fields before confirming',
-      );
+      // A ticket the model could not read is still saved, but it is not a
+      // success from the admin's side: they now have to type the fields in.
+      if (ticket.status === 'FAILED') {
+        toast.error('Uploaded, but the ticket could not be read — enter the details by hand');
+      } else {
+        toast.success('Uploaded and read — check the fields before confirming');
+      }
       refresh();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   // Only someone who has been approved can have a ticket attached; a rejected

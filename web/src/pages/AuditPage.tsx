@@ -155,10 +155,10 @@ export default function AuditPage() {
       anchor.download = `activity-log-${todayInIndia()}.csv`;
       anchor.click();
       URL.revokeObjectURL(url);
-      toast.success('Exported — the download is recorded in the log');
+      toast.success('Activity log exported — the download is recorded in the log');
       chain.refetch();
     },
-    onError: (err) => toast.error(errorMessage(err)),
+    meta: { errorFallback: 'Could not export the activity log.' },
   });
 
   const total = audit.data?.total ?? 0;

@@ -25,7 +25,6 @@ import {
   Skeleton,
 } from '@/components/ui';
 import {
-  errorMessage,
   fetchLedger,
   fetchMyNotices,
   fetchPreferences,
@@ -65,7 +64,9 @@ function Inbox() {
 
   const readAll = useMutation({
     mutationFn: markAllRead,
+    meta: { errorFallback: 'Could not mark the notifications read.' },
     onSuccess: () => {
+      toast.success('All notifications marked read');
       queryClient.invalidateQueries({ queryKey: ['my-notices'] });
       queryClient.invalidateQueries({ queryKey: ['unread-count'] });
     },
@@ -147,7 +148,6 @@ function Preferences() {
           : `${CATEGORY_LABELS[vars.category as NotificationCategory]} email off`,
       );
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const entries = Object.entries(prefs.data?.email ?? {});
@@ -237,7 +237,6 @@ function Ledger() {
       );
       refresh();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const runJobs = useMutation({
@@ -247,7 +246,6 @@ function Ledger() {
       toast.success(total === 0 ? 'Nothing needed sending' : `${total} notice(s) sent`);
       refresh();
     },
-    onError: (err) => toast.error(errorMessage(err)),
   });
 
   const rows = ledger.data?.items ?? [];
