@@ -63,6 +63,50 @@ export function LogoLockup({ className }: { className?: string }) {
   );
 }
 
+/** The company behind the app. */
+export const COMPANY_NAME = 'DesignBoxed Innovations Pvt. Ltd.';
+
+/**
+ * The DesignBoxed logo. Its wordmark is in the raster too, so like the app's
+ * logo it swaps with the theme: black lettering on light, white on dark.
+ */
+export function CompanyLogo({ className }: { className?: string }) {
+  const base = cn('select-none object-contain', className);
+  return (
+    <>
+      <img
+        src="/brand/company-logo-light.png"
+        alt="DesignBoxed"
+        draggable={false}
+        className={cn(base, 'dark:hidden')}
+      />
+      <img
+        src="/brand/company-logo-dark.png"
+        alt="DesignBoxed"
+        draggable={false}
+        className={cn(base, 'hidden dark:block')}
+      />
+    </>
+  );
+}
+
+/** "A product of DesignBoxed", with its mark: the sidebar and form footers. */
+export function CompanyCredit({ className }: { className?: string }) {
+  return (
+    <div className={cn('flex items-center gap-2 text-2xs text-text-subtle', className)}>
+      <img
+        src="/brand/company-mark.png"
+        alt=""
+        draggable={false}
+        className="h-6 w-6 shrink-0 select-none object-contain"
+      />
+      <span>
+        A product of <span className="font-medium text-text-muted">{COMPANY_NAME}</span>
+      </span>
+    </div>
+  );
+}
+
 /** Whose work this is, shown under the sidebar and on the sign-in screens. */
 export const CREATED_BY = 'Sridhar';
 

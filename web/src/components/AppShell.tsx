@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
-import { CreatorCredit, LogoLockup } from '@/components/Logo';
+import { CompanyCredit, CreatorCredit, LogoLockup } from '@/components/Logo';
 import NotificationBell from '@/components/NotificationBell';
 import { PageErrorBoundary, ServerStatusBanner } from '@/components/ServerStatus';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -237,6 +237,7 @@ export default function AppShell() {
               {!signOutMutation.isPending && <LogOut size={15} />}
             </Button>
           </div>
+          <CompanyCredit className="mt-2 px-2" />
           <CreatorCredit className="mt-1 px-2" />
         </div>
       </aside>

@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
-import { CreatorCredit, Logo, LogoLockup } from '@/components/Logo';
+import { COMPANY_NAME, CompanyCredit, CompanyLogo, CreatorCredit, Logo, LogoLockup } from '@/components/Logo';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button, Field, Input } from '@/components/ui';
 import { errorMessage, forgotPassword, login } from '@/lib/api';
@@ -149,7 +149,8 @@ export default function LoginPage() {
         </div>
 
         {/* Under the form rather than on the brand panel, which phones never see. */}
-        <CreatorCredit className="pt-6 text-center" />
+        <CompanyCredit className="justify-center pt-6" />
+        <CreatorCredit className="pt-1 text-center" />
       </div>
 
       {/* Brand side. Hidden on small screens - ground staff sign in from phones,
@@ -183,9 +184,14 @@ export default function LoginPage() {
             </p>
           </div>
 
-          <p className="text-2xs uppercase tracking-widest text-text-subtle">
-            DesignBoxed Innovations Pvt. Ltd.
-          </p>
+          <div className="flex items-end gap-4">
+            <CompanyLogo className="h-28 w-auto" />
+            <p className="pb-1 text-2xs uppercase leading-relaxed tracking-widest text-text-subtle">
+              A product of
+              <br />
+              {COMPANY_NAME}
+            </p>
+          </div>
         </div>
       </div>
     </div>

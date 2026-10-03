@@ -4,7 +4,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
-import { CreatorCredit, LogoLockup } from '@/components/Logo';
+import { CompanyCredit, CreatorCredit, LogoLockup } from '@/components/Logo';
 import { PasswordChecklist } from '@/components/PasswordChecklist';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button, Field, Input, Spinner } from '@/components/ui';
@@ -153,7 +153,8 @@ export default function SetPasswordPage() {
         </div>
       </div>
 
-      <CreatorCredit className="mx-auto w-full max-w-sm pt-6 text-center" />
+      <CompanyCredit className="mx-auto w-full max-w-sm justify-center pt-6" />
+      <CreatorCredit className="mx-auto w-full max-w-sm pt-1 text-center" />
     </div>
   );
 }
