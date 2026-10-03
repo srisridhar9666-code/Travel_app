@@ -11,6 +11,8 @@
     },
     {
       "label": "API: serve",
+      "detail": "Applies any new database migrations first, then starts the API",
+      "dependsOn": ["DB: apply migrations"],
       "type": "shell",
       "command": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
       "args": ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],

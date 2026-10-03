@@ -198,6 +198,49 @@ class TestVersionHandshake:
         assert match.group(1) == API_VERSION
 
 
+class TestDatabaseBehind:
+    """A query for a column or table the database does not have yet answers 503
+    with what to do, rather than a 500 every panel can only call "Could not
+    refresh this page" - but only when the database really is behind."""
+
+    PATH = "/__test__/schema-error"
+
+    @pytest.fixture(params=[
+        ("OperationalError", 1054, "Unknown column 'users.status' in 'field list'"),
+        ("ProgrammingError", 1146, "Table 'travel_ops.departments' doesn't exist"),
+    ], ids=["unknown-column", "missing-table"])
+    def failing_route(self, request):
+        import pymysql
+        from sqlalchemy import exc as sa_exc
+
+        name, code, message = request.param
+
+        def fail():
+            raise getattr(sa_exc, name)(
+                "SELECT 1", {}, getattr(pymysql.err, name)(code, message)
+            )
+
+        app.add_api_route(self.PATH, fail)
+        yield
+        app.router.routes[:] = [r for r in app.router.routes if getattr(r, "path", "") != self.PATH]
+
+    def test_a_behind_database_is_named(self, failing_route, monkeypatch):
+        from app import main
+
+        monkeypatch.setattr(main, "schema_behind", lambda: "the database is at a but needs b")
+        response = TestClient(app).get(self.PATH)
+        assert response.status_code == 503
+        assert "alembic upgrade head" in response.json()["detail"]
+
+    def test_the_same_error_on_a_current_database_stays_a_500(self, failing_route, monkeypatch):
+        """Then it is a bug in the code, and saying "migrate" would mislead."""
+        from app import main
+
+        monkeypatch.setattr(main, "schema_behind", lambda: None)
+        response = TestClient(app, raise_server_exceptions=False).get(self.PATH)
+        assert response.status_code == 500
+
+
 class TestRequestCorrelation:
     def test_a_request_id_is_issued_and_echoed(self, client):
         response = client.get("/health")

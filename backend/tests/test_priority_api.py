@@ -311,6 +311,24 @@ class TestTicketOnTheRow:
         mine = client.get("/requests", headers=auth(ravi)).json()["items"]
         assert all(r["travellers"][0]["ticket_id"] is None for r in mine)
 
+    def test_confirming_a_ticket_books_the_traveller(self, client, db, world):
+        """"Confirm and book" on a read ticket. It used to answer 400 "needs a
+        reason" every time, because it sent the decision without one."""
+        project, admin, ravi, _ = world
+        row = make_row(db, project, ravi, traveller_status=TravellerStatus.APPROVED)
+        ticket = self.ticket(db, row, TicketStatus.EXTRACTED)
+        db.commit()
+
+        res = client.post(f"/tickets/{ticket.id}/confirm", headers=auth(admin),
+                          json={"booking_reference": "QK8T2M", "notify": False})
+        assert res.status_code == 200, res.text
+        assert res.json()["status"] == "CONFIRMED"
+        traveller = db.get(RequestTraveller, row.travellers[0].id)
+        db.refresh(traveller)
+        assert traveller.status is TravellerStatus.BOOKED
+        assert traveller.booking_reference == "QK8T2M"
+        assert traveller.decision_reason == "Booked from the uploaded ticket"
+
     def test_a_ticket_under_review_is_shown_when_none_is_confirmed(self, client, db, world):
         project, admin, ravi, _ = world
         row = make_row(db, project, ravi, traveller_status=TravellerStatus.APPROVED)

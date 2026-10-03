@@ -8,9 +8,12 @@ import logging
 from contextlib import asynccontextmanager
 from functools import cache
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+from starlette.concurrency import run_in_threadpool
 
 from app.config import BACKEND_DIR, get_settings
 from app.core import clock
@@ -78,8 +81,9 @@ def schema_behind() -> str | None:
         return None
     return (
         f"the database is at {', '.join(sorted(current)) or 'no version'} but this code "
-        f"needs {', '.join(sorted(wanted))}. Stop the API and run: "
-        "cd backend && alembic upgrade head"
+        f"needs {', '.join(sorted(wanted))}. Stop the API and, in backend/, run: "
+        "python -m alembic upgrade head (with the venv's python: "
+        ".venv\\Scripts\\python.exe on Windows, .venv/bin/python elsewhere)"
     )
 
 
@@ -163,6 +167,39 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+#: MySQL's "Unknown column" and "Table doesn't exist" - what every query meets
+#: when the code is newer than the database.
+_SCHEMA_ERRORS = frozenset({1054, 1146})
+
+MIGRATE_MESSAGE = (
+    "The database has not been migrated to match this version of the app, so this "
+    "cannot load yet. An administrator needs to stop the API, run the migrations "
+    "(alembic upgrade head) and start it again."
+)
+
+
+@app.exception_handler(DBAPIError)
+async def database_behind(request: Request, exc: DBAPIError):
+    """Say "migrate the database" instead of a bare 500.
+
+    A new column the database does not have yet fails every query that reads
+    its table - including the one behind every signed-in request - and the web
+    app could only say "Could not refresh this page" on every panel. Only when
+    the migration check confirms the database is behind; anything else is a
+    real error and is re-raised for the usual 500 and traceback.
+    """
+    code = exc.orig.args[0] if exc.orig is not None and exc.orig.args else None
+    if code in _SCHEMA_ERRORS:
+        try:
+            behind = await run_in_threadpool(schema_behind)
+        except Exception:
+            behind = None
+        if behind:
+            logger.error("%s %s failed because %s", request.method, request.url.path, behind)
+            return JSONResponse(status_code=503, content={"detail": MIGRATE_MESSAGE})
+    raise exc
+
 
 app.include_router(auth_router.router)
 app.include_router(users_router.router)

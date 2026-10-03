@@ -34,7 +34,9 @@ MySQL must be running on `127.0.0.1:3306` before either server starts.
 Open the `V1` folder itself as the workspace — not its parent, or the paths in
 `.vscode/` will not resolve. Then:
 
-**Ctrl+Shift+B** starts the API and the web app together.
+**Ctrl+Shift+B** starts the API and the web app together. Starting the API applies any new
+database migrations first, so a pull that adds columns cannot leave the database behind the
+code; if a migration fails, the API does not start and that terminal shows why.
 
 Everything else is under **Ctrl+Shift+P → Tasks: Run Task**:
 
@@ -80,12 +82,17 @@ Two terminals, from the repository root.
 
 ```powershell
 cd "D:\Travel Management System\V1\backend"
+.\.venv\Scripts\python.exe -m alembic upgrade head
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
 ```
 
+The first line applies any migrations a pull brought in, and does nothing when there are
+none. Skip it and the API starts against a database missing the new columns: every page
+fails to load, and admins see a banner saying the database has not been migrated.
+
 > `--reload` is deliberately omitted: on Windows the watcher has been seen to wedge, leaving
 > an orphaned worker holding port 8000 under a parent PID that no longer exists. Restart the
-> API by hand after backend edits **and after every pull** - Vite picks up new frontend code on
+> API by hand (both lines above) after backend edits **and after every pull** - Vite picks up new frontend code on
 > its own, the API does not, and an old API behind a new page answers "Not Found" and "Method
 > Not Allowed" to whatever it has not heard of. Admins see a red banner when that happens. To
 > free a stuck port:

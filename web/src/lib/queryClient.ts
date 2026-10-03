@@ -52,9 +52,11 @@ export const queryClient = new QueryClient({
     onError: (error, query) => {
       if (endsSession(error)) return;
       if (query.state.data !== undefined || query.meta?.errorToast === true) {
-        toast.error(errorMessage(error, 'Could not refresh this page.'), {
-          id: `query:${query.queryHash}`,
-        });
+        const message = errorMessage(error, 'Could not refresh this page.');
+        // Same text, same toast. Keyed by query, a page whose panels all fail
+        // for one reason - the API down, the database behind - stacked one
+        // identical toast per panel: three on the dashboard.
+        toast.error(message, { id: message });
       }
     },
   }),

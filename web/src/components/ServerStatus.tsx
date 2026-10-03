@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, RotateCcw } from 'lucide-react';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
@@ -14,6 +14,7 @@ import { API_VERSION, compareVersions, fetchHealth } from '@/lib/api';
  * export, a tile stuck on a dash, a report page gone blank.
  */
 export function ServerStatusBanner({ isAdmin }: { isAdmin: boolean }) {
+  const queryClient = useQueryClient();
   const health = useQuery({
     queryKey: ['health'],
     queryFn: fetchHealth,
@@ -25,44 +26,98 @@ export function ServerStatusBanner({ isAdmin }: { isAdmin: boolean }) {
   if (!data) return null;
 
   const order = data.version ? compareVersions(data.version, API_VERSION) : -1;
-  let message: string | null = null;
   if (order > 0) {
     // Everyone can act on this one.
-    message = 'A newer version of this app is available. Reload the page to use it.';
-  } else if (!isAdmin) {
-    return null;
-  } else if (order < 0) {
-    message =
-      `The API server is running older code (${data.version ?? 'before 0.9.0'}) than this page ` +
-      `(${API_VERSION}), so some actions will fail with "Not found" or "Method not allowed" ` +
-      'and some numbers will be missing. Stop the API, run "alembic upgrade head" in backend/, ' +
-      'and start it again.';
-  } else if (data.migrations_pending) {
-    message =
-      'The database has not been migrated to match this code, so some pages will fail. ' +
-      'Stop the API, run "alembic upgrade head" in backend/, and start it again.';
+    return (
+      <Banner
+        message="A newer version of this app is available. Reload the page to use it."
+        action={<BannerButton onClick={() => window.location.reload()}>Reload</BannerButton>}
+      />
+    );
   }
-  if (!message) return null;
+  if (order === 0 && !data.migrations_pending) return null;
 
+  if (!isAdmin) {
+    // Nothing they can do about it, but a page that will not load should not
+    // look like their mistake.
+    return (
+      <Banner message="The system is being updated, so some pages may not load. Please try again in a few minutes." />
+    );
+  }
+
+  const problem =
+    order < 0
+      ? `The API is running older code (${data.version ?? 'before 0.9.0'}) than this page ` +
+        `(${API_VERSION}), so some actions fail with "Not found" or "Method not allowed" and some ` +
+        'numbers are missing.'
+      : 'The database has not been migrated to match this code, so pages will not load until it is.';
   return (
-    <div
-      role="alert"
-      className="mb-6 flex flex-col gap-2 rounded-xl bg-danger-soft px-4 py-3 text-sm text-danger sm:flex-row sm:items-center sm:justify-between"
-    >
-      <span className="flex min-w-0 items-start gap-2.5">
-        <AlertTriangle size={17} className="mt-0.5 shrink-0" />
-        <span className="break-words">{message}</span>
-      </span>
-      {order > 0 && (
-        <button
-          type="button"
-          onClick={() => window.location.reload()}
-          className="shrink-0 font-semibold underline underline-offset-4 hover:no-underline"
+    <Banner
+      message={problem}
+      action={
+        <BannerButton
+          onClick={() => {
+            // Everything, not just /health: the pages that failed should load
+            // again without a reload once the fix is in.
+            void queryClient.invalidateQueries();
+          }}
         >
-          Reload
-        </button>
-      )}
+          Check again
+        </BannerButton>
+      }
+    >
+      <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs text-text">
+        <li>Stop the API.</li>
+        <li>
+          Apply the migrations: in VS Code, <span className="font-medium">Terminal → Run Task → DB: apply migrations</span>.
+          Or in a terminal in the <code className="font-mono">backend</code> folder:{' '}
+          <code className="break-all rounded bg-surface px-1.5 py-0.5 font-mono">
+            .venv\Scripts\python.exe -m alembic upgrade head
+          </code>{' '}
+          (macOS or Linux: <code className="font-mono">.venv/bin/python -m alembic upgrade head</code>).
+        </li>
+        <li>Start the API again, then press Check again.</li>
+      </ol>
+      <p className="mt-2 text-xs text-text-muted">
+        If the migration stops with an error, its last lines say which step failed and why.
+      </p>
+    </Banner>
+  );
+}
+
+/** The banner's frame: the message, an action beside it, details below. */
+function Banner({
+  message,
+  action,
+  children,
+}: {
+  message: string;
+  action?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div role="alert" className="mb-6 rounded-xl bg-danger-soft px-4 py-3 text-sm text-danger">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <span className="flex min-w-0 items-start gap-2.5">
+          <AlertTriangle size={17} className="mt-0.5 shrink-0" />
+          <span className="break-words">{message}</span>
+        </span>
+        {action}
+      </div>
+      {children && <div className="pl-[27px]">{children}</div>}
     </div>
+  );
+}
+
+function BannerButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="shrink-0 font-semibold underline underline-offset-4 hover:no-underline"
+    >
+      {children}
+    </button>
   );
 }
 

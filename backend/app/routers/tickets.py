@@ -461,6 +461,9 @@ def confirm_ticket(
             traveller_id=traveller.id,
             to_status=TravellerStatus.BOOKED,
             booking_reference=reference,
+            # Every decision carries a reason now; here the ticket is the reason.
+            # Without one this endpoint refused every confirmation.
+            reason="Booked from the uploaded ticket",
         ),
         http_request=http_request,
         notify=False,   # the richer confirmation below replaces the generic notice
