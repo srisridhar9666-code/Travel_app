@@ -1,6 +1,6 @@
-# Field Logistics & Travel Management System
+# Sriyatra — Your Travel Desk
 
-Travel, cab and accommodation requests for ~100 ground staff, fulfilled by a ~10 person
+Field logistics and travel management: travel, cab and accommodation requests for ~100 ground staff, fulfilled by a ~10 person
 admin team. React + FastAPI + MySQL, with Gemini for ticket extraction.
 
 | Layer | Stack |
@@ -352,11 +352,11 @@ directly.
 traveller leaves `PENDING`. Every edit before that writes a revision row with a field-level
 diff.
 
-**Brand red is not the UI's red.** `#FE0024` scores 4.0:1 on white, under the AA bar for
-body text, and this product's main verbs are Approve and Reject. So red belongs to
-destructive actions, the interactive primary is ink, and brand red is reserved for the logo
-and active indicators. Brand-coloured *text* uses `--brand-strong`, which is AA-safe in
-both themes.
+**Brand blue is the logo's, and red means destructive.** The accent comes from the Sriyatra
+logo (`web/public/brand`, made from the supplied artwork): the S's blue (`#0088F0`) for fills,
+the logo and active indicators, and the wordmark navy for brand-coloured *text*
+(`--brand-strong`, AA-safe in both themes). This product's main verbs are Approve and Reject,
+so red belongs to destructive actions alone, and the interactive primary is ink.
 
 **Light tokens are declared under both `:root` and `[data-theme='light']`** so a nested
 light island really does go light while the rest of the app stays dark.

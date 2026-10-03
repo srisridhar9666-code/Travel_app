@@ -252,7 +252,7 @@ export default function AppShell() {
             <Menu size={20} />
           </button>
 
-          <span className="truncate text-base font-semibold">{currentLabel ?? 'Travel Ops'}</span>
+          <span className="truncate text-base font-semibold">{currentLabel ?? 'Sriyatra'}</span>
 
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
             <NotificationBell />

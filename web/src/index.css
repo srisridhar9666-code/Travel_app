@@ -9,15 +9,15 @@
 
    Three decisions here are deliberate and worth knowing before you change them:
 
-   1. Brand red (#FE0024) scores only 4.0:1 on white, under the 4.5:1 AA bar for
-      body text. So `--brand` is used for fills, the logo and active indicators,
-      while `--brand-strong` carries any brand-coloured *text* in light mode
-      (5.4:1). Dark mode uses a brighter tint for the same reason (6.1:1).
+   1. Brand blue is the Sriyatra logo's: the S (#0088F0) for fills, the logo
+      and active indicators (3.6:1 on white, past the 3:1 for non-text), and
+      the wordmark navy (#003CA8, 9.5:1) for any brand-coloured *text* in light
+      mode. Dark mode uses a brighter tint for text for the same reason (8.0:1).
 
-   2. Brand red and "destructive" red would otherwise be the same colour in a
-      product whose main verbs are Approve and Reject. So red is handed to
-      destructive, and the interactive primary is ink - near-black in light,
-      near-white in dark. Brand red stays on the logo and the nav rail.
+   2. Red belongs to destructive actions alone, in a product whose main verbs
+      are Approve and Reject, and the interactive primary is ink - near-black
+      in light, near-white in dark. Brand blue stays on the logo and the nav
+      rail.
 
    3. Every colour is an `R G B` triple so Tailwind's `/<alpha-value>` works.
 --------------------------------------------------------------------------- */
@@ -53,10 +53,10 @@
     --border-strong: 205 207 214;
     --ring:          14 15 18;
 
-    /* Brand - DesignBoxed red */
-    --brand:         254 0 36;
-    --brand-strong:  215 0 33;   /* AA-safe brand text on light surfaces */
-    --brand-soft:    255 235 238;
+    /* Brand - the Sriyatra logo's blue, and its wordmark navy for text */
+    --brand:         0 136 240;
+    --brand-strong:  0 60 168;   /* AA-safe brand text on light surfaces */
+    --brand-soft:    230 242 255;
 
     /* Interactive primary: ink, so it never competes with destructive red */
     --primary:       14 15 18;
@@ -76,7 +76,7 @@
     --shadow-lg: 0 16px 40px -8px rgb(14 15 18 / 0.14), 0 4px 10px -4px rgb(14 15 18 / 0.06);
 
     /* Chart ink. A data series needs a hue that is not already spoken for:
-       brand red means identity, danger red means destructive, and ink is the
+       brand blue means identity, danger red means destructive, and ink is the
        interactive primary. This blue is a sequential single hue - every chart
        here compares magnitude, so none of them needs a categorical palette -
        and both steps clear 3:1 against their own surface. */
@@ -107,9 +107,9 @@
     --border-strong: 63 63 70;
     --ring:          250 250 250;
 
-    --brand:         254 0 36;
-    --brand-strong:  255 77 99;  /* AA-safe brand text on dark surfaces */
-    --brand-soft:    46 12 18;
+    --brand:         30 150 245;
+    --brand-strong:  96 175 255; /* AA-safe brand text on dark surfaces */
+    --brand-soft:    12 30 56;
 
     --primary:       250 250 250;
     --primary-hover: 228 228 231;

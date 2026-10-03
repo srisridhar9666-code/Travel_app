@@ -78,7 +78,7 @@ SENDERS: dict[NotificationChannel, Callable[[str, str, str], email.Sent]] = {
 
 
 def _signature() -> str:
-    return "\n\n— Travel Ops\nThis is an automated message; replies are not monitored."
+    return "\n\n— Sriyatra, your travel desk\nThis is an automated message; replies are not monitored."
 
 
 def wants(db: Session, user: User, category: NotificationCategory, channel: NotificationChannel) -> bool:

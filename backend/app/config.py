@@ -33,7 +33,7 @@ def env_file_encoding(path: Path = ENV_FILE) -> str:
 
 
 class Settings(BaseSettings):
-    app_name: str = "Field Logistics & Travel Management"
+    app_name: str = "Sriyatra"
     environment: str = "development"
 
     #: "text" is readable in a terminal; "json" is one object per line, which is
@@ -98,7 +98,7 @@ class Settings(BaseSettings):
     smtp_username: str = ""
     smtp_app_password: str = ""
     email_from: str = ""
-    email_from_name: str = "Travel Ops"
+    email_from_name: str = "Sriyatra"
 
     #: Master switch. Off by default so a fresh checkout, a test run and CI can
     #: never send real mail by accident - it has to be turned on deliberately.

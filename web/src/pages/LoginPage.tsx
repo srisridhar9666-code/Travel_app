@@ -170,7 +170,7 @@ export default function LoginPage() {
         />
 
         <div className="relative flex h-full flex-col justify-between p-12">
-          <Logo className="h-32 w-auto self-start" />
+          <Logo className="h-60 w-auto self-start" />
 
           <div className="max-w-md">
             <Plane size={22} className="mb-5 text-brand" strokeWidth={2} />
@@ -179,7 +179,7 @@ export default function LoginPage() {
               what, and when.
             </p>
             <p className="mt-4 text-sm leading-relaxed text-text-muted">
-              Field Logistics &amp; Travel Management
+              Travel, cabs and stays for field teams
             </p>
           </div>
 

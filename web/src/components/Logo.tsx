@@ -8,9 +8,9 @@ interface LogoProps {
 }
 
 /**
- * The wordmark is baked into the raster, so the asset itself has to swap with
- * the theme - black lettering on light, white lettering on dark. `mark` is the
- * wordmark-free icon, which reads the same on both.
+ * The Sriyatra wordmark is baked into the raster, so the asset itself has to
+ * swap with the theme - navy lettering on light, white lettering on dark.
+ * `mark` is the app-icon tile alone, which reads the same on both.
  *
  * Both full versions are in the page and CSS shows one. Swapping the `src`
  * from React state lagged the theme switch and was wrong until the stored
@@ -21,20 +21,20 @@ export function Logo({ variant = 'full', className }: LogoProps) {
   const base = cn('select-none object-contain', className);
 
   if (variant === 'mark') {
-    return <img src="/brand/mark.png" alt="DesignBoxed" draggable={false} className={base} />;
+    return <img src="/brand/mark.png" alt="Sriyatra" draggable={false} className={base} />;
   }
 
   return (
     <>
       <img
         src="/brand/logo-light.png"
-        alt="DesignBoxed"
+        alt="Sriyatra - Your Travel Desk"
         draggable={false}
         className={cn(base, 'dark:hidden')}
       />
       <img
         src="/brand/logo-dark.png"
-        alt="DesignBoxed"
+        alt="Sriyatra - Your Travel Desk"
         draggable={false}
         className={cn(base, 'hidden dark:block')}
       />
@@ -43,20 +43,20 @@ export function Logo({ variant = 'full', className }: LogoProps) {
 }
 
 /**
- * Logo plus product name, for the sidebar header and the sign-in screens. The
- * company name follows the theme the way the full logo's lettering does:
- * black on light, white on dark.
+ * Icon plus product name, for the sidebar header and the sign-in screens. The
+ * name follows the theme the way the full logo's lettering does: navy on
+ * light, white on dark, in capitals and a serif like the wordmark.
  */
 export function LogoLockup({ className }: { className?: string }) {
   return (
     <div className={cn('flex min-w-0 items-center gap-3', className)}>
       <Logo variant="mark" className="h-12 w-12 shrink-0" />
       <div className="flex min-w-0 flex-col">
-        <span className="truncate text-xl font-bold leading-6 tracking-tight text-text">
-          Travel Ops
+        <span className="truncate font-serif text-xl font-bold uppercase leading-6 tracking-[0.04em] text-brand-strong dark:text-text">
+          Sriyatra
         </span>
-        <span className="truncate text-[0.8125rem] font-semibold uppercase leading-5 tracking-[0.18em] text-text">
-          DesignBoxed
+        <span className="truncate text-[0.8125rem] font-medium leading-5 tracking-wide text-text-muted">
+          Your Travel Desk
         </span>
       </div>
     </div>
