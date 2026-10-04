@@ -60,6 +60,7 @@ import {
   TRAVEL_MODE_LABELS,
   type BatchDecisionItem,
   type RequestPriority,
+  type RequestType,
   type RequestStatus,
   type RequestTraveller,
   type TravelRequest,
@@ -88,6 +89,15 @@ const TRAVELLER_TONE: Record<TravellerStatus, 'neutral' | 'success' | 'danger' |
 };
 
 type TabKey = Exclude<RequestStatus, 'DRAFT'>;
+
+/** The three kinds of booking, kept apart because each is booked differently:
+ *  a ticket on a train or plane, a car for the day, a room for some nights. */
+const KINDS: { key: RequestType | ''; label: string; icon: typeof Plane }[] = [
+  { key: '', label: 'All', icon: CheckSquare },
+  { key: 'LONG_DISTANCE', label: 'Flight · Train · Bus', icon: Plane },
+  { key: 'LOCAL_CAB', label: 'Cab', icon: Car },
+  { key: 'HOTEL', label: 'Hotel', icon: BedDouble },
+];
 
 /** The queue tabs, in the order an admin works through them. */
 const TABS: { key: TabKey; label: string; countKey: keyof CountShape }[] = [
@@ -444,6 +454,7 @@ export default function ApprovalsPage() {
   const queryClient = useQueryClient();
 
   const [tab, setTabState] = useState<TabKey>('SUBMITTED');
+  const [kind, setKindState] = useState<RequestType | ''>('');
   const [search, setSearchState] = useState('');
   const [priority, setPriorityState] = useState<RequestPriority | ''>('');
   const [page, setPage] = useState(1);
@@ -460,6 +471,10 @@ export default function ApprovalsPage() {
     setTabState(next);
     setPage(1);
   };
+  const setKind = (next: RequestType | '') => {
+    setKindState(next);
+    setPage(1);
+  };
   const setSearch = (next: string) => {
     setSearchState(next);
     setPage(1);
@@ -472,6 +487,7 @@ export default function ApprovalsPage() {
   const tabLabel = TABS.find((item) => item.key === tab)?.label ?? REQUEST_STATUS_LABELS[tab];
   const filters = {
     status: tab,
+    type: kind || undefined,
     search: search.trim() || undefined,
     priority: priority || undefined,
   };
@@ -480,16 +496,17 @@ export default function ApprovalsPage() {
   // priority, as the list under them does: "Booked 12" over a high-priority
   // list of two read as the filter not working.
   const counts = useQuery({ queryKey: ['queue-counts'], queryFn: () => fetchQueueCounts() });
-  const sliced = Boolean(filters.search || filters.priority);
+  const sliced = Boolean(filters.type || filters.search || filters.priority);
   const slicedCounts = useQuery({
-    queryKey: ['queue-counts', filters.search, filters.priority],
-    queryFn: () => fetchQueueCounts({ search: filters.search, priority: filters.priority }),
+    queryKey: ['queue-counts', filters.type, filters.search, filters.priority],
+    queryFn: () =>
+      fetchQueueCounts({ type: filters.type, search: filters.search, priority: filters.priority }),
     enabled: sliced,
     placeholderData: keepPreviousData,
   });
   const tabCounts = sliced ? slicedCounts.data : counts.data;
   const requests = useQuery({
-    queryKey: ['queue', tab, search, priority, page, pageSize],
+    queryKey: ['queue', tab, kind, search, priority, page, pageSize],
     queryFn: () =>
       fetchRequests({
         mine: false,
@@ -707,6 +724,36 @@ export default function ApprovalsPage() {
         </div>
       )}
 
+      {/* Kind first, then status: an admin booking cabs works down the cab
+          queue, not a mixed list. */}
+      <div
+        role="group"
+        aria-label="Kind of request"
+        className="grid grid-cols-2 gap-2 sm:inline-grid sm:grid-cols-4"
+      >
+        {KINDS.map((item) => {
+          const Icon = item.icon;
+          const active = kind === item.key;
+          return (
+            <button
+              key={item.key || 'all'}
+              type="button"
+              aria-pressed={active}
+              onClick={() => setKind(item.key)}
+              className={cn(
+                'inline-flex items-center justify-center gap-2 rounded-lg border px-3.5 py-2.5 text-sm font-medium transition-colors',
+                active
+                  ? 'border-brand bg-brand-soft text-brand-strong'
+                  : 'border-border bg-surface text-text-muted hover:bg-surface-sunken hover:text-text',
+              )}
+            >
+              <Icon size={16} />
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+
       <Card>
         <div className="flex flex-wrap gap-1 border-b border-border px-3 py-2">
           {TABS.map((item) => (
@@ -738,7 +785,12 @@ export default function ApprovalsPage() {
               size="sm"
               loading={exporting.isPending}
               disabled={!requests.data || total === 0}
-              onClick={() => exporting.mutate({ tab, label: tabLabel })}
+              onClick={() =>
+                exporting.mutate({
+                  tab,
+                  label: kind ? `${KINDS.find((k) => k.key === kind)?.label} ${tabLabel}` : tabLabel,
+                })
+              }
               title={`Download every request in ${tabLabel} that matches the search, not just this page`}
             >
               {!exporting.isPending && <Download size={15} />}

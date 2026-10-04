@@ -5,6 +5,7 @@ import AppShell from '@/components/AppShell';
 import { Spinner } from '@/components/ui';
 import AuditPage from '@/pages/AuditPage';
 import DashboardPage from '@/pages/DashboardPage';
+import DepartmentsPage from '@/pages/DepartmentsPage';
 import LoginPage from '@/pages/LoginPage';
 import AnalyticsPage from '@/pages/AnalyticsPage';
 import ApprovalsPage from '@/pages/ApprovalsPage';
@@ -101,6 +102,14 @@ export default function App() {
             element={
               <RequireAuth roles={['ADMIN', 'SYSTEM_ADMIN']}>
                 <TeamPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="departments"
+            element={
+              <RequireAuth roles={['ADMIN', 'SYSTEM_ADMIN']}>
+                <DepartmentsPage />
               </RequireAuth>
             }
           />

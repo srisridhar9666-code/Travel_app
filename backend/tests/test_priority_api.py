@@ -275,6 +275,11 @@ class TestTheQueue:
         assert counts(search="Pune")["booked"] == 3
         assert counts(search="Nowhere-at-all")["booked"] == 0
 
+        # A type narrows the counts too, for the Flight / Cab / Hotel switcher.
+        assert counts(type="HOTEL")["booked"] == 3
+        assert counts(type="LOCAL_CAB")["booked"] == 0
+        assert counts(type="HOTEL", priority="LOW")["awaiting"] == 1
+
         # And each tab's count is the number of rows its list returns.
         for tab, key in (("SUBMITTED", "awaiting"), ("BOOKED", "booked")):
             listed = client.get("/requests", headers=auth(admin), params={

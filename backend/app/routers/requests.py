@@ -327,15 +327,16 @@ def create_request(
 def queue_counts(
     actor: AdminUser,
     db: DbSession,
+    request_type: Annotated[RequestType | None, Query(alias="type")] = None,
     search: Annotated[str | None, Query(max_length=120)] = None,
     priority: Annotated[RequestPriority | None, Query()] = None,
 ) -> QueueCounts:
     """Headline numbers for the admin queue tabs.
 
     Counted over the whole tenant rather than the current page, because the tab
-    labels have to be true regardless of which page is open. With a search or a
-    priority, only the requests matching it count, by the same rule the tab's
-    list applies - so "Booked 2" under "High priority" means two high-priority
+    labels have to be true regardless of which page is open. With a type, a
+    search or a priority, only the requests matching it count, by the same rule
+    the tab's list applies - so "Booked 2" under "High priority" means two high-priority
     bookings, not every booking. Drafts are excluded: they are not in the queue
     and their owners have not asked for them to be.
     """
@@ -346,7 +347,7 @@ def queue_counts(
             actor,
             mine=False,
             request_status=None,
-            request_type=None,
+            request_type=request_type,
             project_id=None,
             search=search,
             priority=priority,

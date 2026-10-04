@@ -23,11 +23,11 @@ from app.models.project import Project
 from app.models.request import TravelRequest
 from app.models.user import User
 from app.services import locations
-from app.services.projects import code_base, unique_code
+from app.services.projects import next_code
 from app.services.seed import OTHER_PROJECT_CODE, ensure_other_project
 
 TENANT = "designboxed"
-YY = f"{clock.local_today().year % 100:02d}"
+YEAR = clock.local_today().year
 
 
 @pytest.fixture
@@ -109,87 +109,49 @@ def draft_request(db, project, requester):
 
 
 # ---------------------------------------------------------------------------
-# Making a code
+# Campaign IDs
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name, expected", [
-    ("Monsoon Retail Audit", "MRA-26"),
-    ("Survey of the Godavari Districts", "SGD-26"),
-    ("Elections", "ELEC-26"),
-    ("తెలంగాణ సర్వే", "CMP-26"),
-    ("Mahé Coastal Audit", "MCA-26"),
-    ("The Of", "TO-26"),
-    ("Rural Health Survey Phase Two Extra", "RHSP-26"),
-    ("2026 Polls", "POLL-26"),
-])
-def test_code_base_is_initials_and_two_digit_year(name, expected):
-    assert code_base(name, 2026) == expected
-
-
-def test_unique_code_counts_up_and_never_hands_out_other(db):
-    make(db, "Monsoon Retail Audit", "mra-26")
-    assert unique_code(db, TENANT, "MRA-26") == "MRA-26-2"
-    make(db, "Monsoon Retail Audit again", "MRA-26-2")
-    assert unique_code(db, TENANT, "MRA-26") == "MRA-26-3"
-    assert unique_code(db, TENANT, OTHER_PROJECT_CODE) == f"{OTHER_PROJECT_CODE}-2"
+def test_the_next_id_counts_up_within_its_year_and_ignores_older_codes(db):
+    make(db, "Monsoon Retail Audit", "MRA-26")
+    assert next_code(db, TENANT, year=2026) == "CMP-2026-0001"
+    make(db, "First", "CMP-2026-0001")
+    make(db, "Seventh", "CMP-2026-0007")
+    assert next_code(db, TENANT, year=2026) == "CMP-2026-0008"
+    assert next_code(db, TENANT, year=2027) == "CMP-2027-0001"
+    assert next_code(db, TENANT, year=2026, also_taken={"CMP-2026-0008"}) == "CMP-2026-0009"
 
 
 class TestCreate:
-    def test_a_blank_or_missing_code_is_made_for_you(self, client, people):
+    def test_every_new_campaign_gets_the_next_id_and_none_is_typed(self, client, people):
         admin, _ = people
         r = client.post("/projects", headers=auth(admin), json={"name": "Monsoon Retail Audit"})
         assert r.status_code == 201, r.text
-        assert r.json()["code"] == f"MRA-{YY}"
+        assert r.json()["code"] == f"CMP-{YEAR}-0001"
 
-        r = client.post(
-            "/projects", headers=auth(admin), json={"name": "Monsoon Retail Audit", "code": "  "}
-        )
+        # A code sent anyway is not used: the ID is the system's to give.
+        r = client.post("/projects", headers=auth(admin), json={"name": "Mine", "code": "MINE"})
         assert r.status_code == 201, r.text
-        assert r.json()["code"] == f"MRA-{YY}-2"
+        assert r.json()["code"] == f"CMP-{YEAR}-0002"
 
-    def test_losing_the_race_for_a_code_takes_the_next_one(
+    def test_losing_the_race_for_an_id_takes_the_next_one(
         self, rival_row, client, people, monkeypatch
     ):
-        # Another admin commits MRA-YY after this request's snapshot was taken
-        # (the auth lookup), so the code SELECT cannot see it but the INSERT
+        # Another admin commits the next ID after this request's snapshot was
+        # taken (the auth lookup), so the SELECT cannot see it but the INSERT
         # hits the unique index.
         admin, _ = people
         real_canonical = locations.canonical
 
         def commit_a_rival(*args, **kwargs):
-            rival_row(name="Monsoon Retail Audit", code=f"MRA-{YY}")
+            rival_row(name="Someone else's", code=f"CMP-{YEAR}-0001")
             return real_canonical(*args, **kwargs)
 
         monkeypatch.setattr(locations, "canonical", commit_a_rival)
         r = client.post("/projects", headers=auth(admin), json={"name": "Monsoon Retail Audit"})
         assert r.status_code == 201, r.text
-        assert r.json()["code"] == f"MRA-{YY}-2"
-
-    def test_the_year_comes_from_the_start_date(self, client, people):
-        admin, _ = people
-        r = client.post("/projects", headers=auth(admin), json={
-            "name": "Rural Health Survey", "start_date": "2027-03-01",
-        })
-        assert r.status_code == 201, r.text
-        assert r.json()["code"] == "RHS-27"
-
-    def test_a_typed_code_is_tidied_and_checked(self, client, people, db):
-        admin, _ = people
-        r = client.post("/projects", headers=auth(admin), json={"name": "Alpha", "code": "ab cd"})
-        assert r.status_code == 201
-        assert r.json()["code"] == "AB-CD"
-
-        r = client.post("/projects", headers=auth(admin), json={"name": "Beta", "code": "x"})
-        assert r.status_code == 422
-        assert "at least 2 characters" in r.text
-
-        r = client.post("/projects", headers=auth(admin), json={"name": "Gamma", "code": "ab-cd"})
-        assert r.status_code == 409
-        assert "Alpha" in r.json()["detail"]
-
-        r = client.post("/projects", headers=auth(admin), json={"name": "Delta", "code": "other"})
-        assert r.status_code == 409
+        assert r.json()["code"] == f"CMP-{YEAR}-0002"
 
     def test_no_dates_and_no_place_are_fine(self, client, people):
         admin, _ = people
@@ -232,22 +194,17 @@ class TestCreate:
             )
         ).scalar_one()
         assert entry.action is AuditAction.CREATE
-        assert entry.changes["code"]["to"] == f"LO-{YY}"
+        assert entry.changes["code"]["to"] == f"CMP-{YEAR}-0001"
 
 
 class TestUpdate:
-    def test_a_blank_code_is_remade_without_clashing_with_itself(self, client, people, db):
+    def test_the_id_never_changes(self, client, people, db):
         admin, _ = people
-        project = make(db, "Monsoon Retail Audit", "MANUAL-1", start_date=date(2025, 6, 1))
-        r = client.patch(f"/projects/{project.id}", headers=auth(admin), json={"code": None})
+        project = make(db, "Monsoon Retail Audit", "MRA-25", start_date=date(2025, 6, 1))
+        r = client.patch(f"/projects/{project.id}", headers=auth(admin),
+                         json={"name": "Renamed", "code": "NEW-1", "start_date": "2027-01-01"})
         assert r.status_code == 200, r.text
-        assert r.json()["code"] == "MRA-25"
-
-        r = client.patch(f"/projects/{project.id}", headers=auth(admin), json={"code": ""})
-        assert r.json()["code"] == "MRA-25"
-
-        r = client.patch(f"/projects/{project.id}", headers=auth(admin), json={"name": "Renamed"})
-        assert r.json()["code"] == "MRA-25"
+        assert (r.json()["name"], r.json()["code"]) == ("Renamed", "MRA-25")
 
     def test_picking_a_state_clears_the_old_free_text(self, client, people, db):
         admin, _ = people
@@ -285,14 +242,6 @@ class TestUpdate:
         r = client.patch(f"/projects/{project.id}", headers=auth(admin), json={"name": None})
         assert r.status_code == 422
 
-    def test_a_typed_duplicate_code_is_refused(self, client, people, db):
-        admin, _ = people
-        make(db, "First", "FIR-1")
-        second = make(db, "Second", "SEC-1")
-        r = client.patch(f"/projects/{second.id}", headers=auth(admin), json={"code": "fir-1"})
-        assert r.status_code == 409
-        assert "First" in r.json()["detail"]
-
 
 class TestTheOtherCampaign:
     @pytest.fixture
@@ -308,10 +257,8 @@ class TestTheOtherCampaign:
                             json={"status": "ARCHIVED"}).status_code == 409
         assert client.patch(f"/projects/{other.id}", headers=h,
                             json={"status": "PAUSED"}).status_code == 409
-        assert client.patch(f"/projects/{other.id}", headers=h,
-                            json={"code": "X1"}).status_code == 409
-        assert client.patch(f"/projects/{other.id}", headers=h,
-                            json={"code": None}).status_code == 409
+        r = client.patch(f"/projects/{other.id}", headers=h, json={"code": "X1"})
+        assert r.json()["code"] == OTHER_PROJECT_CODE
         assert client.post(f"/projects/{other.id}/archive", headers=h).status_code == 409
         assert client.delete(f"/projects/{other.id}", headers=h).status_code == 409
 

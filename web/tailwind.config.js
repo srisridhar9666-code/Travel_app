@@ -7,6 +7,7 @@ export default {
     extend: {
       colors: {
         canvas: 'rgb(var(--canvas) / <alpha-value>)',
+        sidebar: 'rgb(var(--sidebar) / <alpha-value>)',
         chart: {
           1: 'rgb(var(--chart-1) / <alpha-value>)',
           grid: 'rgb(var(--chart-grid) / <alpha-value>)',

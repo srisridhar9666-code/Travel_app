@@ -35,7 +35,7 @@ import {
   updateProject,
   type ProjectPayload,
 } from '@/lib/api';
-import { campaignPlace, suggestCampaignCode } from '@/lib/projects';
+import { campaignPlace } from '@/lib/projects';
 import { cn } from '@/lib/utils';
 import {
   PROJECT_STATUS_HELP,
@@ -133,11 +133,10 @@ export default function ProjectsPage() {
 
   const save = useMutation({
     mutationFn: () => {
-      // Blanks go as null: a blank date clears it rather than failing to parse,
-      // and a blank code asks the server to make one.
+      // Blanks go as null: a blank date clears it rather than failing to parse.
+      // No code: every campaign's ID is the server's to give.
       const payload: ProjectPayload = {
         name: form.name,
-        code: form.code.trim() || null,
         client_name: form.client_name || null,
         state: form.state || null,
         city: form.city || null,
@@ -147,9 +146,8 @@ export default function ProjectsPage() {
         description: form.description || null,
       };
       if (editing?.is_fallback) {
-        // Locked on the server; leaving them out keeps the save about what
-        // the admin could actually change.
-        delete payload.code;
+        // Locked on the server; leaving it out keeps the save about what the
+        // admin could actually change.
         delete payload.status;
       }
       return editing ? updateProject(editing.id, payload) : createProject(payload);
@@ -157,7 +155,7 @@ export default function ProjectsPage() {
     meta: { errorFallback: 'Could not save this campaign.' },
     onSuccess: (project) => {
       toast.success(
-        editing ? `${project.name} saved` : `${project.name} created (code ${project.code})`,
+        editing ? `${project.name} saved` : `${project.name} created as ${project.code}`,
       );
       setFormOpen(false);
       setEditing(null);
@@ -232,7 +230,6 @@ export default function ProjectsPage() {
 
   const rows = projects.data?.items ?? [];
   const statusChoices = editing ? ALL_STATUSES : NEW_STATUSES;
-  const codePreview = suggestCampaignCode(form.name, form.start_date) || 'MRA-26';
 
   return (
     <div className="space-y-6">
@@ -527,21 +524,19 @@ export default function ProjectsPage() {
             </fieldset>
 
             <Field
-              label="Short code (optional)"
+              label="Campaign ID"
               htmlFor="code"
               hint={
-                editing?.is_fallback
-                  ? 'The built-in campaign keeps this code.'
-                  : "A short tag shown in request lists, emails and CSV exports. Leave it blank and it's made from the campaign's initials and start year (a number is added if it's taken)."
+                editing
+                  ? 'Given when the campaign was created. It never changes.'
+                  : 'Given automatically when you save, the next in sequence (CMP-year-number).'
               }
             >
               <Input
                 id="code"
-                value={form.code}
-                maxLength={40}
-                disabled={editing?.is_fallback}
-                onChange={(e) => setForm({ ...form, code: e.target.value })}
-                placeholder={codePreview}
+                value={editing ? form.code : 'Assigned on save'}
+                readOnly
+                disabled
                 className="font-mono"
               />
             </Field>
