@@ -7,15 +7,16 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.enums import (
-    LOCAL_CAB_MAX_KM,
-    MAX_CAB_DISTANCE_KM,
     CabExtensionStatus,
     CabTrip,
     CabType,
+    CancellationStatus,
     ConflictKind,
     ConflictSeverity,
     Designation,
     InvoiceStatus,
+    LOCAL_CAB_MAX_KM,
+    MAX_CAB_DISTANCE_KM,
     ManagerRecommendation,
     RequestPriority,
     RequestStatus,
@@ -333,6 +334,19 @@ class RequestRead(BaseModel):
     cab_driver_phone: str | None = None
     cab_booked_by_name: str | None = None
     cab_booked_at: UTCInstant | None = None
+    #: An ask to cancel a trip already approved or booked, and its answer.
+    cancellation_status: CancellationStatus | None = None
+    cancellation_reason: str | None = None
+    cancellation_requested_by_name: str | None = None
+    cancellation_requested_at: UTCInstant | None = None
+    cancellation_decided_by_name: str | None = None
+    cancellation_decided_at: UTCInstant | None = None
+    cancellation_comment: str | None = None
+    #: Whether the reader's cancel goes straight through or becomes an ask, and
+    #: whether they may answer a pending ask - so the screen offers the right button.
+    cancel_needs_approval: bool = False
+    can_decide_cancellation: bool = False
+    cancelled_by_name: str | None = None
     cab_extension_status: CabExtensionStatus | None = None
     cab_extension_reason: str | None = None
     cab_extension_requested_by_name: str | None = None
@@ -508,6 +522,8 @@ class QueueCounts(BaseModel):
     #: Cabs whose travellers asked to keep them one more day, still waiting on
     #: an admin. For a manager, only their own team's cabs.
     cab_extensions: int = 0
+    #: Decided trips whose requester asked to cancel, waiting on an answer.
+    cancellations: int = 0
 
 
 # --- Cabs: the car sent, and one more day ---------------------------------
@@ -571,6 +587,21 @@ class CabExtensionAsk(BaseModel):
         if len(cleaned) < 3:
             raise ValueError("Say why the cab is needed for another day.")
         return cleaned
+
+
+class CancellationDecision(BaseModel):
+    """An admin's or manager's answer to an ask to cancel a decided trip. A
+    rejection needs a comment: the requester is shown why the trip stands."""
+
+    approve: bool
+    comment: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _reject_needs_comment(self):
+        self.comment = _tidy_text(self.comment or "") or None
+        if not self.approve and (self.comment is None or len(self.comment) < 3):
+            raise ValueError("Add a comment saying why - the requester is shown it.")
+        return self
 
 
 class CabExtensionDecision(BaseModel):

@@ -35,6 +35,7 @@ from app.core.enums import (
     CabExtensionStatus,
     CabTrip,
     CabType,
+    CancellationStatus,
     ManagerRecommendation,
     NotificationCategory,
     NotificationChannel,
@@ -85,6 +86,26 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     submitted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    # --- asking to cancel a decided trip --------------------------------------
+    # Once an admin has approved or booked anyone, the requester cannot just
+    # withdraw: a ticket may exist. They ask, and an admin or their manager
+    # approves (the trip is then cancelled) or rejects with a comment.
+    cancellation_status: Mapped[CancellationStatus | None] = mapped_column(
+        _enum(CancellationStatus), nullable=True
+    )
+    cancellation_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cancellation_requested_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_travel_requests_cxl_requested_by"),
+        nullable=True,
+    )
+    cancellation_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    cancellation_decided_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_travel_requests_cxl_decided_by"),
+        nullable=True,
+    )
+    cancellation_decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    cancellation_comment: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # --- long distance and cab ---------------------------------------------
     mode: Mapped[TravelMode | None] = mapped_column(_enum(TravelMode), nullable=True)
@@ -196,6 +217,9 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
         "User", foreign_keys=[cab_extension_requested_by_id]
     )
     cab_extension_decided_by = relationship("User", foreign_keys=[cab_extension_decided_by_id])
+    cancellation_requested_by = relationship("User", foreign_keys=[cancellation_requested_by_id])
+    cancellation_decided_by = relationship("User", foreign_keys=[cancellation_decided_by_id])
+    cancelled_by = relationship("User", foreign_keys=[cancelled_by_id])
     travellers: Mapped[list["RequestTraveller"]] = relationship(
         back_populates="request",
         cascade="all, delete-orphan",

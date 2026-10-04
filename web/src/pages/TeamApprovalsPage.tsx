@@ -3,6 +3,7 @@ import { BedDouble, Car, ClipboardCheck, Plane, ThumbsDown, ThumbsUp } from 'luc
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 
+import { CancellationAsks } from '@/components/CancellationAsks';
 import { ManagerReview } from '@/components/ManagerReview';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
@@ -143,6 +144,8 @@ export default function TeamApprovalsPage() {
         title="Team approvals"
         description="Your team's requests wait here for your recommendation. An admin makes the final decision and sees your comment, and you are copied on the decision email."
       />
+
+      <CancellationAsks scope="manager" />
 
       <Card>
         <div role="group" aria-label="Which requests" className="flex gap-1 border-b border-border px-3 py-2">

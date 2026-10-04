@@ -72,7 +72,7 @@ import type {
  * shell compares it with what /health reports, to tell an admin when the API
  * process is older than this page.
  */
-export const API_VERSION = '0.13.0';
+export const API_VERSION = '0.14.0';
 
 /** Negative when `a` is older than `b`, by dotted number. */
 export function compareVersions(a: string, b: string): number {
@@ -533,6 +533,8 @@ export interface RequestQuery {
   review?: ReviewFilter;
   /** Cabs waiting on an admin's answer to "one more day". */
   extension?: 'pending';
+  /** Decided trips whose requester asked to cancel, still waiting. */
+  cancellation?: 'pending';
   page?: number;
   page_size?: number;
 }
@@ -691,6 +693,15 @@ export const askCabExtension = (requestId: number, reason: string) =>
     .then((r) => r.data);
 
 /** An admin's answer to "one more day". A rejection needs a comment. */
+/** Approve an ask to cancel (the trip is cancelled) or reject it with a comment. */
+export const decideCancellation = (
+  requestId: number,
+  body: { approve: boolean; comment?: string | null },
+) =>
+  api
+    .post<TravelRequest>(`/requests/${requestId}/cancellation/decide`, body)
+    .then((r) => r.data);
+
 export const decideCabExtension = (
   requestId: number,
   body: { approve: boolean; comment?: string | null },

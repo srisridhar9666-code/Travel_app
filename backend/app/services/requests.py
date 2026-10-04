@@ -31,6 +31,7 @@ from app.core.enums import (
     ADMIN_ROLES,
     AuditAction,
     CabExtensionStatus,
+    CancellationStatus,
     NotificationChannel,
     NotificationStatus,
     RequestPriority,
@@ -574,6 +575,21 @@ def to_read(
         cab_driver_phone=request.cab_driver_phone,
         cab_booked_by_name=_name(request.cab_booked_by),
         cab_booked_at=request.cab_booked_at,
+        cancellation_status=request.cancellation_status,
+        cancellation_reason=request.cancellation_reason,
+        cancellation_requested_by_name=_name(request.cancellation_requested_by),
+        cancellation_requested_at=request.cancellation_requested_at,
+        cancellation_decided_by_name=_name(request.cancellation_decided_by),
+        cancellation_decided_at=request.cancellation_decided_at,
+        cancellation_comment=request.cancellation_comment,
+        cancel_needs_approval=reader is not None and _cancel_needs_approval(request, reader),
+        can_decide_cancellation=(
+            reader is not None
+            and request.cancellation_status is CancellationStatus.PENDING
+            and not request.is_cancelled
+            and _may_decide_cancellation(request, reader)
+        ),
+        cancelled_by_name=_name(request.cancelled_by),
         cab_extension_status=request.cab_extension_status,
         cab_extension_reason=request.cab_extension_reason,
         cab_extension_requested_by_name=_name(request.cab_extension_requested_by),
@@ -688,6 +704,18 @@ def record_submission(
     return notify_admins_of_submission(
         db, request=request, actor=actor, tenant_id=tenant_id
     ) + notify_managers_of_submission(db, request=request, actor=actor, tenant_id=tenant_id)
+
+
+def _cancel_needs_approval(request: TravelRequest, reader: User) -> bool:
+    from app.services.cancellations import needs_approval  # cancellations imports this module
+
+    return needs_approval(request, reader)
+
+
+def _may_decide_cancellation(request: TravelRequest, reader: User) -> bool:
+    from app.services.cancellations import may_decide
+
+    return may_decide(request, reader)
 
 
 def trip_summary(request: TravelRequest) -> str:

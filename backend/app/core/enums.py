@@ -152,6 +152,15 @@ CAB_TRIP_LABELS: dict[CabTrip, str] = {
 }
 
 
+class CancellationStatus(StrEnum):
+    """An ask to cancel a trip someone has already approved or booked. Until
+    an admin or the requester's manager approves it, the trip stands."""
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
 class CabExtensionStatus(StrEnum):
     """Where an ask to keep a booked cab one more day stands. One at a time per
     request; after a decision the traveller may ask again for another day."""
@@ -383,6 +392,9 @@ NOTIFICATION_CATEGORIES: dict[str, NotificationCategory] = {
     # itself reaches them as a Cc on the traveller's, so this never mails.
     "DECISION_COPY": NotificationCategory.DECISIONS,
     "TEAM_CHANGE_REQUESTED": NotificationCategory.NEW_REQUESTS,
+    "CANCELLATION_REQUESTED": NotificationCategory.NEW_REQUESTS,
+    "CANCELLATION_APPROVED": NotificationCategory.DECISIONS,
+    "CANCELLATION_REJECTED": NotificationCategory.DECISIONS,
     "TEAM_CHANGE_APPROVED": NotificationCategory.DECISIONS,
     "TEAM_CHANGE_REJECTED": NotificationCategory.DECISIONS,
     # The car, its number and the driver's phone: what a booking is for a cab.

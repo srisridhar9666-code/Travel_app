@@ -220,7 +220,10 @@ export default function AppShell() {
       ? (unread.data?.unread ?? 0)
       : item.badge === 'queue' && queue.data
         ? // Cabs asking for one more day wait on an admin too.
-          queue.data.awaiting + queue.data.partially_approved + (queue.data.cab_extensions ?? 0)
+          queue.data.awaiting +
+          queue.data.partially_approved +
+          (queue.data.cab_extensions ?? 0) +
+          (queue.data.cancellations ?? 0)
         : item.badge === 'team'
           ? (teamChanges.data?.pending ?? 0)
           : item.badge === 'review'

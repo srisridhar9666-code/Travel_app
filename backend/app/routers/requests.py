@@ -25,9 +25,10 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import AdminOrManager, AdminUser, CurrentUser, DbSession, ManagerUser
 from app.core.enums import (
-    PRIORITY_RANK,
     AuditAction,
     CabExtensionStatus,
+    CancellationStatus,
+    PRIORITY_RANK,
     RequestPriority,
     RequestStatus,
     RequestType,
@@ -43,10 +44,11 @@ from app.schemas.request import (
     CabExtensionAsk,
     CabExtensionDecision,
     CancelPayload,
+    CancellationDecision,
     ColleagueRead,
-    DecisionPayload,
     ConflictCheckRequest,
     ConflictCheckResponse,
+    DecisionPayload,
     QueueCounts,
     QueueExport,
     RecommendationPayload,
@@ -57,7 +59,15 @@ from app.schemas.request import (
     RevisionRead,
     RoomSharingChoicePayload,
 )
-from app.services import audit, cabs, costay, decisions, notifications, recommendations
+from app.services import (
+    audit,
+    cabs,
+    cancellations,
+    costay,
+    decisions,
+    notifications,
+    recommendations,
+)
 from app.services import requests as svc
 
 router = APIRouter(prefix="/requests", tags=["requests"])
@@ -75,6 +85,7 @@ Review = Literal["waiting", "reviewed"]
 #: on an admin. They sit on whichever tab their travellers' status puts them,
 #: so the queue lists them on their own as well.
 Extension = Literal["pending"]
+Cancellation = Literal["pending"]
 
 
 def _extension_pending(row: TravelRequest) -> bool:
@@ -175,6 +186,7 @@ def _matching(
     sort: str,
     review: Review | None = None,
     extension: Extension | None = None,
+    cancellation: Cancellation | None = None,
 ) -> list[TravelRequest]:
     """Every request the caller may see that matches the filters, in order.
 
@@ -204,6 +216,11 @@ def _matching(
 
     if request_type is not None:
         filters.append(TravelRequest.request_type == request_type)
+    if cancellation == "pending":
+        filters += [
+            TravelRequest.cancellation_status == CancellationStatus.PENDING,
+            TravelRequest.is_cancelled.is_(False),
+        ]
     if extension == "pending":
         filters += [
             TravelRequest.cab_extension_status == CabExtensionStatus.PENDING,
@@ -273,6 +290,9 @@ def list_requests(
     extension: Annotated[
         Extension | None, Query(description="Cabs waiting on a one-more-day decision")
     ] = None,
+    cancellation: Annotated[
+        Cancellation | None, Query(description="Decided trips whose requester asked to cancel")
+    ] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> RequestListResponse:
@@ -299,6 +319,7 @@ def list_requests(
         sort=sort,
         review=review,
         extension=extension,
+        cancellation=cancellation,
     )
 
     total = len(rows)
@@ -436,12 +457,15 @@ def queue_counts(
     edited = 0
     on_manager = 0
     extensions = 0
+    cancel_asks = 0
     urgent = {s: 0 for s in WAITING}
     for row in rows:
         row_status = svc.status_of(row)
         tally[row_status] += 1
         if _extension_pending(row):
             extensions += 1
+        if cancellations.is_pending(row) and cancellations.may_decide(row, actor):
+            cancel_asks += 1
         if row.priority is RequestPriority.HIGH and row_status in WAITING:
             urgent[row_status] += 1
         if row_status in WAITING and recommendations.waits_on(row, actor):
@@ -470,6 +494,7 @@ def queue_counts(
         high_priority_partial=urgent[RequestStatus.PARTIALLY_APPROVED],
         awaiting_manager=on_manager,
         cab_extensions=extensions,
+        cancellations=cancel_asks,
     )
 
 
@@ -677,12 +702,13 @@ def cancel_request(
     user: CurrentUser,
     http_request: Request,
     db: DbSession,
+    background: BackgroundTasks,
 ) -> RequestRead:
     """Withdraw a request, with a reason (addendum B4).
 
-    The requester or an admin may cancel, and a locked request can still be
-    cancelled - that is the escape hatch the edit window leaves open, since
-    cancel-and-reraise is how a booked plan changes in V1.
+    The requester or an admin may cancel. An admin's cancel is immediate. A
+    requester's is too until an admin has approved or booked someone on it;
+    after that it becomes an ask an admin or their manager approves.
     """
     row = _load(db, request_id, user)
     if row.requester_id != user.id and not user.is_admin:
@@ -692,27 +718,55 @@ def cancel_request(
     if row.is_cancelled:
         return svc.to_read(db, row, tenant_id=user.tenant_id, viewer=user)
 
-    row.is_cancelled = True
-    row.cancel_reason = payload.reason
-    row.cancelled_by_id = user.id
-    for traveller in row.travellers:
-        if traveller.status is not TravellerStatus.REJECTED:
-            traveller.status = TravellerStatus.CANCELLED
+    # Once someone on it is approved or booked, a ticket may exist: the
+    # requester asks, and an admin or their manager decides.
+    if cancellations.needs_approval(row, user):
+        queued = cancellations.ask(
+            db, request=row, asker=user, reason=payload.reason, http_request=http_request
+        )
+        db.commit()
+        background.add_task(notifications.deliver_queued, queued)
+        db.refresh(row)
+        return _read_and_release(db, row, user)
 
-    audit.record(
-        db,
-        action=AuditAction.CANCEL,
-        entity_type="travel_request",
-        entity_id=row.id,
-        summary=f"{user.full_name} cancelled request {row.id}",
-        reason=payload.reason,
-        tenant_id=user.tenant_id,
-        actor=user,
-        request=http_request,
+    was_asked = cancellations.is_pending(row)
+    cancellations.cancel(
+        db, request=row, actor=user, reason=payload.reason, http_request=http_request
     )
+    if was_asked:
+        # An admin cancelling outright answers any ask that was waiting.
+        row.cancellation_status = CancellationStatus.APPROVED
+        row.cancellation_decided_by_id = user.id
+        row.cancellation_decided_at = naive_utcnow()
     db.commit()
     db.refresh(row)
     return svc.to_read(db, row, tenant_id=user.tenant_id, viewer=user)
+
+
+@router.post("/{request_id}/cancellation/decide", response_model=RequestRead)
+def decide_cancellation(
+    request_id: int,
+    payload: CancellationDecision,
+    actor: AdminOrManager,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """Approve the ask to cancel (the trip is cancelled) or reject it with a
+    comment. For an admin, or the requester's manager."""
+    row = _load(db, request_id, actor)
+    queued = cancellations.decide(
+        db,
+        request=row,
+        decider=actor,
+        approve=payload.approve,
+        comment=payload.comment,
+        http_request=http_request,
+    )
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, actor)
 
 
 @router.get("/{request_id}/revisions", response_model=list[RevisionRead])

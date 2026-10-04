@@ -591,6 +591,19 @@ export interface TravelRequest {
   cab_extension_comment: string | null;
   /** Extra days approved so far; end_at already includes them. */
   cab_extended_days: number;
+  /** An ask to cancel a trip already approved or booked, and its answer. */
+  cancellation_status: 'PENDING' | 'APPROVED' | 'REJECTED' | null;
+  cancellation_reason: string | null;
+  cancellation_requested_by_name: string | null;
+  cancellation_requested_at: string | null;
+  cancellation_decided_by_name: string | null;
+  cancellation_decided_at: string | null;
+  cancellation_comment: string | null;
+  /** The reader's Cancel becomes an ask (someone on it is approved or booked). */
+  cancel_needs_approval: boolean;
+  /** The reader may approve or reject the pending ask. */
+  can_decide_cancellation: boolean;
+  cancelled_by_name: string | null;
   /** Whether the person reading may ask for one more day now - the server's
    *  rule, so the button only shows when the ask would be accepted. */
   can_extend_cab: boolean;
@@ -704,6 +717,8 @@ export interface QueueCounts {
   /** Cabs whose travellers asked to keep them one more day, still waiting on
    *  an admin. */
   cab_extensions: number;
+  /** Decided trips whose requester asked to cancel, waiting on an answer. */
+  cancellations: number;
 }
 
 /** Every request in one admin queue tab, read as the admin (so with cost), for

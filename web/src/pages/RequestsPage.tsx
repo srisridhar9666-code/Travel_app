@@ -17,6 +17,7 @@ import { useState } from 'react';
 import toast from 'react-hot-toast';
 
 import { CabExtensionNote, CabSent } from '@/components/CabDetails';
+import { CancellationNote } from '@/components/CancellationAsks';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
 import RequestForm, { ConflictList } from '@/components/RequestForm';
@@ -233,7 +234,11 @@ export default function RequestsPage() {
   const cancel = useMutation({
     mutationFn: () => cancelRequest(cancelling!.id, cancelReason),
     onSuccess: (saved) => {
-      toast.success(`Request ${saved.id} cancelled`);
+      toast.success(
+        saved.cancellation_status === 'PENDING' && !saved.is_cancelled
+          ? 'Sent for approval - it stands until an admin or your manager agrees'
+          : `Request ${saved.id} cancelled`,
+      );
       setCancelling(null);
       setCancelReason('');
       refresh();
@@ -453,9 +458,13 @@ export default function RequestsPage() {
 
                       {request.cancel_reason && (
                         <p className="mt-2 text-xs text-text-subtle">
-                          Cancelled: {request.cancel_reason}
+                          Cancelled{request.cancelled_by_name ? ` by ${request.cancelled_by_name}` : ''}:{' '}
+                          {request.cancel_reason}
                         </p>
                       )}
+                      <div className="mt-2">
+                        <CancellationNote request={request} />
+                      </div>
 
                     </div>
 
@@ -484,11 +493,11 @@ export default function RequestsPage() {
                           <Pencil size={14} />
                         </Button>
                       )}
-                      {isOwner && !request.is_cancelled && (
+                      {isOwner && !request.is_cancelled && request.cancellation_status !== 'PENDING' && (
                         <Button
                           variant="ghost"
                           size="sm"
-                          title="Cancel"
+                          title={request.cancel_needs_approval ? 'Ask to cancel' : 'Cancel'}
                           onClick={() => {
                             setCancelling(request);
                             setCancelReason('');
@@ -697,8 +706,16 @@ export default function RequestsPage() {
       <Modal
         open={cancelling !== null}
         onClose={() => setCancelling(null)}
-        title={`Cancel request ${cancelling?.id ?? ''}`}
-        description="This cannot be undone. The reason is recorded in the activity log."
+        title={
+          cancelling?.cancel_needs_approval
+            ? `Ask to cancel request ${cancelling.id}`
+            : `Cancel request ${cancelling?.id ?? ''}`
+        }
+        description={
+          cancelling?.cancel_needs_approval
+            ? 'This trip is already approved or booked, so an admin or your manager has to agree. It stands until then.'
+            : 'This cannot be undone. The reason is recorded in the activity log.'
+        }
         footer={
           <>
             <Button variant="secondary" onClick={() => setCancelling(null)}>
@@ -710,7 +727,7 @@ export default function RequestsPage() {
               disabled={cancelReason.trim().length < 3}
               onClick={() => cancel.mutate()}
             >
-              Cancel request
+              {cancelling?.cancel_needs_approval ? 'Send for approval' : 'Cancel request'}
             </Button>
           </>
         }

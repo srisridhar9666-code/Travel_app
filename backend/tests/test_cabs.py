@@ -344,7 +344,7 @@ class TestWhoMayRecordTheCab:
 
     def test_not_on_a_cancelled_request(self, client, org):
         made = approved_cab(client, org)
-        client.post(f"/requests/{made['id']}/cancel", headers=auth(org["ravi"]),
+        client.post(f"/requests/{made['id']}/cancel", headers=auth(org["admin"]),
                     json={"reason": "Audit moved"})
         r = record_cab(client, org, made["id"])
         assert r.status_code == 409
@@ -521,7 +521,7 @@ class TestWhoMayAskForAnotherDay:
 
     def test_not_on_a_cancelled_request(self, client, org):
         made = approved_cab(client, org)
-        client.post(f"/requests/{made['id']}/cancel", headers=auth(org["ravi"]),
+        client.post(f"/requests/{made['id']}/cancel", headers=auth(org["admin"]),
                     json={"reason": "Audit moved"})
         assert ask(client, org, made["id"]).status_code == 409
 
@@ -582,7 +582,7 @@ class TestAskingForAnotherDay:
         assert {r["id"] for r in listed["items"]} == {made["id"], mine["id"]}
 
         # A cancelled cab's ask is moot.
-        client.post(f"/requests/{mine['id']}/cancel", headers=auth(org["meena"]),
+        client.post(f"/requests/{mine['id']}/cancel", headers=auth(org["admin"]),
                     json={"reason": "Audit moved"})
         assert counts(client, org)["cab_extensions"] == 1
         listed = client.get("/requests", headers=auth(org["admin"]),
@@ -684,7 +684,7 @@ class TestDecidingAnotherDay:
     def test_a_cancelled_cab_cannot_be_extended(self, client, org):
         made = approved_cab(client, org)
         ask(client, org, made["id"])
-        client.post(f"/requests/{made['id']}/cancel", headers=auth(org["ravi"]),
+        client.post(f"/requests/{made['id']}/cancel", headers=auth(org["admin"]),
                     json={"reason": "Audit moved"})
         assert answer(client, org, made["id"]).status_code == 409
 

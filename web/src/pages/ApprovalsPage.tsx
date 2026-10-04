@@ -32,6 +32,7 @@ import {
   type CabDraft,
 } from '@/components/CabDetails';
 import { ManagerReview } from '@/components/ManagerReview';
+import { CancellationAsks } from '@/components/CancellationAsks';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
 import { ConflictList } from '@/components/RequestForm';
@@ -920,6 +921,8 @@ export default function ApprovalsPage() {
           );
         })}
       </div>
+
+      <CancellationAsks scope="admin" />
 
       {showExtensions && (
         <Card className="border-warning/40">
