@@ -18,12 +18,17 @@
     document.documentElement.dataset.theme = 'light';
   }
 
-  // Phones open the desktop layout, as a browser's "Desktop site" does: the
-  // page is laid out 1280px wide and starts zoomed out to fit. Unless this
-  // browser chose the phone layout (the switch is in the menu; see
-  // src/lib/viewMode.ts, which owns the key and the width).
+  // Phones and tablets open the desktop layout, as a browser's "Desktop site"
+  // does: the page is laid out 1280px wide and starts zoomed out to fit. Unless
+  // this browser chose the phone layout (the switch is in the menu; see
+  // src/lib/viewMode.ts, which owns the key and the same test). Any touch
+  // screen under 1024px on its short side counts - that is where the
+  // responsive layout would otherwise swap the sidebar for a bottom bar.
   try {
-    var phone = Math.min(screen.width, screen.height) < 768;
+    var touch =
+      (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ||
+      navigator.maxTouchPoints > 0;
+    var phone = touch && Math.min(screen.width, screen.height) < 1024;
     if (phone && localStorage.getItem('sriyatra.view') !== 'mobile') {
       document
         .querySelector('meta[name="viewport"]')

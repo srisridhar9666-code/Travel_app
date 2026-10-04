@@ -4,9 +4,15 @@
  */
 const KEY = 'sriyatra.view';
 
-/** A phone, by its smaller screen side. Tablets keep the responsive layout. */
+/** A phone or tablet: a touch screen narrower than 1024px on its short side,
+ *  where the responsive layout would drop the sidebar for a bottom bar. These
+ *  open the desktop layout by default. Mirrors public/boot.js. A desktop or
+ *  laptop browser ignores the viewport tag, so it is never affected. */
 export function isPhone(): boolean {
-  return Math.min(window.screen.width, window.screen.height) < 768;
+  const touch =
+    (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) ||
+    navigator.maxTouchPoints > 0;
+  return touch && Math.min(window.screen.width, window.screen.height) < 1024;
 }
 
 export function viewMode(): 'desktop' | 'mobile' {
