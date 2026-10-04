@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Scope of Work v2 - Sriyatra</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+  :root { --ink: #10131a; --muted: #4b5563; --line: #d9dee7; --brand: #0b3fa8; --soft: #eef4ff; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", "Inter", "DejaVu Sans", Arial, sans-serif; color: var(--ink); font-size: 10.2pt; line-height: 1.45; margin: 0; }
+  header.cover { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid var(--brand); padding-bottom: 10px; margin-bottom: 14px; }
+  header.cover .brand { display: flex; align-items: center; gap: 10px; }
+  header.cover .brand img.mark { height: 46px; }
+  header.cover .brand img.word { height: 40px; }
+  header.cover .company { text-align: right; font-size: 8.5pt; color: var(--muted); }
+  header.cover .company img { height: 44px; display: block; margin-left: auto; margin-bottom: 2px; }
+  h1 { font-size: 18pt; margin: 4px 0 2px; color: var(--ink); }
+  .subtitle { color: var(--muted); margin: 0 0 10px; }
+  .meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; background: var(--soft); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 8.8pt; margin-bottom: 12px; }
+  .meta b { display: block; font-size: 7.6pt; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  h2 { font-size: 12.5pt; color: var(--brand); margin: 16px 0 6px; padding-top: 4px; border-top: 1px solid var(--line); break-after: avoid; }
+  h3 { font-size: 10.6pt; margin: 10px 0 4px; break-after: avoid; }
+  p { margin: 4px 0 6px; }
+  ul { margin: 2px 0 6px 0; padding-left: 16px; }
+  li { margin: 2px 0; }
+  li ul { margin-top: 2px; }
+  .new { display: inline-block; font-size: 7.2pt; font-weight: 700; color: #0f6a34; background: #e6f6ec; border-radius: 3px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; letter-spacing: .03em; }
+  .changed { display: inline-block; font-size: 7.2pt; font-weight: 700; color: #8a4b00; background: #fff2dc; border-radius: 3px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; letter-spacing: .03em; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 8.9pt; break-inside: auto; }
+  th, td { border: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { background: var(--soft); font-weight: 700; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  .note { font-size: 8.8pt; color: var(--muted); }
+  .two { columns: 2; column-gap: 18px; }
+  .two li { break-inside: avoid; }
+  footer.sign { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 8px; font-size: 8.8pt; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header class="cover">
+  <div class="brand">
+    <img class="mark" src="../../web/public/brand/mark.png" alt="" />
+    <img class="word" src="../../web/public/brand/wordmark-light.png" alt="Sriyatra - Your Travel Desk" />
+  </div>
+  <div class="company">
+    <img src="../../web/public/brand/company-logo-light.png" alt="DesignBoxed" />
+    A product of DesignBoxed Innovations Pvt. Ltd.
+  </div>
+</header>
+
+<h1>Scope of Work (SOW): Field Logistics &amp; Travel Management System</h1>
+<p class="subtitle">Sriyatra - Your Travel Desk &middot; Version 2.0, updated to match the application as delivered</p>
+
+<div class="meta">
+  <div><b>Version</b>2.0</div>
+  <div><b>Date</b>October 2026</div>
+  <div><b>Supersedes</b>SOW v1 and the SOW Addendum</div>
+  <div><b>Prepared by</b>Sridhar, DesignBoxed</div>
+</div>
+
+<p>This version keeps the seven areas of the original SOW and adds what was agreed and built since: a team hierarchy with
+two-level approval, richer cab handling, approved cancellations, booking details, vendors and invoices, and notifications.
+Items marked <span class="new">NEW</span> were not in v1; <span class="changed">CHANGED</span> marks a v1 item whose
+behaviour was refined. A summary of differences is in section 12.</p>
+
+<h2>1. System Overview &amp; Authentication</h2>
+<p>A web platform for requesting, approving and fulfilling travel, local cabs and hotel stays for field teams (about 100
+ground staff), run by a small admin team (about 10), with team managers in between.</p>
+<h3>Roles and access <span class="changed">CHANGED</span></h3>
+<table>
+  <thead><tr><th style="width:17%">Role</th><th>What they can do</th></tr></thead>
+  <tbody>
+  <tr><td>Ground staff</td><td>Raise and track their own travel, cab and hotel requests; tag colleagues; ask to cancel or extend; see their bookings, travel history and notifications. May report to one manager.</td></tr>
+  <tr><td>Manager <span class="new">NEW</span></td><td>Everything ground staff do, plus: see their team's people, trips and travel history (never costs); recommend or not recommend each team request with a comment; approve or reject a team member's ask to cancel; ask an admin to add, edit or remove team members; create and edit campaigns.</td></tr>
+  <tr><td>Admin</td><td>Run the travel desk: final decisions on requests, bookings, costs, people (Team), departments, campaigns (including archive and delete), vendors, invoices (create, edit, submit), reports and the activity log.</td></tr>
+  <tr><td>Super admin <span class="new">NEW</span></td><td>Everything an admin sees, plus: the only role that approves or rejects vendor invoices, purges expired identity documents, and manages other super admins. Reads but does not create or edit invoices and vendors, so the person who approves an invoice never prepared it.</td></tr>
+</tbody>
+</table>
+<p class="note">Roles are ranked (ground staff &lt; manager &lt; admin &lt; super admin); nobody can grant a role above their own or change
+the account of someone above them. The former "system admin" role was folded into Admin.</p>
+<h3>Sign-in and accounts</h3>
+<ul>
+  <li>No self-registration: an admin creates each account and sends a single-use invitation link (valid 72 hours) by email or copies it to share on WhatsApp/SMS. The person sets their own password.</li>
+  <li>Passwords of at least 10 characters; "Forgot password" sends a reset link valid 2 hours; 5 wrong attempts lock the account for 15 minutes (an admin can unlock); sessions last 8 hours.</li>
+  <li>Each browser tab can hold its own sign-in, so an admin can test as an employee in another tab.</li>
+  <li>Only accounts with status Active can sign in; Deactivated, Left and Deleted accounts are refused with a reason.</li>
+</ul>
+<h3>Look and feel</h3>
+<ul>
+  <li>Light, Dark or System theme, remembered per person, across every screen including the sidebar.</li>
+  <li>Phones and tablets open the full desktop layout by default (zoomed to fit), with a "Switch to phone view" option remembered per browser. <span class="new">NEW</span></li>
+  <li>Sriyatra branding throughout, with the DesignBoxed company credit. Times are shown in India time, 12-hour format.</li>
+</ul>
+
+<h2>2. Campaign &amp; Project Management</h2>
+<ul>
+  <li>Campaign lifecycle: create, edit, pause, complete, archive (hidden from new requests, history kept) and restore; a campaign with no requests can be deleted. Admins have full control; managers can create and edit but not archive or delete. <span class="changed">CHANGED</span></li>
+  <li>Campaign IDs are generated automatically as <b>CMP-YYYY-NNNN</b> and cannot be typed or edited. <span class="new">NEW</span></li>
+  <li>Every request must be tagged to an active campaign; an "Other - not yet listed" choice takes a typed campaign name so work is never blocked. Every request also needs a reason for travel.</li>
+  <li>Campaign-level financials: personnel involved and total travel, cab and hotel spend per campaign (section 8).</li>
+  <li>Departments are maintained by admins on their own screen and picked from a list on Team and My profile. <span class="new">NEW</span></li>
+</ul>
+
+<h2>3. Request Management (Employees)</h2>
+<h3>Request types and fields</h3>
+<ul>
+  <li><b>Flight, train or bus:</b> mode, from and to (state and city picked from a list of Indian places), departure and return date-time.</li>
+  <li><b>Local cab</b> <span class="changed">CHANGED</span>: pickup and drop address with their city, date-time, cab type (<b>No preference</b> by default, <b>Dzire - 4 seats</b> or <b>Ertiga - 7 seats</b>), and trip: <b>Local</b> (within 80 km) or <b>Outstation</b> with an approximate distance (80 to 5,000 km).</li>
+  <li><b>Hotel:</b> city, check-in and check-out dates.</li>
+  <li>For all: campaign, reason for travel, priority (High, Medium, Low), co-travellers, notes.</li>
+</ul>
+<h3>Group requests, editing and conflicts</h3>
+<ul>
+  <li>One employee can raise a request for a group by tagging colleagues (for example one cab for four people).</li>
+  <li>Drafts can be saved; a submitted request stays editable until an admin acts on it, and every edit is recorded in its history.</li>
+  <li>Clash detection checks the requester and every tagged colleague against their existing trips and warns while the form is being filled. A clash does not block the request; an admin who approves over a clash must type a reason, which is logged. <span class="changed">CHANGED</span></li>
+</ul>
+<h3>Room sharing (co-stay)</h3>
+<ul>
+  <li>For a hotel, colleagues of the same gender already staying in that city on those dates are offered as room-share options; the requester may share, ask for a separate room or a different hotel. Different genders are never offered a shared room. An admin confirms each share.</li>
+</ul>
+<h3>Cancelling and extending <span class="new">NEW</span></h3>
+<ul>
+  <li>Before any admin decision, the requester cancels at once with a reason.</li>
+  <li>Once anyone on the trip is approved or booked, Cancel becomes an <b>ask to cancel</b>: the admins and the requester's manager are told, and either may approve (the trip is cancelled; admins are reminded to call off the booking) or keep the trip with a comment the requester reads. Admins can still cancel outright.</li>
+  <li>A booked cab can be <b>extended by a day</b>: the traveller gives a reason, an admin approves (the end time moves one day later) or rejects with a comment; it can be asked again for further days.</li>
+</ul>
+
+<h2>4. Team Hierarchy &amp; Two-Level Approval <span class="new">NEW</span></h2>
+<ul>
+  <li><b>Hierarchy (one level):</b> each ground staff member can report to one manager ("Reports to" on Team). A manager who is demoted or switched off releases their team for reassignment.</li>
+  <li><b>My team (managers):</b> members' details, travel history and trips without costs; asks to add, edit or remove a member go to an admin, who approves or rejects with a comment. Nothing changes until approved, and the manager is told either way.</li>
+  <li><b>Two-level approval:</b> when a team member raises a request, their manager is notified and gives a <b>Recommend</b> or <b>Do not recommend</b> with a comment on Team approvals. The admin sees the manager's response beside each traveller and makes the final decision with a reason. The admin may decide before the manager responds, so an absent manager never blocks travel.</li>
+  <li><b>Manager copied:</b> the decision email to the traveller is sent with their manager in CC, and includes the admin's reason and the manager's recommendation.</li>
+</ul>
+
+<h2>5. Fulfilment &amp; Booking (Admins)</h2>
+<ul>
+  <li><b>Action queue:</b> tabs for Awaiting, Partly approved, Approved, Booked, Expired, Rejected and Cancelled, with live counts; split by type (All, Flight&middot;Train&middot;Bus, Cab, Hotel); filters for priority, "waiting for a manager" and search; a banner for high-priority work; separate cards for asks to cancel and cab extensions; CSV export of any tab.</li>
+  <li><b>Per-person decisions:</b> approve or reject the whole group or individual travellers, one by one or in one action. Every decision needs a reason, which the traveller sees. Booking is a separate step after approval.</li>
+  <li><b>Booking details</b> <span class="changed">CHANGED</span>: marking someone booked records the booking reference (PNR) and what the traveller needs on the day: airline or operator, flight/train/bus number, departure and arrival, seat or berth, or the hotel's name and address, plus notes. For cabs: the cab actually sent (Dzire or Ertiga), vehicle number, driver's name and mobile.</li>
+  <li><b>AI ticket reading:</b> an admin uploads the ticket or voucher (PDF or image); Google Gemini (Vertex AI) reads the PNR, carrier, number, times, hotel and passenger name. The admin reviews and confirms before anything is booked; the extracted details also fill in the booking form automatically. Extraction never books or notifies on its own.</li>
+  <li><b>Costs:</b> recorded per traveller in INR (a shared booking can be split evenly), together with the vendor paid. A worklist shows booked trips that still have no cost.</li>
+  <li><b>Notifications:</b> the traveller is told of every decision in the app and by email, the booking email carries all the booking details, and uploaded tickets are kept with the trip for admins.</li>
+</ul>
+
+<h2>6. Vendors &amp; Invoices <span class="new">NEW</span></h2>
+<ul>
+  <li><b>Vendors:</b> travel agents, cab operators, hotels and others, with contact person, phone, email and GSTIN; switched off rather than deleted.</li>
+  <li><b>Invoices for vendor reconciliation:</b> an admin picks a vendor and a date range; the screen lists every booked trip with a cost paid to that vendor (or with no vendor recorded yet), travelling in the period and not already invoiced, and explains why when nothing is listed. The admin ticks the trips to include.</li>
+  <li>Invoice numbers are generated as <b>INV-YYYY-NNNN</b>; the vendor's own bill number and notes can be added. The total is always calculated from the trips' recorded costs and cannot be typed.</li>
+  <li>An invoice stays editable until approved. It is submitted to the <b>super admin</b>, who approves it or rejects it with a comment (it can then be corrected and resubmitted). Once approved its amounts are frozen, the costs of its trips are locked, and a trip's cost can be billed on only one invoice.</li>
+  <li>Admins and the super admin can download each invoice as CSV or as a printable PDF. Every create, edit, submission, decision and download is in the activity log.</li>
+</ul>
+
+<h2>7. Employee Management &amp; Profiles</h2>
+<ul>
+  <li><b>Team directory:</b> invite, edit and import people (CSV with preview and error checks). Fields: name, work email, app access (role), designation (Executive, Team lead, Manager - a job title only), department, reports-to manager, base state and city, gender (Male/Female, which decides room sharing), employee code and mobile.</li>
+  <li><b>Mobile numbers</b> <span class="changed">CHANGED</span>: 10 digits starting with 6, 7, 8 or 9, stored without a country code, and unique across employees.</li>
+  <li><b>Status:</b> Active, Deactivated, Left (with exit date) or Deleted (restorable); only Active can sign in. Admins see a person's upcoming trips before switching them off.</li>
+  <li><b>My profile:</b> everyone corrects their own name and mobile and changes their password and email (with their password); admins can also set their own department, gender and base.</li>
+  <li><b>Identity documents:</b> Aadhaar, PAN, passport and others are stored with the number encrypted; every time a number is revealed or a scan downloaded it is logged; documents of people who have left are purged 90 days after their exit date.</li>
+  <li><b>Travel history:</b> a timeline per person of every trip, mode, companions and hotel stay, for any period (default the last 90 days). Employees see their own; managers their team's (without costs); admins everyone's with costs.</li>
+</ul>
+
+<h2>8. Dashboard &amp; Reporting</h2>
+<ul>
+  <li><b>Live operations dashboard:</b> staff currently deployed by state and campaign, the queue waiting for decisions, recent and upcoming trips, and alerts (for example when email is not set up), with filters for dates, campaign, person and destination.</li>
+  <li><b>Cost analytics:</b> spend by campaign, location and period, split by travel, cab and hotel, with the uncosted worklist.</li>
+  <li><b>Travel logs:</b> every movement, searchable and exportable to CSV.</li>
+</ul>
+
+<h2>9. Notifications &amp; Reminders <span class="new">NEW</span></h2>
+<ul>
+  <li>In-app notification bell for everyone, plus email through the company Gmail account (an app password, not the account password).</li>
+  <li>Who is told: travellers of every decision and booking (manager in CC); admins of new requests, manager recommendations, asks to cancel, cab extensions and team changes; managers of their team's requests; the super admin of invoices to approve.</li>
+  <li>People can switch off optional categories (bookings, room sharing, reminders, new requests); decisions are always sent.</li>
+  <li>Automatic reminders: travellers two days before a trip; admins about requests waiting more than three days; failed emails are retried.</li>
+  <li>A delivery ledger shows who was told what and whether the email went, with a test-email button. While testing, an allow-list can restrict email to chosen addresses.</li>
+</ul>
+
+<h2>10. System Security &amp; Audit Logging</h2>
+<ul>
+  <li><b>Activity log:</b> every action by every user is recorded - who raised, edited, recommended, approved, rejected (including partial), booked, cancelled, uploaded or viewed an identity document, and every change to people, campaigns, vendors and invoices - with time, reason and before/after values.</li>
+  <li><b>Tamper-evident:</b> each entry is chained to the previous one by a cryptographic hash, and the chain can be verified from the screen; in production the database account is made append-only so entries cannot be edited or deleted. The log is open to admins and the super admin and can be exported to CSV.</li>
+  <li>Every server action checks the user's role and organisation; sign-in and password-reset attempts are rate-limited; secrets live in the server's environment file, never in the code.</li>
+</ul>
+
+<h2>11. Platform &amp; Delivery</h2>
+<div class="two">
+<ul>
+  <li>Web application: React front end, Python FastAPI back end, MySQL 8 database.</li>
+  <li>Works in current browsers on desktop, Android and iPhone/iPad.</li>
+  <li>Packaged with Docker (API and web server); ready for Google Cloud Run with Cloud Storage for uploaded files.</li>
+  <li>Database changes ship as migrations that can safely be re-run after an interruption; the app warns admins if the database or server is out of date.</li>
+  <li>Quality: about 980 automated tests plus a 127-check end-to-end run that builds the system from an empty database.</li>
+  <li>Built ready for more than one company (organisation) without database changes.</li>
+</ul>
+</div>
+<h3>Not in this scope (possible next steps)</h3>
+<ul>
+  <li>WhatsApp or SMS alerts (the notification system is ready for another channel; WhatsApp Business messages are charged per message by Meta).</li>
+  <li>Travel policy limits, budgets per campaign or department, approving from email, calendar files for trips, native mobile apps, and payment or booking-site integrations.</li>
+</ul>
+
+<h2>12. Changes from SOW v1</h2>
+<table>
+  <thead><tr><th style="width:24%">Area</th><th>v1</th><th>v2 (as built)</th></tr></thead>
+  <tbody>
+  <tr><td>Roles</td><td>Ground team and admin team</td><td>Ground staff, Manager, Admin, Super admin, ranked</td></tr>
+  <tr><td>Approval</td><td>Admin approves</td><td>Manager recommends with a comment; admin decides with a reason; manager copied on the email</td></tr>
+  <tr><td>Hierarchy</td><td>Designations for future routing</td><td>Reports-to manager; My team; team changes approved by an admin</td></tr>
+  <tr><td>Cabs</td><td>Local cab request</td><td>Cab type, local/outstation with distance, cab and driver recorded, extend by a day</td></tr>
+  <tr><td>Cancellation</td><td>Not covered</td><td>Immediate before a decision; afterwards an ask approved by an admin or the manager</td></tr>
+  <tr><td>Booking</td><td>Status set to Booked on upload</td><td>Approve, then book with reference and full details; AI extraction prefills, a person confirms</td></tr>
+  <tr><td>Finance</td><td>Campaign cost reports</td><td>Per-traveller costs with vendor; vendor invoices approved by the super admin</td></tr>
+  <tr><td>Campaigns</td><td>Admin CRUD</td><td>Auto IDs (CMP-YYYY-NNNN), statuses, managers create and edit, departments screen</td></tr>
+  <tr><td>Employees</td><td>Directory and ID proofs</td><td>Status lifecycle, CSV import, unique 10-digit mobiles, encrypted ID numbers with 90-day purge</td></tr>
+  <tr><td>Notifications</td><td>Email on booking</td><td>In-app and email for every event, reminders, delivery ledger, opt-outs</td></tr>
+  <tr><td>Audit</td><td>Immutable trail</td><td>Hash-chained log with verification, export and append-only database grants</td></tr>
+  <tr><td>Devices</td><td>Light/Dark mode</td><td>Light/Dark/System; desktop layout by default on phones and tablets</td></tr>
+</tbody>
+</table>
+
+<footer class="sign">
+  Sriyatra - Your Travel Desk &middot; A product of DesignBoxed Innovations Pvt. Ltd. &middot; Created by Sridhar.
+  This document describes the application on branch <i>claude/system-admin-bugs-cleanup-uafi8j</i> as of October 2026.
+</footer>
+</body>
+</html>
