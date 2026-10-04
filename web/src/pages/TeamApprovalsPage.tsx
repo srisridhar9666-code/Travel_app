@@ -9,7 +9,7 @@ import { PriorityBadge } from '@/components/PriorityBadge';
 import { ConflictList } from '@/components/RequestForm';
 import { Badge, Button, Card, EmptyState, Field, PageHeader, Skeleton } from '@/components/ui';
 import { errorMessage, fetchTeamReviews, recommendRequest } from '@/lib/api';
-import { campaignLabel, itinerary } from '@/lib/requests';
+import { cabAsked, campaignLabel, itinerary } from '@/lib/requests';
 import { formatInstant } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
@@ -214,7 +214,10 @@ export default function TeamApprovalsPage() {
                       </div>
                       <p className="mt-1 text-xs text-text-muted">
                         {campaignLabel(request)} · raised by {request.requester_name}
-                        {request.mode && ` · ${TRAVEL_MODE_LABELS[request.mode]}`}
+                        {/* A cab's size and distance, which a manager weighs too. */}
+                        {cabAsked(request)
+                          ? ` · ${cabAsked(request)}`
+                          : request.mode && ` · ${TRAVEL_MODE_LABELS[request.mode]}`}
                         {request.submitted_at && (
                           <span className="hidden sm:inline"> · {formatInstant(request.submitted_at)}</span>
                         )}

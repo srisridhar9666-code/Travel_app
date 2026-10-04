@@ -16,11 +16,15 @@ import {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import {
+  CAB_TYPE_CHOICES,
   DESIGNATION_LABELS,
+  LOCAL_CAB_MAX_KM,
   PRIORITY_LABELS,
   PRIORITY_ORDER,
   REQUEST_TYPE_LABELS,
   TRAVEL_MODE_LABELS,
+  type CabTrip,
+  type CabType,
   type CoStayMatch,
   type Project,
   type RequestConflict,
@@ -51,6 +55,11 @@ interface FormState {
   /** Most cab rides start and end in one city, so the drop's state and city
    *  follow the pickup's unless this is turned off. */
   drop_same_city: boolean;
+  /** A cab's size, and whether it leaves town; outstation needs a distance.
+   *  Kept as typed (a string) so a half-typed number is not lost. */
+  cab_type: CabType;
+  cab_trip: CabTrip;
+  cab_distance_km: string;
   start_at: string;
   end_at: string;
   hotel_city: string;
@@ -75,6 +84,9 @@ const BLANK: FormState = {
   pickup_city: '',
   drop_city: '',
   drop_same_city: true,
+  cab_type: 'NO_PREFERENCE',
+  cab_trip: 'LOCAL',
+  cab_distance_km: '',
   start_at: '',
   end_at: '',
   hotel_city: '',
@@ -105,6 +117,9 @@ function fromRequest(request: TravelRequest): FormState {
       !request.drop_city ||
       (request.drop_city === request.pickup_city &&
         request.destination_state === request.origin_state),
+    cab_type: request.cab_type ?? 'NO_PREFERENCE',
+    cab_trip: request.cab_trip ?? 'LOCAL',
+    cab_distance_km: request.cab_distance_km ? String(request.cab_distance_km) : '',
     // <input type="datetime-local"> wants exactly "YYYY-MM-DDTHH:mm" and
     // silently shows nothing if handed the seconds the API returns.
     start_at: request.start_at ? request.start_at.slice(0, 16) : '',
@@ -152,6 +167,14 @@ function toPayload(form: FormState, isDraft: boolean): RequestPayload {
       drop_city: drop.city || null,
       start_at: form.start_at || null,
       end_at: form.end_at || null,
+      cab_type: form.cab_type,
+      cab_trip: form.cab_trip,
+      // Only outstation asks for a distance; a local cab sends none rather
+      // than one left over from before the trip was switched to local.
+      cab_distance_km:
+        form.cab_trip === 'OUTSTATION' && form.cab_distance_km.trim()
+          ? Number(form.cab_distance_km)
+          : null,
     };
   }
   return {
@@ -192,7 +215,15 @@ function worthChecking(form: FormState): boolean {
   const route = Boolean(form.origin && form.destination && form.start_at);
   if (form.request_type !== 'LOCAL_CAB') return route;
   const drop = dropPlace(form);
-  return route && Boolean(form.origin_state && form.pickup_city && drop.state && drop.city);
+  // An outstation cab without its distance would be refused by the check, and
+  // a refused check would hide any clash warning while the distance is typed.
+  const distance =
+    form.cab_trip !== 'OUTSTATION' || Number(form.cab_distance_km) >= LOCAL_CAB_MAX_KM;
+  return (
+    route &&
+    distance &&
+    Boolean(form.origin_state && form.pickup_city && drop.state && drop.city)
+  );
 }
 
 export function ConflictList({
@@ -633,6 +664,91 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
                     placeholder="RGIA Airport, Terminal 1"
                   />
                 </Field>
+
+                <Field
+                  label="Cab type"
+                  className="sm:col-span-2"
+                  hint="The admin books the closest match the vendor has."
+                >
+                  <div className="grid grid-cols-3 gap-2" role="group" aria-label="Cab type">
+                    {CAB_TYPE_CHOICES.map((choice) => {
+                      const active = form.cab_type === choice.value;
+                      return (
+                        <button
+                          key={choice.value}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => setForm({ ...form, cab_type: choice.value })}
+                          className={cn(
+                            'flex flex-col items-center gap-0.5 rounded-md border px-2 py-2.5 text-center transition-colors',
+                            active
+                              ? 'border-primary bg-surface-sunken text-text'
+                              : 'border-border text-text-muted hover:border-border-strong hover:text-text',
+                          )}
+                        >
+                          <span className={cn('text-xs', active && 'font-medium')}>
+                            {choice.title}
+                          </span>
+                          <span className="text-2xs text-text-subtle">{choice.detail}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
+
+                <Field label="Trip" className="sm:col-span-2">
+                  <div className="grid grid-cols-2 gap-2" role="group" aria-label="Trip">
+                    {(
+                      [
+                        ['LOCAL', 'Local', `Within ${LOCAL_CAB_MAX_KM} km`],
+                        ['OUTSTATION', 'Outstation', `${LOCAL_CAB_MAX_KM} km or more`],
+                      ] as const
+                    ).map(([trip, title, detail]) => {
+                      const active = form.cab_trip === trip;
+                      return (
+                        <button
+                          key={trip}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => setForm({ ...form, cab_trip: trip })}
+                          className={cn(
+                            'flex flex-col items-center gap-0.5 rounded-md border px-2 py-2.5 text-center transition-colors',
+                            active
+                              ? 'border-primary bg-surface-sunken text-text'
+                              : 'border-border text-text-muted hover:border-border-strong hover:text-text',
+                          )}
+                        >
+                          <span className={cn('text-xs', active && 'font-medium')}>{title}</span>
+                          <span className="text-2xs text-text-subtle">{detail}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
+
+                {form.cab_trip === 'OUTSTATION' && (
+                  <Field
+                    label="Approximate distance (km)"
+                    htmlFor="cab_distance_km"
+                    required
+                    className="sm:col-span-2"
+                    hint={`One way, as a map app shows it. Under ${LOCAL_CAB_MAX_KM} km is a local trip.`}
+                  >
+                    <Input
+                      id="cab_distance_km"
+                      type="number"
+                      inputMode="numeric"
+                      required
+                      min={LOCAL_CAB_MAX_KM}
+                      max={5000}
+                      step={1}
+                      value={form.cab_distance_km}
+                      onChange={(e) => setForm({ ...form, cab_distance_km: e.target.value })}
+                      placeholder="250"
+                      className="sm:max-w-40"
+                    />
+                  </Field>
+                )}
               </>
             ) : (
               <>
@@ -662,7 +778,7 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
                 />
               </>
             )}
-            <Field label="Departs" htmlFor="start_at" required>
+            <Field label={isCab ? 'Pickup time' : 'Departs'} htmlFor="start_at" required>
               <Input
                 id="start_at"
                 type="datetime-local"
@@ -671,7 +787,15 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
                 onChange={(e) => setForm({ ...form, start_at: e.target.value })}
               />
             </Field>
-            <Field label="Arrives" htmlFor="end_at" hint="Optional.">
+            <Field
+              label={isCab ? 'Cab needed until' : 'Arrives'}
+              htmlFor="end_at"
+              hint={
+                isCab
+                  ? 'Optional. If the work runs over after it is booked, you can ask for one more day.'
+                  : 'Optional.'
+              }
+            >
               <Input
                 id="end_at"
                 type="datetime-local"

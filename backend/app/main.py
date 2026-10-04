@@ -50,7 +50,7 @@ logger = logging.getLogger("travel_ops")
 #: older than the page calling it. The usual cause is an API that was not
 #: restarted after an update, which otherwise shows up as "Not Found", "Method
 #: Not Allowed" and pages with missing numbers.
-API_VERSION = "0.11.0"
+API_VERSION = "0.12.0"
 
 
 @cache

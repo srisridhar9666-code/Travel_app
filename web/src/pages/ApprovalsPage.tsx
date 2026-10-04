@@ -2,6 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import {
   AlertTriangle,
   BedDouble,
+  CalendarClock,
   Car,
   CheckSquare,
   ChevronDown,
@@ -20,6 +21,16 @@ import {
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 
+import {
+  CabBookingFields,
+  CabExtensionNote,
+  CabSent,
+  cabDraftChanged,
+  cabDraftComplete,
+  cabDraftEmpty,
+  cabDraftFrom,
+  type CabDraft,
+} from '@/components/CabDetails';
 import { ManagerReview } from '@/components/ManagerReview';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
@@ -39,19 +50,30 @@ import {
 } from '@/components/ui';
 import {
   decideBatch,
+  decideCabExtension,
   errorMessage,
   exportQueue,
   fetchQueueCounts,
   fetchRequests,
   fetchRevisions,
   fetchTicketFile,
+  recordCabBooking,
+  type CabBookingBody,
 } from '@/lib/api';
 import { downloadCsv, slug, type CsvCell } from '@/lib/csv';
 import { openFileTab, showFile } from '@/lib/files';
-import { campaignLabel, itinerary, revisionValue } from '@/lib/requests';
+import {
+  cabAsked,
+  campaignLabel,
+  dayTime,
+  itinerary,
+  revisionField,
+  revisionValue,
+} from '@/lib/requests';
 import { fileStamp, formatInstant, parseInstant, sheetInstant } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import {
+  CAB_TYPE_LABELS,
   DESIGNATION_LABELS,
   PRIORITY_LABELS,
   PRIORITY_ORDER,
@@ -61,6 +83,7 @@ import {
   TRAVELLER_STATUS_LABELS,
   TRAVEL_MODE_LABELS,
   type BatchDecisionItem,
+  type CabType,
   type RequestPriority,
   type RequestType,
   type RequestStatus,
@@ -192,6 +215,16 @@ const COMMON_COLUMNS: ExportColumn[] = [
     header: 'Nights',
     value: (r) => (r.check_in && r.check_out ? daysBetween(r.check_in, r.check_out) : ''),
   },
+  // Empty on flights and hotels, like the hotel columns are on journeys.
+  { header: 'Cab asked for', value: (r) => cabAsked(r) },
+  {
+    header: 'Cab sent',
+    value: (r) => (r.booked_cab_type ? CAB_TYPE_LABELS[r.booked_cab_type] : ''),
+  },
+  { header: 'Vehicle number', value: (r) => r.cab_vehicle_number },
+  { header: 'Driver', value: (r) => r.cab_driver_name },
+  { header: 'Driver phone', value: (r) => r.cab_driver_phone },
+  { header: 'Days extended', value: (r) => (isCab(r) ? r.cab_extended_days : '') },
   { header: 'Reason for travel', value: (r) => r.travel_reason },
   { header: 'Notes', value: (r) => r.notes },
   { header: 'Traveller', value: (_, t) => t.full_name },
@@ -410,7 +443,7 @@ function RevisionHistory({ requestId }: { requestId: number }) {
             <dl className="mt-1 space-y-0.5">
               {Object.entries(revision.changes).map(([field, change]) => (
                 <div key={field} className="flex flex-wrap gap-x-1.5 text-2xs">
-                  <dt className="text-text-subtle">{field.replace(/_/g, ' ')}</dt>
+                  <dt className="text-text-subtle">{revisionField(field)}</dt>
                   <dd className="text-text-muted">
                     <span className="line-through opacity-70">
                       {revisionValue(field, change.from)}
@@ -428,6 +461,23 @@ function RevisionHistory({ requestId }: { requestId: number }) {
       ))}
     </ol>
   );
+}
+
+/** Travellers a cab is carrying: the car can be recorded once there is one. */
+const riding = (traveller: RequestTraveller) =>
+  traveller.status === 'APPROVED' || traveller.status === 'BOOKED';
+
+/** "ts 09  ea 1234" as the server stores a plate: "TS 09 EA 1234". */
+const tidyPlate = (plate: string) => plate.trim().replace(/\s+/g, ' ').toUpperCase();
+
+function cabBody(draft: CabDraft, notify: boolean): CabBookingBody {
+  return {
+    booked_cab_type: draft.booked_cab_type as CabType,
+    vehicle_number: draft.vehicle_number,
+    driver_name: draft.driver_name,
+    driver_phone: draft.driver_phone,
+    notify,
+  };
 }
 
 /** What the admin is about to do, held until the reason (if one is needed) is typed. */
@@ -456,6 +506,14 @@ export default function ApprovalsPage() {
   const [reason, setReason] = useState('');
   const [notify, setNotify] = useState(true);
   const [reference, setReference] = useState('');
+  // The car sent, typed in the booking dialog for a cab or in Cab details.
+  const [cabDraft, setCabDraft] = useState<CabDraft | null>(null);
+  const [cabEditing, setCabEditing] = useState<TravelRequest | null>(null);
+  // An answer to "one more day": the cab, and approve or reject.
+  const [extension, setExtension] = useState<{ request: TravelRequest; approve: boolean } | null>(
+    null,
+  );
+  const [extensionComment, setExtensionComment] = useState('');
 
   // Any change to what is being looked at starts again from page 1; page 3 of
   // a different tab is not a place anyone meant to go.
@@ -568,12 +626,18 @@ export default function ApprovalsPage() {
     // from state in the handlers: onError closes over the render that created
     // the mutation, so a decision fired straight from a button would otherwise
     // see a stale `pending` and never open the override dialog.
-    mutationFn: (vars: {
+    mutationFn: async (vars: {
       request: TravelRequest;
       traveller: RequestTraveller;
       to: TravellerStatus;
       items: BatchDecisionItem[];
-    }) => decideBatch(vars.request.id, vars.items),
+      /** The car sent, typed while booking a cab: saved first, so the
+       *  booking notice can carry it. */
+      cab?: CabBookingBody;
+    }) => {
+      if (vars.cab) await recordCabBooking(vars.request.id, vars.cab);
+      return decideBatch(vars.request.id, vars.items);
+    },
     // This flow has its own error handling below (it can turn a refusal into
     // the override dialog), so the global toast stays out of it.
     meta: { errorToast: false },
@@ -585,6 +649,8 @@ export default function ApprovalsPage() {
       refresh();
     },
     onError: (err, vars) => {
+      // The car may have been saved before the booking was refused.
+      if (vars.cab) refresh();
       const message = errorMessage(err);
       // The server recomputes conflicts at decision time, so an approval that
       // looked clear on screen can still come back needing a reason. Ask for
@@ -604,7 +670,48 @@ export default function ApprovalsPage() {
     setPending(null);
     setReason('');
     setReference('');
+    setCabDraft(null);
   }
+
+  // Cabs whose travellers asked for one more day. They sit on whichever tab
+  // their status puts them, so they are also gathered here, above the tabs.
+  const extensions = useQuery({
+    queryKey: ['queue', 'cab-extensions'],
+    queryFn: () =>
+      fetchRequests({ mine: false, extension: 'pending', sort: 'priority', page_size: 100 }),
+  });
+
+  const answerExtension = useMutation({
+    mutationFn: (vars: { request: TravelRequest; approve: boolean; comment: string }) =>
+      decideCabExtension(vars.request.id, {
+        approve: vars.approve,
+        comment: vars.comment.trim() || null,
+      }),
+    meta: { errorFallback: 'Could not save that answer.' },
+    onSuccess: (_, vars) => {
+      toast.success(vars.approve ? 'Kept one more day — the travellers are told' : 'Extension rejected');
+      setExtension(null);
+      setExtensionComment('');
+      refresh();
+    },
+  });
+
+  const saveCab = useMutation({
+    mutationFn: (vars: { request: TravelRequest; body: CabBookingBody }) =>
+      recordCabBooking(vars.request.id, vars.body),
+    meta: { errorFallback: 'Could not save the cab details.' },
+    onSuccess: () => {
+      toast.success('Cab details saved — everyone riding is told');
+      setCabEditing(null);
+      setCabDraft(null);
+      refresh();
+    },
+  });
+
+  const openExtension = (request: TravelRequest, approve: boolean) => {
+    setExtensionComment('');
+    setExtension({ request, approve });
+  };
 
   /** Start a decision. Everything opens the dialog now: an approval needs a
    *  typed reason just as a rejection does, because an approval with nothing
@@ -613,6 +720,9 @@ export default function ApprovalsPage() {
     setReason('');
     setReference('');
     setNotify(true);
+    // Booking a cab is where the car is usually known, so it is asked for
+    // right there rather than on a second screen.
+    setCabDraft(to === 'BOOKED' && isCab(request) ? cabDraftFrom(request) : null);
     setPending({ request, traveller, to, needsOverride: false });
   };
 
@@ -624,15 +734,30 @@ export default function ApprovalsPage() {
       reason,
       notify_employee: notify,
     };
-    if (pending.to === 'BOOKED') item.booking_reference = reference;
+    const carReady = cabDraft !== null && cabDraftComplete(cabDraft);
+    if (pending.to === 'BOOKED') {
+      // A cab's vehicle number is a fair booking reference when the vendor
+      // gave no other.
+      item.booking_reference =
+        reference.trim() || (carReady ? tidyPlate(cabDraft!.vehicle_number) : reference);
+    }
     // An override is recorded separately from the decision it justifies, so it
     // carries the same sentence rather than replacing it.
     if (pending.needsOverride) item.conflict_override_reason = reason;
+    // The booking notice carries the car, so it is not sent separately - unless
+    // someone else is already riding and must hear about the car too.
+    const othersRiding = pending.request.travellers.some(
+      (t) => t.id !== pending.traveller.id && riding(t),
+    );
     decide.mutate({
       request: pending.request,
       traveller: pending.traveller,
       to: pending.to,
       items: [item],
+      cab:
+        carReady && cabDraftChanged(cabDraft!, pending.request)
+          ? cabBody(cabDraft!, othersRiding)
+          : undefined,
     });
   };
 
@@ -649,6 +774,14 @@ export default function ApprovalsPage() {
   useEffect(() => {
     if (requests.data && page > pages) setPage(pages);
   }, [requests.data, page, pages]);
+
+  // A half-typed car would be lost on save; all of it or none of it.
+  const cabHalfTyped =
+    cabDraft !== null && !cabDraftEmpty(cabDraft) && !cabDraftComplete(cabDraft);
+  const referenceReady =
+    reference.trim().length >= 2 || (cabDraft !== null && cabDraftComplete(cabDraft));
+  const pendingExtensions = extensions.data?.items ?? [];
+  const showExtensions = (kind === '' || kind === 'LOCAL_CAB') && pendingExtensions.length > 0;
 
   const dialogTitle = !pending
     ? ''
@@ -754,10 +887,62 @@ export default function ApprovalsPage() {
             >
               <Icon size={16} />
               {item.label}
+              {item.key === 'LOCAL_CAB' && (countData?.cab_extensions ?? 0) > 0 && (
+                <span
+                  className="rounded-full bg-warning-soft px-1.5 text-2xs font-semibold tabular-nums text-warning"
+                  title="Cabs asking for one more day"
+                >
+                  {countData!.cab_extensions}
+                </span>
+              )}
             </button>
           );
         })}
       </div>
+
+      {showExtensions && (
+        <Card className="border-warning/40">
+          <CardHeader
+            title={`${pendingExtensions.length} ${
+              pendingExtensions.length === 1 ? 'cab asks' : 'cabs ask'
+            } for one more day`}
+            description="Approving keeps the cab a day longer: its end time moves and the travellers are told, their managers copied."
+          />
+          <ul className="divide-y divide-border">
+            {pendingExtensions.map((request) => (
+              <li key={request.id} className="flex flex-wrap items-start gap-3 px-5 py-3.5">
+                <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md bg-warning-soft text-warning">
+                  <CalendarClock size={15} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{itinerary(request)}</p>
+                  <p className="mt-0.5 text-xs text-text-muted">
+                    {request.cab_extension_requested_by_name ?? request.requester_name}:{' '}
+                    {request.cab_extension_reason}
+                  </p>
+                  <p className="mt-0.5 text-2xs text-text-subtle">
+                    {request.end_at && `Booked until ${dayTime(request.end_at)}`}
+                    {request.cab_extended_days > 0 &&
+                      ` · already extended ${request.cab_extended_days} ${
+                        request.cab_extended_days === 1 ? 'day' : 'days'
+                      }`}
+                    {request.cab_vehicle_number &&
+                      ` · ${request.booked_cab_type ? CAB_TYPE_LABELS[request.booked_cab_type] : 'Cab'} ${request.cab_vehicle_number}`}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-1.5">
+                  <Button size="sm" onClick={() => openExtension(request, true)}>
+                    Approve
+                  </Button>
+                  <Button size="sm" variant="danger" onClick={() => openExtension(request, false)}>
+                    Reject
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <Card>
         <div className="flex flex-wrap gap-1 border-b border-border px-3 py-2">
@@ -906,10 +1091,31 @@ export default function ApprovalsPage() {
                       </div>
                       <p className="mt-1 text-xs text-text-muted">
                         {campaignLabel(request)} · raised by {request.requester_name}
-                        {request.mode && ` · ${TRAVEL_MODE_LABELS[request.mode]}`}
+                        {/* For a cab, the size and distance the vendor is
+                            chosen by, in place of the bare "Cab". */}
+                        {cabAsked(request) ? (
+                          <span className="font-medium text-text"> · {cabAsked(request)}</span>
+                        ) : (
+                          request.mode && ` · ${TRAVEL_MODE_LABELS[request.mode]}`
+                        )}
                         {request.notes && ` · ${request.notes}`}
                       </p>
                     </div>
+
+                    {isCab(request) && !request.is_cancelled && request.travellers.some(riding) && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        title="The car sent, its number and driver"
+                        onClick={() => {
+                          setCabDraft(cabDraftFrom(request));
+                          setCabEditing(request);
+                        }}
+                      >
+                        <Car size={13} />
+                        {request.cab_vehicle_number ? 'Change cab' : 'Cab details'}
+                      </Button>
+                    )}
 
                     <Button
                       variant="ghost"
@@ -1016,6 +1222,34 @@ export default function ApprovalsPage() {
                     ))}
                   </div>
 
+                  {isCab(request) && (
+                    <div className="mt-3 space-y-2 empty:hidden">
+                      <CabSent
+                        request={request}
+                        title={
+                          request.cab_booked_by_name
+                            ? `Cab sent · recorded by ${request.cab_booked_by_name}`
+                            : 'Cab sent'
+                        }
+                      />
+                      <CabExtensionNote request={request} />
+                      {request.cab_extension_status === 'PENDING' && !request.is_cancelled && (
+                        <div className="flex flex-wrap gap-1.5">
+                          <Button size="sm" onClick={() => openExtension(request, true)}>
+                            Approve one more day
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={() => openExtension(request, false)}
+                          >
+                            Reject
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {isOpen && (
                     <div className="mt-3 space-y-3">
                       {/* Tickets sit beside the edit history: both are things an
@@ -1107,7 +1341,7 @@ export default function ApprovalsPage() {
               loading={decide.isPending}
               disabled={
                 reason.trim().length < 3 ||
-                (pending?.to === 'BOOKED' && reference.trim().length < 2)
+                (pending?.to === 'BOOKED' && (!referenceReady || cabHalfTyped))
               }
               onClick={confirm}
             >
@@ -1150,18 +1384,39 @@ export default function ApprovalsPage() {
             </div>
           )}
 
+          {pending?.to === 'BOOKED' && cabDraft && (
+            <div className="space-y-2 rounded-md border border-border px-3 py-3">
+              <p className="text-xs font-medium">The car sent</p>
+              <CabBookingFields
+                draft={cabDraft}
+                onChange={setCabDraft}
+                idPrefix="book-cab"
+                asked={cabAsked(pending.request)}
+              />
+              <p className={cn('text-2xs', cabHalfTyped ? 'text-danger' : 'text-text-subtle')}>
+                {cabHalfTyped
+                  ? 'Fill in all four, or clear them and add the car later from Cab details.'
+                  : 'Optional now - you can add or change it later from Cab details. The traveller’s booking notice includes it.'}
+              </p>
+            </div>
+          )}
+
           {pending?.to === 'BOOKED' && (
             <Field
-              label="Ticket or booking reference"
+              label={cabDraft ? 'Booking reference' : 'Ticket or booking reference'}
               htmlFor="reference"
-              required
-              hint="PNR, ticket number or hotel confirmation."
+              required={!cabDraft}
+              hint={
+                cabDraft
+                  ? 'The vendor’s booking ID. Leave blank to use the vehicle number.'
+                  : 'PNR, ticket number or hotel confirmation.'
+              }
             >
               <Input
                 id="reference"
                 value={reference}
                 onChange={(e) => setReference(e.target.value)}
-                placeholder="6E-4412 / PNR QK8T2M"
+                placeholder={cabDraft ? 'VND-20431' : '6E-4412 / PNR QK8T2M'}
               />
             </Field>
           )}
@@ -1213,6 +1468,120 @@ export default function ApprovalsPage() {
             </span>
           </label>
         </div>
+      </Modal>
+
+      <Modal
+        open={cabEditing !== null}
+        onClose={() => {
+          setCabEditing(null);
+          setCabDraft(null);
+        }}
+        title={cabEditing?.cab_vehicle_number ? 'Change the cab' : 'Record the cab sent'}
+        description="Everyone approved or booked on this cab is told, with their manager copied. Every change is kept in the activity log."
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setCabEditing(null);
+                setCabDraft(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              loading={saveCab.isPending}
+              disabled={
+                !cabEditing ||
+                !cabDraft ||
+                !cabDraftComplete(cabDraft) ||
+                !cabDraftChanged(cabDraft, cabEditing)
+              }
+              onClick={() =>
+                cabEditing &&
+                cabDraft &&
+                saveCab.mutate({ request: cabEditing, body: cabBody(cabDraft, true) })
+              }
+            >
+              Save and tell them
+            </Button>
+          </>
+        }
+      >
+        {cabEditing && cabDraft && (
+          <div className="space-y-3">
+            <p className="text-xs text-text-muted">{itinerary(cabEditing)}</p>
+            <CabBookingFields
+              draft={cabDraft}
+              onChange={setCabDraft}
+              idPrefix="cab"
+              asked={cabAsked(cabEditing)}
+            />
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={extension !== null}
+        onClose={() => setExtension(null)}
+        title={extension?.approve ? 'Keep the cab one more day' : 'Reject one more day'}
+        description={
+          extension?.approve
+            ? extension.request.end_at
+              ? `The cab is booked until ${dayTime(extension.request.end_at)}; approving moves it a day later. The travellers are told, their managers copied.`
+              : 'The travellers are told, their managers copied.'
+            : 'The cab stays booked as it is. The travellers are shown your comment.'
+        }
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setExtension(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant={extension?.approve ? 'primary' : 'danger'}
+              loading={answerExtension.isPending}
+              disabled={!extension?.approve && extensionComment.trim().length < 3}
+              onClick={() =>
+                extension &&
+                answerExtension.mutate({ ...extension, comment: extensionComment })
+              }
+            >
+              {extension?.approve ? 'Approve one more day' : 'Reject'}
+            </Button>
+          </>
+        }
+      >
+        {extension && (
+          <div className="space-y-3">
+            <div className="rounded-md bg-surface-sunken px-3 py-2 text-xs">
+              <p className="font-medium">{itinerary(extension.request)}</p>
+              <p className="mt-0.5 text-text-muted">
+                {extension.request.cab_extension_requested_by_name ?? extension.request.requester_name}
+                : {extension.request.cab_extension_reason}
+              </p>
+            </div>
+            <Field
+              label="Comment"
+              htmlFor="extension-comment"
+              required={!extension.approve}
+              hint={
+                extension.approve
+                  ? 'Optional. Shown to the travellers.'
+                  : 'Required. Shown to the travellers.'
+              }
+            >
+              <Input
+                id="extension-comment"
+                value={extensionComment}
+                maxLength={500}
+                onChange={(e) => setExtensionComment(e.target.value)}
+                placeholder={
+                  extension.approve ? 'Vendor confirmed the car' : 'The vendor has no car free that day'
+                }
+              />
+            </Field>
+          </div>
+        )}
       </Modal>
     </div>
   );

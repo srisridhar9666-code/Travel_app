@@ -40,6 +40,7 @@ from app.models.base import naive_utcnow
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
 from app.services import audit, conflicts, notifications, recommendations
+from app.services.requests import RIDING
 
 #: Which audit action records which decision.
 _ACTION = {
@@ -148,16 +149,31 @@ def _notify(
     )
     kind_of_trip = str(request.request_type).replace("_", " ").lower()
     short = f"Your {kind_of_trip} request for {where} was {_VERB[target]}."
+    # A cab's booking is its car and driver. When an admin has recorded them,
+    # the decision carries them, so the traveller is not left waiting for a
+    # second message to find out what to look for at the kerb. Before the
+    # reason, which is typed without a full stop.
+    is_cab = request.request_type is RequestType.LOCAL_CAB
+    car = request.cab_sent_label if is_cab and target in RIDING else None
+    if car:
+        short += f" Your cab: {car}."
     if reason:
         short += f" Reason: {reason}"
 
     greeting = person.full_name.split()[0] if person.full_name else "there"
     detail = [f"Hello {greeting},", "", short]
+    if is_cab and request.cab_asked_label:
+        detail += ["", f"Cab asked for: {request.cab_asked_label}"]
     advice = recommendations.describe(traveller)
     if advice:
         detail += ["", f"Your manager's recommendation: {advice}"]
-    if target is TravellerStatus.APPROVED:
-        detail += ["", "Tickets will follow once they are booked."]
+    if target is TravellerStatus.APPROVED and not car:
+        detail += [
+            "",
+            "The cab's details will follow once it is booked."
+            if is_cab
+            else "Tickets will follow once they are booked.",
+        ]
     if request.project:
         detail += ["", f"Campaign: {request.project.code} - {request.project.name}"]
     if manager is not None:

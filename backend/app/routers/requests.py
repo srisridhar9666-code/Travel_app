@@ -27,6 +27,7 @@ from app.core.deps import AdminOrManager, AdminUser, CurrentUser, DbSession, Man
 from app.core.enums import (
     PRIORITY_RANK,
     AuditAction,
+    CabExtensionStatus,
     RequestPriority,
     RequestStatus,
     RequestType,
@@ -38,6 +39,9 @@ from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
 from app.schemas.request import (
     BatchDecisionPayload,
+    CabBookingPayload,
+    CabExtensionAsk,
+    CabExtensionDecision,
     CancelPayload,
     ColleagueRead,
     DecisionPayload,
@@ -53,7 +57,7 @@ from app.schemas.request import (
     RevisionRead,
     RoomSharingChoicePayload,
 )
-from app.services import audit, costay, decisions, notifications, recommendations
+from app.services import audit, cabs, costay, decisions, notifications, recommendations
 from app.services import requests as svc
 
 router = APIRouter(prefix="/requests", tags=["requests"])
@@ -66,6 +70,15 @@ WAITING = frozenset({RequestStatus.SUBMITTED, RequestStatus.PARTIALLY_APPROVED})
 #: has a manager who has not recommended yet. "reviewed": a manager has given
 #: their view. For a manager both mean their own team only.
 Review = Literal["waiting", "reviewed"]
+
+#: Cabs whose travellers asked to keep them one more day and are still waiting
+#: on an admin. They sit on whichever tab their travellers' status puts them,
+#: so the queue lists them on their own as well.
+Extension = Literal["pending"]
+
+
+def _extension_pending(row: TravelRequest) -> bool:
+    return row.cab_extension_status is CabExtensionStatus.PENDING and not row.is_cancelled
 
 
 def _load(db: Session, request_id: int, user: User) -> TravelRequest:
@@ -161,6 +174,7 @@ def _matching(
     priority: RequestPriority | None,
     sort: str,
     review: Review | None = None,
+    extension: Extension | None = None,
 ) -> list[TravelRequest]:
     """Every request the caller may see that matches the filters, in order.
 
@@ -190,6 +204,11 @@ def _matching(
 
     if request_type is not None:
         filters.append(TravelRequest.request_type == request_type)
+    if extension == "pending":
+        filters += [
+            TravelRequest.cab_extension_status == CabExtensionStatus.PENDING,
+            TravelRequest.is_cancelled.is_(False),
+        ]
     if project_id is not None:
         filters.append(TravelRequest.project_id == project_id)
     if priority is not None:
@@ -251,6 +270,9 @@ def list_requests(
     priority: Annotated[RequestPriority | None, Query()] = None,
     sort: Annotated[Literal["newest", "priority"], Query()] = "newest",
     review: Annotated[Review | None, Query(description="Two-level approval filter")] = None,
+    extension: Annotated[
+        Extension | None, Query(description="Cabs waiting on a one-more-day decision")
+    ] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> RequestListResponse:
@@ -262,7 +284,8 @@ def list_requests(
 
     `review=waiting` is a manager's "needs my recommendation" list (and, for
     an admin, every request still waiting on a manager); `review=reviewed` is
-    what a manager has already given their view on.
+    what a manager has already given their view on. `extension=pending` is
+    every cab still waiting for an admin to say whether it is kept a day longer.
     """
     rows = _matching(
         db,
@@ -275,6 +298,7 @@ def list_requests(
         priority=priority,
         sort=sort,
         review=review,
+        extension=extension,
     )
 
     total = len(rows)
@@ -411,10 +435,13 @@ def queue_counts(
     conflicted = 0
     edited = 0
     on_manager = 0
+    extensions = 0
     urgent = {s: 0 for s in WAITING}
     for row in rows:
         row_status = svc.status_of(row)
         tally[row_status] += 1
+        if _extension_pending(row):
+            extensions += 1
         if row.priority is RequestPriority.HIGH and row_status in WAITING:
             urgent[row_status] += 1
         if row_status in WAITING and recommendations.waits_on(row, actor):
@@ -442,6 +469,7 @@ def queue_counts(
         high_priority_awaiting=urgent[RequestStatus.SUBMITTED],
         high_priority_partial=urgent[RequestStatus.PARTIALLY_APPROVED],
         awaiting_manager=on_manager,
+        cab_extensions=extensions,
     )
 
 
@@ -974,3 +1002,85 @@ def recommend(
     background.add_task(notifications.deliver_queued, queued)
     db.refresh(row)
     return _read_and_release(db, row, manager)
+
+
+# ---------------------------------------------------------------------------
+# Cabs: the car that was sent, and one more day.
+# ---------------------------------------------------------------------------
+
+
+@router.put("/{request_id}/cab-booking", response_model=RequestRead)
+def record_cab(
+    request_id: int,
+    payload: CabBookingPayload,
+    actor: AdminUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """Record the car sent for a cab - size, number plate, driver - or change it.
+
+    Allowed once someone on the cab is approved or booked, and as often as the
+    vendor swaps cars; each change is logged with what it replaced, and
+    everyone riding is told, their manager copied. Nobody's status moves:
+    booking a traveller is still a decision with a booking reference.
+    """
+    row = _load(db, request_id, actor)
+    queued = cabs.record_booking(
+        db, request=row, admin=actor, payload=payload, http_request=http_request
+    )
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, actor)
+
+
+@router.post("/{request_id}/cab-extension", response_model=RequestRead)
+def ask_cab_extension(
+    request_id: int,
+    payload: CabExtensionAsk,
+    user: CurrentUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """Ask to keep a decided cab one more day, with a reason.
+
+    For the requester or anyone riding in it, once an admin has acted - before
+    that the requester simply edits the end time. One ask at a time; an admin
+    approves or rejects it.
+    """
+    row = _load(db, request_id, user)
+    queued = cabs.ask_extension(
+        db, request=row, asker=user, reason=payload.reason, http_request=http_request
+    )
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, user)
+
+
+@router.post("/{request_id}/cab-extension/decide", response_model=RequestRead)
+def decide_cab_extension(
+    request_id: int,
+    payload: CabExtensionDecision,
+    actor: AdminUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """Approve one more day - the cab's end time moves a day later - or reject
+    it with a comment. The travellers are told, their managers copied."""
+    row = _load(db, request_id, actor)
+    queued = cabs.decide_extension(
+        db,
+        request=row,
+        admin=actor,
+        approve=payload.approve,
+        comment=payload.comment,
+        http_request=http_request,
+    )
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, actor)

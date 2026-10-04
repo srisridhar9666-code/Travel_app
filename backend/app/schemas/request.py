@@ -7,6 +7,11 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.enums import (
+    LOCAL_CAB_MAX_KM,
+    MAX_CAB_DISTANCE_KM,
+    CabExtensionStatus,
+    CabTrip,
+    CabType,
     ConflictKind,
     ConflictSeverity,
     Designation,
@@ -19,6 +24,7 @@ from app.core.enums import (
     TravellerStatus,
 )
 from app.schemas.common import UTCInstant
+from app.schemas.user import PersonName, PhoneNumber
 
 #: Which fields each request type actually uses. Also the list the revision diff
 #: is taken over, so a field absent here is a field no one can amend.
@@ -40,6 +46,9 @@ EDITABLE_FIELDS = (
     "hotel_city",
     "check_in",
     "check_out",
+    "cab_type",
+    "cab_trip",
+    "cab_distance_km",
     "notes",
 )
 
@@ -75,6 +84,12 @@ class RequestBody(BaseModel):
     check_in: date | None = None
     check_out: date | None = None
 
+    #: A cab's size, local or outstation, and - outstation - roughly how far.
+    #: Defaulted for a cab and cleared for anything else by the validator.
+    cab_type: CabType | None = None
+    cab_trip: CabTrip | None = None
+    cab_distance_km: int | None = None
+
     #: Mandatory. An admin deciding on a trip needs to know what it is for,
     #: and "because I was asked to" in a free-text note was not reliably there.
     travel_reason: str = Field(min_length=5, max_length=500)
@@ -106,6 +121,7 @@ class RequestBody(BaseModel):
             self.origin_state = self.destination_state = None
             self.pickup_city = self.drop_city = None
             self.start_at = self.end_at = None
+            self.cab_type = self.cab_trip = self.cab_distance_km = None
         else:
             if not self.origin:
                 raise ValueError("A travel request needs a pickup or origin.")
@@ -121,10 +137,12 @@ class RequestBody(BaseModel):
                     raise ValueError("Pick the state and city the cab picks up in.")
                 if not (self.destination_state and self.drop_city):
                     raise ValueError("Pick the state and city the cab drops in.")
+                self._check_cab_distance()
             else:
                 if self.mode is None or self.mode is TravelMode.CAB:
                     raise ValueError("Choose flight, train or bus for a long-distance request.")
                 self.pickup_city = self.drop_city = None
+                self.cab_type = self.cab_trip = self.cab_distance_km = None
             self.hotel_city = self.hotel_state = None
             self.check_in = self.check_out = None
 
@@ -135,6 +153,30 @@ class RequestBody(BaseModel):
             if value is not None and value.tzinfo is not None:
                 object.__setattr__(self, field, value.replace(tzinfo=None))
         return self
+
+    def _check_cab_distance(self) -> None:
+        """Local is within LOCAL_CAB_MAX_KM and needs no distance; outstation
+        needs the requester's estimate, so the admin can quote it to a vendor.
+
+        An unset size or trip means the common case - any car, in town - so an
+        older client that never sends them still raises a valid cab.
+        """
+        self.cab_type = self.cab_type or CabType.NO_PREFERENCE
+        self.cab_trip = self.cab_trip or CabTrip.LOCAL
+        km = self.cab_distance_km
+        if km is not None and km < 1:
+            raise ValueError("Enter the distance in whole kilometres, 1 or more.")
+        if self.cab_trip is CabTrip.LOCAL:
+            if km is not None and km >= LOCAL_CAB_MAX_KM:
+                raise ValueError(
+                    f"A local cab stays within {LOCAL_CAB_MAX_KM} km. "
+                    "Choose Outstation for a longer trip."
+                )
+        elif km is None or not LOCAL_CAB_MAX_KM <= km <= MAX_CAB_DISTANCE_KM:
+            raise ValueError(
+                f"An outstation cab needs the approximate distance: {LOCAL_CAB_MAX_KM} to "
+                f"{MAX_CAB_DISTANCE_KM} km. Under {LOCAL_CAB_MAX_KM} km, choose Local."
+            )
 
 
 class RequestCreate(RequestBody):
@@ -270,6 +312,31 @@ class RequestRead(BaseModel):
     hotel_city: str | None = None
     check_in: date | None = None
     check_out: date | None = None
+
+    # --- cab: asked for, sent, and extended. Null on anything but a cab. -----
+    cab_type: CabType | None = None
+    cab_trip: CabTrip | None = None
+    cab_distance_km: int | None = None
+    #: The car an admin recorded as sent, with its number and driver. Shown to
+    #: everyone who can see the request: the travellers need it to find the car.
+    booked_cab_type: CabType | None = None
+    cab_vehicle_number: str | None = None
+    cab_driver_name: str | None = None
+    cab_driver_phone: str | None = None
+    cab_booked_by_name: str | None = None
+    cab_booked_at: UTCInstant | None = None
+    cab_extension_status: CabExtensionStatus | None = None
+    cab_extension_reason: str | None = None
+    cab_extension_requested_by_name: str | None = None
+    cab_extension_requested_at: UTCInstant | None = None
+    cab_extension_decided_by_name: str | None = None
+    cab_extension_decided_at: UTCInstant | None = None
+    cab_extension_comment: str | None = None
+    #: How many extra days have been approved; end_at already includes them.
+    cab_extended_days: int = 0
+    #: Whether the person reading may ask for one more day right now. Worked
+    #: out here so the screen and POST /cab-extension apply the same rule.
+    can_extend_cab: bool = False
 
     travel_reason: str | None = None
     priority: RequestPriority = RequestPriority.MEDIUM
@@ -430,3 +497,80 @@ class QueueCounts(BaseModel):
     #: who has not recommended yet. For a manager, only their own team counts -
     #: so it is the number waiting on them.
     awaiting_manager: int = 0
+    #: Cabs whose travellers asked to keep them one more day, still waiting on
+    #: an admin. For a manager, only their own team's cabs.
+    cab_extensions: int = 0
+
+
+# --- Cabs: the car sent, and one more day ---------------------------------
+
+
+def _tidy_text(value: str) -> str:
+    return " ".join(value.split())
+
+
+class CabBookingPayload(BaseModel):
+    """The car an admin actually sent: which size, its number plate and driver.
+
+    `notify` is for the screen that records the cab while marking the
+    traveller booked: the booking notice then carries these details, so one
+    message reaches them rather than two.
+    """
+
+    booked_cab_type: CabType
+    vehicle_number: str = Field(min_length=4, max_length=20)
+    driver_name: PersonName = Field(min_length=2, max_length=120)
+    driver_phone: PhoneNumber = Field(max_length=32)
+    notify: bool = True
+
+    @field_validator("booked_cab_type")
+    @classmethod
+    def _a_real_car(cls, value: CabType) -> CabType:
+        if value is CabType.NO_PREFERENCE:
+            raise ValueError("Choose the cab that was sent: Dzire or Ertiga.")
+        return value
+
+    @field_validator("vehicle_number")
+    @classmethod
+    def _plate(cls, value: str) -> str:
+        """Upper case with single spaces - "ts 09  ea 1234" is "TS 09 EA 1234" -
+        and at least four letters or digits, so a stray dash is not a plate."""
+        cleaned = _tidy_text(value).upper()
+        if sum(ch.isalnum() for ch in cleaned) < 4:
+            raise ValueError("Enter the vehicle number as it is on the plate, e.g. TS 09 EA 1234.")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _phone_is_required(self):
+        if not self.driver_phone:
+            raise ValueError("Enter the driver's phone number.")
+        return self
+
+
+class CabExtensionAsk(BaseModel):
+    """A traveller asking to keep their cab one more day, and why."""
+
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def _tidy_reason(cls, value: str) -> str:
+        cleaned = _tidy_text(value)
+        if len(cleaned) < 3:
+            raise ValueError("Say why the cab is needed for another day.")
+        return cleaned
+
+
+class CabExtensionDecision(BaseModel):
+    """An admin's answer to an extension. A rejection needs a comment: the
+    traveller is shown it, and "no" with no reason helps nobody plan."""
+
+    approve: bool
+    comment: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _reject_needs_comment(self):
+        self.comment = _tidy_text(self.comment or "") or None
+        if not self.approve and (self.comment is None or len(self.comment) < 3):
+            raise ValueError("Add a comment saying why - the traveller is shown it.")
+        return self

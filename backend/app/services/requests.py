@@ -30,6 +30,7 @@ from app.core import clock
 from app.core.enums import (
     ADMIN_ROLES,
     AuditAction,
+    CabExtensionStatus,
     NotificationChannel,
     NotificationStatus,
     RequestPriority,
@@ -82,6 +83,9 @@ FIELD_LABELS = {
     "hotel_city": "city",
     "check_in": "check-in",
     "check_out": "check-out",
+    "cab_type": "cab type",
+    "cab_trip": "local or outstation",
+    "cab_distance_km": "distance (km)",
     "notes": "notes",
     "travellers": "travellers",
 }
@@ -184,6 +188,52 @@ def assert_editable(request: TravelRequest) -> None:
             "Cancel it and raise a new one if the plan has changed."
         )
     raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
+#: Travellers a booked cab is actually carrying: approved, or booked. Only
+#: they are told about the car, and only while someone is can it be extended.
+RIDING = frozenset({TravellerStatus.APPROVED, TravellerStatus.BOOKED})
+
+
+def extension_refusal(request: TravelRequest, user: User | None) -> tuple[int, str] | None:
+    """Why this person may not ask to keep this cab one more day, or None if
+    they may.
+
+    The one statement of the rule: POST /cab-extension raises what it returns,
+    and the read model's `can_extend_cab` is "this returned None", so the
+    button is only offered when the ask would be accepted.
+    """
+    if request.request_type is not RequestType.LOCAL_CAB:
+        return status.HTTP_400_BAD_REQUEST, "Only a cab can be extended by a day."
+    on_it = user is not None and (
+        request.requester_id == user.id or any(t.user_id == user.id for t in request.travellers)
+    )
+    if not on_it:
+        return (
+            status.HTTP_403_FORBIDDEN,
+            "Only the person who raised this cab, or someone riding in it, can ask to extend it.",
+        )
+    if request.is_cancelled:
+        return status.HTTP_409_CONFLICT, "This request has been cancelled."
+    if request_is_editable(request):
+        # Until an admin acts, the requester can simply change the time.
+        return (
+            status.HTTP_409_CONFLICT,
+            "Edit the request's end time instead - it has not been decided yet.",
+        )
+    if request.end_at is None:
+        return (
+            status.HTTP_409_CONFLICT,
+            "This cab has no end time to extend. Raise a new cab request for the extra day.",
+        )
+    if not any(t.status in RIDING for t in request.travellers):
+        return (
+            status.HTTP_409_CONFLICT,
+            "Nobody on this cab is approved, so there is nothing to extend.",
+        )
+    if request.cab_extension_status is CabExtensionStatus.PENDING:
+        return status.HTTP_409_CONFLICT, "An extension is already waiting for an admin."
+    return None
 
 
 def resolve_project(
@@ -434,6 +484,10 @@ def _traveller_read(
     )
 
 
+def _name(person: User | None) -> str | None:
+    return person.full_name if person is not None else None
+
+
 def to_read(
     db: Session,
     request: TravelRequest,
@@ -486,6 +540,27 @@ def to_read(
         hotel_city=request.hotel_city,
         check_in=request.check_in,
         check_out=request.check_out,
+        cab_type=request.cab_type,
+        cab_trip=request.cab_trip,
+        cab_distance_km=request.cab_distance_km,
+        booked_cab_type=request.booked_cab_type,
+        cab_vehicle_number=request.cab_vehicle_number,
+        cab_driver_name=request.cab_driver_name,
+        cab_driver_phone=request.cab_driver_phone,
+        cab_booked_by_name=_name(request.cab_booked_by),
+        cab_booked_at=request.cab_booked_at,
+        cab_extension_status=request.cab_extension_status,
+        cab_extension_reason=request.cab_extension_reason,
+        cab_extension_requested_by_name=_name(request.cab_extension_requested_by),
+        cab_extension_requested_at=request.cab_extension_requested_at,
+        cab_extension_decided_by_name=_name(request.cab_extension_decided_by),
+        cab_extension_decided_at=request.cab_extension_decided_at,
+        cab_extension_comment=request.cab_extension_comment,
+        cab_extended_days=request.cab_extended_days or 0,
+        can_extend_cab=(
+            request.request_type is RequestType.LOCAL_CAB
+            and extension_refusal(request, reader) is None
+        ),
         travel_reason=request.travel_reason,
         priority=request.priority or RequestPriority.MEDIUM,
         origin_state=request.origin_state,
@@ -600,7 +675,10 @@ def trip_summary(request: TravelRequest) -> str:
         return f"Hotel in {where}, {when}"
     kind = "Cab" if request.request_type is RequestType.LOCAL_CAB else str(request.mode or "Travel").title()
     when = request.start_at.strftime("%d %b %Y, %H:%M") if request.start_at else "time to be set"
-    return f"{kind}: {request.route_label(' to ')}, {when}"
+    line = f"{kind}: {request.route_label(' to ')}, {when}"
+    # The vendor is chosen by size and distance, so the admin reads them first.
+    asked = request.cab_asked_label if request.request_type is RequestType.LOCAL_CAB else None
+    return f"{line} ({asked})" if asked else line
 
 
 def notify_admins_of_submission(

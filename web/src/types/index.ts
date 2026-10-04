@@ -396,6 +396,45 @@ export type RoomSharingChoice =
 
 export type ConflictKind = 'OVERLAPPING_TRAVEL' | 'OVERLAPPING_STAY' | 'DUPLICATE_REQUEST';
 
+/** The car a cab asks for, and the one an admin records as sent. Named by
+ *  size on the server; the labels carry the model staff know. */
+export type CabType = 'NO_PREFERENCE' | 'SEDAN' | 'SUV';
+
+export const CAB_TYPE_LABELS: Record<CabType, string> = {
+  NO_PREFERENCE: 'No preference',
+  SEDAN: 'Dzire (4 seats)',
+  SUV: 'Ertiga (7 seats)',
+};
+
+/** The choice cards on the request form: the model, then its seats. */
+export const CAB_TYPE_CHOICES: { value: CabType; title: string; detail: string }[] = [
+  { value: 'NO_PREFERENCE', title: 'No preference', detail: 'Any car the vendor has' },
+  { value: 'SEDAN', title: 'Dzire', detail: '4 seats' },
+  { value: 'SUV', title: 'Ertiga', detail: '7 seats' },
+];
+
+/** The cars an admin can record as sent - never "no preference". */
+export const BOOKED_CAB_TYPES: CabType[] = ['SEDAN', 'SUV'];
+
+export type CabTrip = 'LOCAL' | 'OUTSTATION';
+
+/** Mirrors LOCAL_CAB_MAX_KM on the server, which holds the rule and checks
+ *  every save; this only words the form. */
+export const LOCAL_CAB_MAX_KM = 80;
+
+export const CAB_TRIP_LABELS: Record<CabTrip, string> = {
+  LOCAL: 'Local',
+  OUTSTATION: 'Outstation',
+};
+
+export type CabExtensionStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export const CAB_EXTENSION_LABELS: Record<CabExtensionStatus, string> = {
+  PENDING: 'Waiting for an admin',
+  APPROVED: 'Approved',
+  REJECTED: 'Not approved',
+};
+
 /** A manager's advice on a team member's trip. The admin decides. */
 export type ManagerRecommendation = 'RECOMMENDED' | 'NOT_RECOMMENDED';
 
@@ -520,6 +559,32 @@ export interface TravelRequest {
   check_in: string | null;
   check_out: string | null;
 
+  /** A cab's size, local or outstation, and outstation's rough distance.
+   *  Null on flights and hotels. */
+  cab_type: CabType | null;
+  cab_trip: CabTrip | null;
+  cab_distance_km: number | null;
+  /** The car an admin recorded as sent. Null until they have. */
+  booked_cab_type: CabType | null;
+  cab_vehicle_number: string | null;
+  cab_driver_name: string | null;
+  cab_driver_phone: string | null;
+  cab_booked_by_name: string | null;
+  cab_booked_at: string | null;
+  /** The latest ask to keep the cab one more day, and its answer. */
+  cab_extension_status: CabExtensionStatus | null;
+  cab_extension_reason: string | null;
+  cab_extension_requested_by_name: string | null;
+  cab_extension_requested_at: string | null;
+  cab_extension_decided_by_name: string | null;
+  cab_extension_decided_at: string | null;
+  cab_extension_comment: string | null;
+  /** Extra days approved so far; end_at already includes them. */
+  cab_extended_days: number;
+  /** Whether the person reading may ask for one more day now - the server's
+   *  rule, so the button only shows when the ask would be accepted. */
+  can_extend_cab: boolean;
+
   /** Why the trip is happening. Mandatory on anything raised from now on;
    *  null on requests that predate the field. */
   travel_reason: string | null;
@@ -626,6 +691,9 @@ export interface QueueCounts {
   /** Still waiting on an admin, with someone whose manager has not
    *  recommended yet. For a manager: their own team only. */
   awaiting_manager: number;
+  /** Cabs whose travellers asked to keep them one more day, still waiting on
+   *  an admin. */
+  cab_extensions: number;
 }
 
 /** Every request in one admin queue tab, read as the admin (so with cost), for

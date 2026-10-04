@@ -2,7 +2,15 @@
  *  describe the same request the same way. */
 
 import { routeLabel } from '@/lib/places';
-import { PRIORITY_LABELS, type RequestPriority, type TravelRequest } from '@/types';
+import {
+  CAB_TRIP_LABELS,
+  CAB_TYPE_LABELS,
+  PRIORITY_LABELS,
+  type CabTrip,
+  type CabType,
+  type RequestPriority,
+  type TravelRequest,
+} from '@/types';
 
 const dayMonth = (iso: string) =>
   new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso).toLocaleDateString(undefined, {
@@ -10,7 +18,7 @@ const dayMonth = (iso: string) =>
     month: 'short',
   });
 
-const dayTime = (iso: string) =>
+export const dayTime = (iso: string) =>
   new Date(iso).toLocaleString(undefined, {
     day: '2-digit',
     month: 'short',
@@ -40,12 +48,49 @@ export function campaignLabel(
     : request.project_name || request.project_code;
 }
 
+/** What a cab asked for, in one line: "Ertiga (7 seats) · Outstation, about
+ *  250 km". Null for anything but a cab. */
+export function cabAsked(
+  request: Pick<TravelRequest, 'request_type' | 'cab_type' | 'cab_trip' | 'cab_distance_km'>,
+): string | null {
+  if (request.request_type !== 'LOCAL_CAB' || (!request.cab_type && !request.cab_trip)) return null;
+  const parts = [CAB_TYPE_LABELS[request.cab_type ?? 'NO_PREFERENCE']];
+  if (request.cab_trip) {
+    parts.push(
+      request.cab_distance_km
+        ? `${CAB_TRIP_LABELS[request.cab_trip]}, about ${request.cab_distance_km} km`
+        : CAB_TRIP_LABELS[request.cab_trip],
+    );
+  }
+  return parts.join(' · ');
+}
+
+/** Field names in the revision diff that read badly with the underscores
+ *  simply swapped for spaces. */
+const REVISION_FIELDS: Record<string, string> = {
+  cab_type: 'cab type',
+  cab_trip: 'local or outstation',
+  cab_distance_km: 'distance (km)',
+};
+
+export function revisionField(field: string): string {
+  return REVISION_FIELDS[field] ?? field.replace(/_/g, ' ');
+}
+
 /** A value in the revision diff as the form showed it. Priority is stored as
- *  HIGH/MEDIUM/LOW; the person changing it picked High/Medium/Low. */
+ *  HIGH/MEDIUM/LOW; the person changing it picked High/Medium/Low. A cab's
+ *  type and trip are stored as SUV/OUTSTATION; they picked "Ertiga (7 seats)"
+ *  and "Outstation". */
 export function revisionValue(field: string, value: unknown): string {
   if (value === null || value === undefined || value === '') return '—';
   if (field === 'priority' && typeof value === 'string' && value in PRIORITY_LABELS) {
     return PRIORITY_LABELS[value as RequestPriority];
+  }
+  if (field === 'cab_type' && typeof value === 'string' && value in CAB_TYPE_LABELS) {
+    return CAB_TYPE_LABELS[value as CabType];
+  }
+  if (field === 'cab_trip' && typeof value === 'string' && value in CAB_TRIP_LABELS) {
+    return CAB_TRIP_LABELS[value as CabTrip];
   }
   return String(value);
 }

@@ -109,6 +109,58 @@ class TravelMode(StrEnum):
     CAB = "CAB"
 
 
+class CabType(StrEnum):
+    """The car a cab request asks for, and the one an admin records as sent.
+
+    Named by size rather than model so a vendor swapping a Dzire for an Aura
+    does not need a new value; the label carries the model staff know.
+    NO_PREFERENCE is only ever asked for - an admin always records a real car.
+    """
+
+    NO_PREFERENCE = "NO_PREFERENCE"
+    SEDAN = "SEDAN"   # Dzire, 4 seats
+    SUV = "SUV"       # Ertiga, 7 seats
+
+
+CAB_TYPE_LABELS: dict[CabType, str] = {
+    CabType.NO_PREFERENCE: "No preference",
+    CabType.SEDAN: "Dzire (4 seats)",
+    CabType.SUV: "Ertiga (7 seats)",
+}
+
+
+class CabTrip(StrEnum):
+    """How far a cab goes. Vendors price local and outstation trips differently,
+    so the admin booking it needs to know which this is before calling one."""
+
+    LOCAL = "LOCAL"
+    OUTSTATION = "OUTSTATION"
+
+
+#: The one place the local/outstation line is drawn. A trip under this many
+#: kilometres is local; at or over it, outstation, with a distance the
+#: requester estimates.
+LOCAL_CAB_MAX_KM = 80
+
+#: Further than any road trip in the country. A typo beyond it ("25000") is a
+#: slip, not a journey.
+MAX_CAB_DISTANCE_KM = 5000
+
+CAB_TRIP_LABELS: dict[CabTrip, str] = {
+    CabTrip.LOCAL: f"Local (within {LOCAL_CAB_MAX_KM} km)",
+    CabTrip.OUTSTATION: "Outstation",
+}
+
+
+class CabExtensionStatus(StrEnum):
+    """Where an ask to keep a booked cab one more day stands. One at a time per
+    request; after a decision the traveller may ask again for another day."""
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
 class RequestPriority(StrEnum):
     """How soon the requester needs a decision. Set by them, read by admins."""
 
@@ -302,6 +354,11 @@ NOTIFICATION_CATEGORIES: dict[str, NotificationCategory] = {
     "TEAM_CHANGE_REQUESTED": NotificationCategory.NEW_REQUESTS,
     "TEAM_CHANGE_APPROVED": NotificationCategory.DECISIONS,
     "TEAM_CHANGE_REJECTED": NotificationCategory.DECISIONS,
+    # The car, its number and the driver's phone: what a booking is for a cab.
+    "CAB_DETAILS": NotificationCategory.BOOKINGS,
+    "CAB_EXTENSION_REQUESTED": NotificationCategory.NEW_REQUESTS,
+    "CAB_EXTENSION_APPROVED": NotificationCategory.DECISIONS,
+    "CAB_EXTENSION_REJECTED": NotificationCategory.DECISIONS,
 }
 
 

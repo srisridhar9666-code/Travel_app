@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BedDouble,
   Ban,
+  CalendarPlus,
   Car,
   CheckCircle2,
   ChevronDown,
@@ -15,6 +16,7 @@ import {
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 
+import { CabExtensionNote, CabSent } from '@/components/CabDetails';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
 import RequestForm, { ConflictList } from '@/components/RequestForm';
@@ -30,6 +32,7 @@ import {
   Skeleton,
 } from '@/components/ui';
 import {
+  askCabExtension,
   cancelRequest,
   errorMessage,
   fetchNotifications,
@@ -40,7 +43,7 @@ import {
   submitRequest,
 } from '@/lib/api';
 import { routeLabel } from '@/lib/places';
-import { campaignLabel, revisionValue } from '@/lib/requests';
+import { cabAsked, campaignLabel, revisionField, revisionValue } from '@/lib/requests';
 import { formatInstant } from '@/lib/time';
 import { useAuth } from '@/store/auth';
 import {
@@ -80,6 +83,15 @@ const dayTime = (iso: string) =>
     hour: '2-digit',
     minute: '2-digit',
   });
+
+/** The same wall-clock time a day later. Trip times are local as typed, so
+ *  the date is moved on the string's own fields, never through a time zone. */
+function plusOneDay(iso: string): string {
+  const [date, time = '00:00:00'] = iso.split('T');
+  const next = new Date(`${date}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return `${next.toISOString().slice(0, 10)}T${time}`;
+}
 
 /** One line describing where and when, whatever the request type. */
 function itinerary(request: TravelRequest): string {
@@ -130,7 +142,7 @@ function RevisionHistory({ requestId }: { requestId: number }) {
             <dl className="mt-1.5 space-y-0.5">
               {Object.entries(revision.changes).map(([field, change]) => (
                 <div key={field} className="flex flex-wrap gap-x-1.5 text-2xs">
-                  <dt className="text-text-subtle">{field.replace(/_/g, ' ')}</dt>
+                  <dt className="text-text-subtle">{revisionField(field)}</dt>
                   <dd className="text-text-muted">
                     <span className="line-through opacity-70">
                       {revisionValue(field, change.from)}
@@ -162,6 +174,8 @@ export default function RequestsPage() {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [cancelling, setCancelling] = useState<TravelRequest | null>(null);
   const [cancelReason, setCancelReason] = useState('');
+  const [extending, setExtending] = useState<TravelRequest | null>(null);
+  const [extendReason, setExtendReason] = useState('');
 
   const requests = useQuery({
     queryKey: ['requests', statusFilter, typeFilter, search],
@@ -221,6 +235,17 @@ export default function RequestsPage() {
       toast.success(`Request #${saved.id} cancelled`);
       setCancelling(null);
       setCancelReason('');
+      refresh();
+    },
+  });
+
+  const extend = useMutation({
+    mutationFn: () => askCabExtension(extending!.id, extendReason),
+    meta: { errorFallback: 'Could not ask for one more day.' },
+    onSuccess: () => {
+      toast.success('Asked for one more day — an admin will decide');
+      setExtending(null);
+      setExtendReason('');
       refresh();
     },
   });
@@ -392,7 +417,11 @@ export default function RequestsPage() {
 
                       <p className="mt-1 text-xs text-text-muted">
                         {campaignLabel(request)}
-                        {request.mode && ` · ${TRAVEL_MODE_LABELS[request.mode]}`}
+                        {/* A cab says what kind and how far; "Cab" alone says
+                            nothing the icon has not. */}
+                        {cabAsked(request)
+                          ? ` · ${cabAsked(request)}`
+                          : request.mode && ` · ${TRAVEL_MODE_LABELS[request.mode]}`}
                         {!isOwner && ` · raised by ${request.requester_name}`}
                         {request.notes && ` · ${request.notes}`}
                       </p>
@@ -426,6 +455,7 @@ export default function RequestsPage() {
                           Cancelled: {request.cancel_reason}
                         </p>
                       )}
+
                     </div>
 
                     <div className="flex shrink-0 gap-1">
@@ -480,6 +510,29 @@ export default function RequestsPage() {
                       </Button>
                     </div>
                   </div>
+
+                  {/* Full width, below the row like the clash warnings: on a
+                      phone the column beside the action icons is too narrow
+                      for a plate and a phone number. */}
+                  {request.request_type === 'LOCAL_CAB' && (
+                    <div className="mt-3 space-y-2 empty:hidden">
+                      <CabSent request={request} />
+                      <CabExtensionNote request={request} />
+                      {request.can_extend_cab && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            setExtending(request);
+                            setExtendReason('');
+                          }}
+                        >
+                          <CalendarPlus size={14} />
+                          Extend by a day
+                        </Button>
+                      )}
+                    </div>
+                  )}
 
                   {request.conflicts.length > 0 && (
                     <div className="mt-3">
@@ -597,6 +650,48 @@ export default function RequestsPage() {
           refresh();
         }}
       />
+
+      <Modal
+        open={extending !== null}
+        onClose={() => setExtending(null)}
+        title="Keep the cab one more day"
+        description={
+          extending?.end_at
+            ? `It is booked until ${dayTime(extending.end_at)}. If an admin approves, it is kept until ${dayTime(
+                plusOneDay(extending.end_at),
+              )}.`
+            : undefined
+        }
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setExtending(null)}>
+              Not now
+            </Button>
+            <Button
+              loading={extend.isPending}
+              disabled={extendReason.trim().length < 3}
+              onClick={() => extend.mutate()}
+            >
+              Ask an admin
+            </Button>
+          </>
+        }
+      >
+        <Field
+          label="Why is it needed?"
+          htmlFor="extend-reason"
+          required
+          hint="The admin reads this before deciding. Your manager is told you asked."
+        >
+          <Input
+            id="extend-reason"
+            value={extendReason}
+            maxLength={500}
+            onChange={(e) => setExtendReason(e.target.value)}
+            placeholder="Two more stores to audit tomorrow"
+          />
+        </Field>
+      </Modal>
 
       <Modal
         open={cancelling !== null}

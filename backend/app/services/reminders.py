@@ -95,6 +95,9 @@ def remind_travellers(db: Session, tenant_id: str, *, today: date | None = None)
         )
         reference = traveller.booking_reference or "see your confirmation"
         greeting = person.full_name.split()[0] if person.full_name else "there"
+        # The morning of a cab, the plate and the driver's phone are what is
+        # actually looked for, so they ride along when an admin recorded them.
+        car = request.cab_sent_label if request.request_type is RequestType.LOCAL_CAB else None
 
         written = notifications.notify(
             db,
@@ -102,7 +105,8 @@ def remind_travellers(db: Session, tenant_id: str, *, today: date | None = None)
             user=person,
             kind="TRAVEL_REMINDER",
             title=f"Coming up: {where}",
-            body=f"Your trip to {where} starts {when}. Reference {reference}.",
+            body=f"Your trip to {where} starts {when}. Reference {reference}."
+            + (f" Cab: {car}." if car else ""),
             request_id=request.id,
             email_subject=f"Reminder - {where} on {starts.strftime('%d %b')}",
             email_body="\n".join(
@@ -114,6 +118,7 @@ def remind_travellers(db: Session, tenant_id: str, *, today: date | None = None)
                     f"  Trip         {where}",
                     f"  Starts       {when}",
                     f"  Reference    {reference}",
+                    *([f"  Cab          {car}"] if car else []),
                     "",
                     "Carry photo ID that matches the name on the booking.",
                 ]

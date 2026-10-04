@@ -1,6 +1,8 @@
 import axios, { AxiosError } from 'axios';
 
 import type {
+  CabTrip,
+  CabType,
   AppNotification,
   AnalyticsBundle,
   AuditRow,
@@ -63,7 +65,7 @@ import type {
  * shell compares it with what /health reports, to tell an admin when the API
  * process is older than this page.
  */
-export const API_VERSION = '0.11.0';
+export const API_VERSION = '0.12.0';
 
 /** Negative when `a` is older than `b`, by dotted number. */
 export function compareVersions(a: string, b: string): number {
@@ -522,6 +524,8 @@ export interface RequestQuery {
   sort?: 'newest' | 'priority';
   /** Two-level approval: still waiting on a manager, or already reviewed. */
   review?: ReviewFilter;
+  /** Cabs waiting on an admin's answer to "one more day". */
+  extension?: 'pending';
   page?: number;
   page_size?: number;
 }
@@ -547,6 +551,10 @@ export interface RequestPayload {
   hotel_city?: string | null;
   check_in?: string | null;
   check_out?: string | null;
+  /** A cab's size and distance; the server clears them for anything else. */
+  cab_type?: CabType | null;
+  cab_trip?: CabTrip | null;
+  cab_distance_km?: number | null;
   travel_reason?: string;
   /** Only with the fallback "Other" campaign: the name the requester typed. */
   other_project_name?: string | null;
@@ -649,6 +657,38 @@ export interface RecommendationBody {
  *  the admin makes the final decision. */
 export const recommendRequest = (requestId: number, body: RecommendationBody) =>
   api.post<TravelRequest>(`/requests/${requestId}/recommendation`, body).then((r) => r.data);
+
+// --- cabs: the car sent, and one more day ---------------------------------
+
+export interface CabBookingBody {
+  booked_cab_type: CabType;
+  vehicle_number: string;
+  driver_name: string;
+  driver_phone: string;
+  /** Off when the same dialog is about to mark the traveller booked: the
+   *  booking notice then carries the car, so one message goes, not two. */
+  notify?: boolean;
+}
+
+/** Record or change the car sent for a cab. Admins only; logged, and everyone
+ *  riding is told unless `notify` is false. */
+export const recordCabBooking = (requestId: number, body: CabBookingBody) =>
+  api.put<TravelRequest>(`/requests/${requestId}/cab-booking`, body).then((r) => r.data);
+
+/** Ask to keep a decided cab one more day - the requester or a traveller on it. */
+export const askCabExtension = (requestId: number, reason: string) =>
+  api
+    .post<TravelRequest>(`/requests/${requestId}/cab-extension`, { reason })
+    .then((r) => r.data);
+
+/** An admin's answer to "one more day". A rejection needs a comment. */
+export const decideCabExtension = (
+  requestId: number,
+  body: { approve: boolean; comment?: string | null },
+) =>
+  api
+    .post<TravelRequest>(`/requests/${requestId}/cab-extension/decide`, body)
+    .then((r) => r.data);
 
 // --- tickets and extraction -----------------------------------------------
 
