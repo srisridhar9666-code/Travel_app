@@ -133,7 +133,7 @@ export function CompanyCredit({
 }
 
 /** Whose work this is, shown under the sidebar and on the sign-in screens. */
-export const CREATED_BY = 'Sridhar';
+const CREATED_BY = 'Sridhar';
 
 export function CreatorCredit({ className }: { className?: string }) {
   return (

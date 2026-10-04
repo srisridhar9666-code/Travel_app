@@ -48,6 +48,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 API = "http://127.0.0.1:8001"
 c = httpx.Client(base_url=API, timeout=120)
+
+# Every decision carries a reason now - an approval as much as a rejection. The
+# journey below is about who decides what, not the wording, so a decision sent
+# without one gets a plain sentence here; the checks about override reasons
+# are unaffected, since those are a separate field.
+_post = c.post
+
+
+def _post_with_reasons(url, *args, **kwargs):
+    body = kwargs.get("json")
+    if "/decide" in str(url) and isinstance(body, dict):
+        for decision in body.get("decisions", [body]):
+            if isinstance(decision, dict) and "to_status" in decision:
+                decision.setdefault("reason", "Decided on the end-to-end run")
+    return _post(url, *args, **kwargs)
+
+
+c.post = _post_with_reasons
 failures = []
 notes = []
 
@@ -521,8 +539,17 @@ check(
 # =========================================================================
 section("10. Cancelling, and what disappears")
 # =========================================================================
+# An approved trip may already have a ticket, so the requester asks and an
+# admin (or their manager) agrees before it is cancelled.
 r = c.post(f"/requests/{clash_id}/cancel", headers=RAVI, json={"reason": "Client cancelled the Pune leg"})
-check("the requester can cancel", r.status_code == 200 and r.json()["status"] == "CANCELLED")
+check(
+    "the requester asks to cancel an approved trip",
+    r.status_code == 200 and r.json()["cancellation_status"] == "PENDING" and r.json()["status"] != "CANCELLED",
+    r.text[:200],
+)
+r = c.post(f"/requests/{clash_id}/cancellation/decide", headers=PRIYA,
+           json={"approve": True, "comment": "Pune leg dropped"})
+check("an admin agrees and the trip is cancelled", r.status_code == 200 and r.json()["status"] == "CANCELLED", r.text[:200])
 
 after = c.get("/analytics", headers=PRIYA).json()
 check(
@@ -561,10 +588,14 @@ GUARDED = [
     ("GET", "/notifications/ledger", "admin"),
     ("GET", "/notifications/scheduler", "admin"),
     ("GET", "/id-proofs/retention", "admin"),
-    ("GET", "/audit", "system"),
-    ("GET", "/audit/verify", "system"),
-    ("GET", "/audit/grants", "system"),
-    ("GET", "/audit/summary", "system"),
+    # The activity log is open to every admin role.
+    ("GET", "/audit", "admin"),
+    ("GET", "/audit/verify", "admin"),
+    ("GET", "/audit/grants", "admin"),
+    ("GET", "/audit/summary", "admin"),
+    ("GET", "/vendors", "admin"),
+    ("GET", "/invoices", "admin"),
+    ("GET", "/team/changes", "admin"),
 ]
 
 for method, path, level in GUARDED:
@@ -578,7 +609,7 @@ for method, path, level in GUARDED:
     if level == "admin":
         check(f"{path} allows an admin", admin == 200, admin)
     else:
-        check(f"{path} is system-admin only", admin == 403 and system == 200, {"admin": admin, "system": system})
+        check(f"{path} is super-admin only", admin == 403 and system == 200, {"admin": admin, "system": system})
 
 # Ground staff must not see another person's request at all.
 r = c.get(f"/requests/{stay_id}", headers=MEERA)
@@ -605,10 +636,11 @@ check("every action taken is represented", summary["total"] == chain, {"summary"
 
 expected_actions = {
     "CREATE", "LOGIN", "SUBMIT", "UPDATE", "APPROVE", "REJECT",
-    "BOOK", "CANCEL", "OVERRIDE_CONFLICT", "NOTIFY",
+    "BOOK", "CANCEL", "OVERRIDE_CONFLICT",
 }
 if gemini_ok:
-    expected_actions |= {"UPLOAD", "EXTRACT"}
+    # Confirming the extracted ticket is what sends the booking notice.
+    expected_actions |= {"UPLOAD", "EXTRACT", "NOTIFY"}
 missing = expected_actions - set(summary["by_action"])
 check("covering every kind of action this journey took", not missing, missing)
 

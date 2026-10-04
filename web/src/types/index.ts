@@ -432,12 +432,6 @@ export const CAB_TRIP_LABELS: Record<CabTrip, string> = {
 
 export type CabExtensionStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
-export const CAB_EXTENSION_LABELS: Record<CabExtensionStatus, string> = {
-  PENDING: 'Waiting for an admin',
-  APPROVED: 'Approved',
-  REJECTED: 'Not approved',
-};
-
 /** A manager's advice on a team member's trip. The admin decides. */
 export type ManagerRecommendation = 'RECOMMENDED' | 'NOT_RECOMMENDED';
 
@@ -745,7 +739,7 @@ export interface BookingDetails {
   notes?: string | null;
 }
 
-export interface DecisionBody {
+interface DecisionBody {
   to_status: TravellerStatus;
   reason?: string | null;
   booking_reference?: string | null;

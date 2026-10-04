@@ -187,40 +187,6 @@ They used to run on in-memory SQLite, which was quicker to set up and wrong: the
 defect this project has had was MySQL's `DATETIME` silently truncating the microseconds the
 audit hash chain commits to, and no SQLite test could ever have found it.
 
-The smoke suites go over real HTTP against a running server, and create throwaway accounts —
-so start the API first and point them at a dev database:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\smoke_phase1.py
-```
-
-There is one per phase, `smoke_phase1.py` through `smoke_phase8.py`, plus
-`scripts\test_end_to_end.py` which walks a request from raised to booked.
-
-```bash
-cd backend && ./.venv/Scripts/python.exe scripts/smoke_phase3.py
-```
-
-```bash
-cd backend && ./.venv/Scripts/python.exe scripts/smoke_phase4.py
-```
-
-```bash
-cd backend && ./.venv/Scripts/python.exe scripts/smoke_phase5.py
-```
-
-```bash
-cd backend && ./.venv/Scripts/python.exe scripts/smoke_phase6.py
-```
-
-```bash
-cd backend && ./.venv/Scripts/python.exe scripts/smoke_phase7.py
-```
-
-```bash
-cd backend && ./.venv/Scripts/python.exe scripts/smoke_phase8.py
-```
-
 ### Linting
 
 ```bash
@@ -235,9 +201,8 @@ finds that in milliseconds.
 
 ### The whole system, end to end
 
-The eight phase smokes each prove their own slice against whatever the dev
-database already holds. This one proves what none of them can - that the product
-**deploys from nothing**, that one continuous journey crosses every phase
+The unit tests each prove their own slice against fixtures they set up. This
+script proves what none of them can - that the product **deploys from nothing**, that one continuous journey crosses every phase
 boundary, that the screens agree with each other, and that the permission matrix
 holds for every role against every guarded endpoint.
 
@@ -258,13 +223,17 @@ cd backend && DATABASE_URL='mysql+pymysql://root:PASSWORD@127.0.0.1:3306/travel_
 cd backend && ./.venv/Scripts/python.exe scripts/test_end_to_end.py
 ```
 
-Roughly 130 checks following one field team from onboarding to a cost report. It
-found two real defects the phase tests could not, because each of those sets up
+Roughly 130 checks following one field team from onboarding to a cost report -
+including asking to cancel an approved trip and the admin-only access grid. It
+found two real defects the unit tests could not, because each of those sets up
 its own fixtures and this one makes every step consume what the last produced.
 
-Phase 5's smoke calls the real extraction model, so it costs a few seconds and a
-few tokens per run. It reads the sample tickets in `backend/scripts/fixtures/`,
-regenerated with `scripts/make_ticket_fixture.py`.
+It calls the real extraction model when `gemini_credentials.json` is present, so
+it costs a few seconds and a few tokens per run; without it, that one check fails
+and the rest still run. It reads the sample tickets in `backend/scripts/fixtures/`,
+regenerated with `scripts/make_ticket_fixture.py`. Run it against its own
+database as shown - it creates throwaway accounts, which do not belong in the
+database you use day to day.
 
 ---
 

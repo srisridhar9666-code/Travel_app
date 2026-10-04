@@ -14,7 +14,7 @@
  * browser read UTC as local time and every log entry was 5h30m early.
  */
 
-export const APP_TIME_ZONE = 'Asia/Kolkata';
+const APP_TIME_ZONE = 'Asia/Kolkata';
 const LOCALE = 'en-IN';
 
 const HAS_ZONE = /(?:[zZ]|[+-]\d{2}:?\d{2})$/;

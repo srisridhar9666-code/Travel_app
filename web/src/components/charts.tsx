@@ -101,7 +101,7 @@ export function StatTile({
    Horizontal bars — magnitude with long category names
    ------------------------------------------------------------------------- */
 
-export interface BarDatum {
+interface BarDatum {
   label: string;
   value: number;
   /** Shown in the tooltip and under the label. */
@@ -194,7 +194,7 @@ export function HorizontalBars({
    Columns over time — trend, with a crosshair tooltip
    ------------------------------------------------------------------------- */
 
-export interface ColumnDatum {
+interface ColumnDatum {
   label: string;
   value: number;
 }

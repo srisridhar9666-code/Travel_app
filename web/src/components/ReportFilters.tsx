@@ -32,7 +32,7 @@ import {
 
 type Changes = Record<string, string | undefined>;
 
-export interface ReportFilterState {
+interface ReportFilterState {
   range: DateRange;
   projectId?: number;
   userId?: number;
@@ -125,7 +125,7 @@ export function useReportFilters(defaultPreset: RangePreset): ReportFilterState 
 
 /** "Ravi Kumar (E104)", with "· Left" when they are no longer active, so an
  *  admin can tell a former colleague's history from a current one's. */
-export function personLabel(person: FilterOptions['people'][number]): string {
+function personLabel(person: FilterOptions['people'][number]): string {
   const name = person.employee_code ? `${person.full_name} (${person.employee_code})` : person.full_name;
   return person.status && person.status !== 'ACTIVE' ? `${name} · ${USER_STATUS_LABELS[person.status]}` : name;
 }

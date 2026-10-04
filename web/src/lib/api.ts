@@ -87,7 +87,7 @@ export function compareVersions(a: string, b: string): number {
 
 /** What a request to a route the server does not have is told instead of
  *  FastAPI's bare "Not Found" or "Method Not Allowed". */
-export const STALE_API_MESSAGE =
+const STALE_API_MESSAGE =
   'The server does not know this action yet - it is running older code than this page. ' +
   'Restart the API (after running its migrations), then try again.';
 
@@ -95,7 +95,7 @@ export const STALE_API_MESSAGE =
  * Single axios instance for the whole app. In dev, Vite proxies `/api` to the
  * FastAPI process, so the browser only ever sees one origin.
  */
-export const api = axios.create({
+const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api',
   timeout: 30_000,
 });
@@ -212,7 +212,7 @@ export function errorMessage(error: unknown, fallback = 'Something went wrong.')
 
 // --- health ---------------------------------------------------------------
 
-export interface HealthResponse {
+interface HealthResponse {
   status: string;
   app: string;
   /** Absent on servers from before the version handshake. */
@@ -262,7 +262,7 @@ export const forgotPassword = (email: string) =>
 
 // --- users ----------------------------------------------------------------
 
-export interface UserQuery {
+interface UserQuery {
   search?: string;
   role?: string;
   is_active?: boolean;
@@ -306,7 +306,7 @@ export const createUser = (payload: UserPayload) =>
 export const updateUser = (id: number, payload: UserUpdatePayload) =>
   api.patch<UserRow>(`/users/${id}`, payload).then((r) => r.data);
 
-export interface StatusChange {
+interface StatusChange {
   status: UserStatus;
   /** Left (or Deleted) only; defaults to today on the server. */
   exited_on?: string | null;
@@ -342,9 +342,9 @@ export interface TeamAddPayload {
   note?: string | null;
 }
 
-export type TeamEditPayload = Partial<Omit<TeamAddPayload, 'email' | 'gender'>>;
+type TeamEditPayload = Partial<Omit<TeamAddPayload, 'email' | 'gender'>>;
 
-export interface TeamRemovePayload {
+interface TeamRemovePayload {
   status: 'LEFT' | 'DEACTIVATED';
   exited_on?: string | null;
   reason: string;
@@ -400,7 +400,7 @@ export const deleteDepartment = (id: number) => api.delete(`/departments/${id}`)
 
 // --- audit ----------------------------------------------------------------
 
-export interface AuditQuery {
+interface AuditQuery {
   action?: string;
   entity_type?: string;
   actor_user_id?: number;
@@ -416,7 +416,7 @@ export const verifyAuditChain = () =>
 
 // --- projects -------------------------------------------------------------
 
-export interface ProjectQuery {
+interface ProjectQuery {
   search?: string;
   status?: string;
   page?: number;
@@ -520,7 +520,7 @@ export function commitImport(file: File) {
 
 // --- requests -------------------------------------------------------------
 
-export interface RequestQuery {
+interface RequestQuery {
   mine?: boolean;
   status?: string;
   type?: string;
@@ -654,7 +654,7 @@ export const decideBatch = (requestId: number, decisions: BatchDecisionItem[]) =
 export const fetchTeamReviews = (review: ReviewFilter) =>
   fetchRequests({ mine: false, review, sort: 'priority', page_size: 100 });
 
-export interface RecommendationBody {
+interface RecommendationBody {
   recommendation: ManagerRecommendation;
   comment: string;
   /** Traveller rows on the request. Left out: every one of the manager's
@@ -909,7 +909,7 @@ export const markInvoicePrinted = (id: number) =>
 
 // --- audit viewer, hardening ----------------------------------------------
 
-export interface LedgerGrants {
+interface LedgerGrants {
   checked: boolean;
   append_only?: boolean;
   update_refused?: boolean;
@@ -918,7 +918,7 @@ export interface LedgerGrants {
   grants?: string[];
 }
 
-export interface AuditSummary {
+interface AuditSummary {
   total: number;
   by_action: Record<string, number>;
   by_entity: Record<string, number>;
