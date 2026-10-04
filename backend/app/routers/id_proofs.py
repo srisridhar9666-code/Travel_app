@@ -292,7 +292,7 @@ def reveal_id_proof(
         entity_id=proof.id,
         summary=(
             f"{actor.full_name} viewed the full {proof.proof_type} number for "
-            f"{owner.full_name if owner else f'user #{proof.user_id}'}"
+            f"{owner.full_name if owner else f'user {proof.user_id}'}"
         ),
         tenant_id=actor.tenant_id,
         actor=actor,
@@ -329,7 +329,7 @@ def download_id_proof(
         entity_id=proof.id,
         summary=(
             f"{actor.full_name} downloaded the {proof.proof_type} scan for "
-            f"{owner.full_name if owner else f'user #{proof.user_id}'}"
+            f"{owner.full_name if owner else f'user {proof.user_id}'}"
         ),
         tenant_id=actor.tenant_id,
         actor=actor,
@@ -368,7 +368,7 @@ def delete_id_proof(
         entity_id=proof.id,
         summary=(
             f"{actor.full_name} deleted a {proof.proof_type} for "
-            f"{owner.full_name if owner else f'user #{proof.user_id}'}"
+            f"{owner.full_name if owner else f'user {proof.user_id}'}"
         ),
         tenant_id=actor.tenant_id,
         actor=actor,

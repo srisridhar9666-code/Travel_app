@@ -89,7 +89,7 @@ def remind_travellers(db: Session, tenant_id: str, *, today: date | None = None)
             else request.route_label(" to ")
         )
         when = (
-            request.start_at.strftime("%d %b, %H:%M")
+            clock.time_label(request.start_at, "%d %b")
             if request.start_at
             else starts.strftime("%d %b")
         )
@@ -202,16 +202,16 @@ def remind_admins_of_stale_requests(
                 kind="REQUEST_STALE",
                 title=f"Undecided for {age} days: {where}",
                 body=(
-                    f"Request #{request.id} ({where}) has {pending} traveller(s) "
+                    f"Request {request.id} ({where}) has {pending} traveller(s) "
                     f"still awaiting a decision after {age} days."
                 ),
                 request_id=request.id,
-                email_subject=f"Request #{request.id} is still undecided",
+                email_subject=f"Request {request.id} is still undecided",
                 email_body="\n".join(
                     [
                         f"Hello {admin.full_name.split()[0] if admin.full_name else 'there'},",
                         "",
-                        f"Request #{request.id} ({where}), raised by "
+                        f"Request {request.id} ({where}), raised by "
                         f"{request.requester.full_name if request.requester else 'a colleague'}, "
                         f"has {pending} traveller(s) still awaiting a decision "
                         f"after {age} days.",

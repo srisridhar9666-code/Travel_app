@@ -191,6 +191,43 @@ def set_status(
     return changes
 
 
+def assert_phone_free(
+    db: Session,
+    tenant_id: str,
+    phone: str | None,
+    *,
+    other_than: int | None = None,
+    say_who: bool = True,
+) -> None:
+    """409 when another employee already has this mobile number.
+
+    Numbers identify people to drivers, hotels and the travel desk, so two
+    employees may not share one. Deleted accounts do not hold on to theirs.
+    `say_who` names the holder - right for an admin, not for someone editing
+    their own profile.
+    """
+    if not phone:
+        return
+    stmt = select(User).where(
+        User.tenant_id == tenant_id,
+        User.phone == phone,
+        User.status != UserStatus.DELETED,
+    )
+    if other_than is not None:
+        stmt = stmt.where(User.id != other_than)
+    holder = db.execute(stmt.limit(1)).scalar_one_or_none()
+    if holder is None:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            f"{phone} is already {holder.full_name}'s phone number."
+            if say_who
+            else "That phone number is already used by another employee."
+        ),
+    )
+
+
 def release_team(
     db: Session, *, manager: User, actor: User, request: Request | None = None
 ) -> int:

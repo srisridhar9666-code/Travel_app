@@ -855,6 +855,19 @@ export const fetchEligible = (params: {
   include_unassigned?: boolean;
 }) => api.get<EligibleRow[]>('/invoices/eligible', { params }).then((r) => r.data);
 
+/** Why the period's trips are not listed for this vendor, counted by reason. */
+export interface WhyNotListed {
+  trips_in_period: number;
+  not_booked_yet: number;
+  booked_without_cost: number;
+  other_vendor: number;
+  no_vendor_recorded: number;
+  already_invoiced: number;
+}
+
+export const fetchWhyNotListed = (params: { vendor_id: number; start: string; end: string }) =>
+  api.get<WhyNotListed>('/invoices/eligible/why', { params }).then((r) => r.data);
+
 export const createInvoice = (payload: InvoicePayload) =>
   api.post<Invoice>('/invoices', payload).then((r) => r.data);
 

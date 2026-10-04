@@ -19,7 +19,8 @@ const dayMonth = (iso: string) =>
   });
 
 export const dayTime = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, {
+  new Date(iso).toLocaleString('en-IN', {
+    hour12: true,
     day: '2-digit',
     month: 'short',
     hour: '2-digit',

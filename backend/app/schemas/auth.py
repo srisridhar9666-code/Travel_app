@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.core.enums import Designation, Gender, Role, UserStatus
 from app.schemas.common import UTCInstant
-from app.schemas.user import PersonName, PhoneNumber, WorkEmail
+from app.schemas.user import MobileNumber, PersonName, WorkEmail
 
 
 class LoginRequest(BaseModel):
@@ -81,7 +81,7 @@ class ProfileUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     full_name: PersonName | None = Field(default=None, min_length=2, max_length=160)
-    phone: PhoneNumber = Field(default=None, max_length=32)
+    phone: MobileNumber = Field(default=None, max_length=32)
 
 
 class EmailChangeRequest(BaseModel):

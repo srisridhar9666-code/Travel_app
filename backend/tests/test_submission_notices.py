@@ -120,7 +120,7 @@ class TestWhoIsTold:
         raise_flight(db, project, p["ravi"], travellers=[p["ravi"], p["meena"]])
         mail = notices(db, channel=NotificationChannel.EMAIL)[0]
 
-        assert mail.subject == "New travel request: Flight: Hyderabad to Pune, 05 Oct 2026, 06:00"
+        assert mail.subject == "New travel request: Flight: Hyderabad to Pune, 05 Oct 2026, 6:00 AM"
         assert "Travellers: Ravi Kumar, Meena Iyer" in mail.body
         assert "Campaign: MON-1 - Monsoon Survey" in mail.body
         assert "Reason: Store audit" in mail.body
@@ -134,7 +134,7 @@ class TestWhoIsTold:
         notice = notices(db, channel=NotificationChannel.IN_APP)[0]
 
         assert mail.subject == (
-            "High priority - New travel request: Flight: Hyderabad to Pune, 05 Oct 2026, 06:00"
+            "High priority - New travel request: Flight: Hyderabad to Pune, 05 Oct 2026, 6:00 AM"
         )
         assert "Priority: High" in mail.body
         assert notice.title == "High-priority request from Ravi Kumar"

@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, UploadFi
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import clock
 from app.core.deps import AdminUser, DbSession
 from app.core.enums import (
     AuditAction,
@@ -238,7 +239,7 @@ async def upload_ticket(
         entity_id=ticket.id,
         summary=(
             f"{actor.full_name} uploaded a ticket for "
-            f"{traveller.user.full_name} on request #{row.id}"
+            f"{traveller.user.full_name} on request {row.id}"
         ),
         changes={"file_name": ticket.file_name, "size": ticket.file_size},
         tenant_id=actor.tenant_id,
@@ -278,7 +279,7 @@ def _run_extraction(
             action=AuditAction.EXTRACT,
             entity_type="ticket_document",
             entity_id=ticket.id,
-            summary=f"Extraction failed for ticket #{ticket.id}: {ticket.extraction_error}",
+            summary=f"Extraction failed for ticket {ticket.id}: {ticket.extraction_error}",
             tenant_id=ticket.tenant_id,
             actor=actor,
             request=http_request,
@@ -299,7 +300,7 @@ def _run_extraction(
         entity_id=ticket.id,
         summary=(
             f"{result.model_id} proposed {result.fields.get('booking_reference') or 'no reference'} "
-            f"for ticket #{ticket.id} - awaiting review"
+            f"for ticket {ticket.id} - awaiting review"
         ),
         # The proposal is audited in full: a booking that turns out wrong has to
         # be traceable to what was actually suggested.
@@ -492,7 +493,7 @@ def confirm_ticket(
         entity_type="ticket_document",
         entity_id=ticket.id,
         summary=(
-            f"{actor.full_name} confirmed ticket #{ticket.id} for "
+            f"{actor.full_name} confirmed ticket {ticket.id} for "
             f"{traveller.user.full_name} as {reference}"
             + (" (corrected from the extraction)" if corrected else "")
         ),
@@ -546,9 +547,9 @@ def _confirmation_body(ticket: TicketDocument, request: TravelRequest, name: str
             lines.append(f"  Service      {ticket.service_number}")
         lines.append(f"  Reference    {ticket.confirmed_reference}")
         if request.start_at:
-            lines.append(f"  Departs      {request.start_at.strftime('%d %b %Y, %H:%M')}")
+            lines.append(f"  Departs      {clock.time_label(request.start_at)}")
         if request.end_at:
-            lines.append(f"  Arrives      {request.end_at.strftime('%d %b %Y, %H:%M')}")
+            lines.append(f"  Arrives      {clock.time_label(request.end_at)}")
 
     if request.project:
         lines += ["", f"Campaign: {request.project.code} - {request.project.name}"]
@@ -647,7 +648,7 @@ def discard_ticket(
         action=AuditAction.DELETE,
         entity_type="ticket_document",
         entity_id=ticket.id,
-        summary=f"{actor.full_name} discarded ticket #{ticket.id}",
+        summary=f"{actor.full_name} discarded ticket {ticket.id}",
         tenant_id=actor.tenant_id,
         actor=actor,
         request=http_request,

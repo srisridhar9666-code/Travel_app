@@ -31,7 +31,10 @@ function formatter(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
   const key = JSON.stringify(options);
   let found = formatters.get(key);
   if (!found) {
-    found = new Intl.DateTimeFormat(LOCALE, { timeZone: APP_TIME_ZONE, ...options });
+    // Times read 12-hour everywhere on screen ("09:30 pm"), whatever the
+    // browser's own locale would pick.
+    const clock12 = options.hour !== undefined && options.hourCycle === undefined ? { hour12: true } : {};
+    found = new Intl.DateTimeFormat(LOCALE, { timeZone: APP_TIME_ZONE, ...clock12, ...options });
     formatters.set(key, found);
   }
   return found;

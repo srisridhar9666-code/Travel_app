@@ -2,7 +2,7 @@ import { CalendarClock, Car, Phone } from 'lucide-react';
 
 import { Field, Input } from '@/components/ui';
 import { dayTime } from '@/lib/requests';
-import { cn } from '@/lib/utils';
+import { cn, mobileDigits } from '@/lib/utils';
 import {
   BOOKED_CAB_TYPES,
   CAB_TYPE_LABELS,
@@ -246,11 +246,10 @@ export function CabBookingFields({
           <Input
             id={`${idPrefix}-phone`}
             type="tel"
-            inputMode="tel"
+            inputMode="numeric"
             value={draft.driver_phone}
-            maxLength={32}
-            onChange={(e) => onChange({ ...draft, driver_phone: e.target.value })}
-            placeholder="+91 98765 43210"
+            onChange={(e) => onChange({ ...draft, driver_phone: mobileDigits(e.target.value) })}
+            placeholder="9876543210"
           />
         </Field>
       </div>

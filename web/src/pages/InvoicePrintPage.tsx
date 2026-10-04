@@ -179,7 +179,7 @@ function Sheet({ invoice }: { invoice: Invoice }) {
       <table className="mt-8 w-full text-left text-xs">
         <thead className="border-y border-border-strong text-2xs uppercase tracking-wide text-text-muted">
           <tr>
-            <th className="py-2 pr-2 font-medium">#</th>
+            <th className="py-2 pr-2 font-medium">No.</th>
             <th className="py-2 pr-2 font-medium">Date</th>
             <th className="py-2 pr-2 font-medium">Description</th>
             <th className="py-2 pr-2 font-medium">Reference</th>

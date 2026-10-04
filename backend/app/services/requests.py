@@ -699,7 +699,7 @@ def trip_summary(request: TravelRequest) -> str:
             when += f" to {request.check_out.strftime('%d %b %Y')}"
         return f"Hotel in {where}, {when}"
     kind = "Cab" if request.request_type is RequestType.LOCAL_CAB else str(request.mode or "Travel").title()
-    when = request.start_at.strftime("%d %b %Y, %H:%M") if request.start_at else "time to be set"
+    when = clock.time_label(request.start_at) if request.start_at else "time to be set"
     line = f"{kind}: {request.route_label(' to ')}, {when}"
     # The vendor is chosen by size and distance, so the admin reads them first.
     asked = request.cab_asked_label if request.request_type is RequestType.LOCAL_CAB else None

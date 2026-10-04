@@ -177,7 +177,7 @@ def record(
             entity_id=traveller.id,
             summary=(
                 f"{manager.full_name} {verb} {traveller.user.full_name} on request "
-                f"#{request.id}" + (" (changed their recommendation)" if before else "")
+                f"{request.id}" + (" (changed their recommendation)" if before else "")
             ),
             changes=changes,
             reason=comment,

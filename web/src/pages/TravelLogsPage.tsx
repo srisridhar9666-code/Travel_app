@@ -98,7 +98,7 @@ function when(entry: TravelLogEntry) {
   if (entry.request_type === 'HOTEL' && entry.check_out) {
     return `${format(start, 'd MMM')} – ${format(new Date(`${entry.check_out}T00:00:00`), 'd MMM yyyy')}`;
   }
-  const time = entry.start_at ? format(new Date(entry.start_at), ', HH:mm') : '';
+  const time = entry.start_at ? format(new Date(entry.start_at), ', h:mm a') : '';
   return `${format(start, 'EEE d MMM yyyy')}${time}`;
 }
 

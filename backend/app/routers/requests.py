@@ -624,7 +624,7 @@ def edit_request(
             entity_type="travel_request",
             entity_id=row.id,
             summary=(
-                f"{user.full_name} edited request #{row.id} ({svc.describe_changes(changes)})"
+                f"{user.full_name} edited request {row.id} ({svc.describe_changes(changes)})"
                 + ("; the manager's recommendation was cleared" if cleared else "")
             ),
             changes=changes,
@@ -704,7 +704,7 @@ def cancel_request(
         action=AuditAction.CANCEL,
         entity_type="travel_request",
         entity_id=row.id,
-        summary=f"{user.full_name} cancelled request #{row.id}",
+        summary=f"{user.full_name} cancelled request {row.id}",
         reason=payload.reason,
         tenant_id=user.tenant_id,
         actor=user,
@@ -789,7 +789,7 @@ def set_room_sharing(
         entity_id=traveller.id,
         summary=(
             f"{user.full_name} set room sharing to {payload.choice} "
-            f"for {traveller.user.full_name} on request #{row.id}"
+            f"for {traveller.user.full_name} on request {row.id}"
         ),
         changes={"room_sharing": {"from": before, "to": str(payload.choice)}},
         tenant_id=user.tenant_id,

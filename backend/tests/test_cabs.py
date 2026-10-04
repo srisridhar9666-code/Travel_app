@@ -374,14 +374,14 @@ class TestRecordingTheCab:
         assert got["booked_cab_type"] == "SUV"
         assert got["cab_vehicle_number"] == "TS 09 EA 1234"
         assert got["cab_driver_name"] == "Suresh Reddy"
-        assert got["cab_driver_phone"] == "+91 98765 43210"
+        assert got["cab_driver_phone"] == "9876543210"
         assert got["cab_booked_by_name"] == "Priya Shah" and got["cab_booked_at"]
         assert [t["status"] for t in got["travellers"]] == ["APPROVED"]
 
         entry = log(db, made["id"], "UPDATE")[-1]
         assert entry.summary == (
-            f"Priya Shah recorded the cab for request #{made['id']}: "
-            "Ertiga (7 seats) TS 09 EA 1234, driver Suresh Reddy, +91 98765 43210"
+            f"Priya Shah recorded the cab for request {made['id']}: "
+            "Ertiga (7 seats) TS 09 EA 1234, driver Suresh Reddy, 9876543210"
         )
         assert entry.changes["cab_vehicle_number"] == {"from": None, "to": "TS 09 EA 1234"}
 
@@ -396,7 +396,7 @@ class TestRecordingTheCab:
         told = notices(db, "CAB_DETAILS")
         assert {n.user_id for n in told} == {org["ravi"].id, org["meena"].id}
         assert told[0].title == "Your cab is arranged: Ertiga (7 seats) TS 09 EA 1234"
-        assert "Driver Suresh Reddy, +91 98765 43210" in told[0].body
+        assert "Driver Suresh Reddy, 9876543210" in told[0].body
 
         mail = {m.to_address: m for m in notices(db, "CAB_DETAILS",
                                                   channel=NotificationChannel.EMAIL)}
@@ -416,7 +416,7 @@ class TestRecordingTheCab:
         record_cab(client, org, made["id"])
         got = client.get(f"/requests/{made['id']}", headers=auth(org["ravi"])).json()
         assert got["cab_vehicle_number"] == "TS 09 EA 1234"
-        assert got["cab_driver_phone"] == "+91 98765 43210"
+        assert got["cab_driver_phone"] == "9876543210"
         assert got["travellers"][0]["cost_amount"] is None
 
     def test_a_swapped_cab_is_logged_with_what_it_replaced(self, client, db, org):
@@ -428,7 +428,7 @@ class TestRecordingTheCab:
         assert r.json()["booked_cab_type"] == "SEDAN"
 
         entry = log(db, made["id"], "UPDATE")[-1]
-        assert entry.summary.startswith(f"Priya Shah changed the cab for request #{made['id']}")
+        assert entry.summary.startswith(f"Priya Shah changed the cab for request {made['id']}")
         assert entry.changes == {
             "booked_cab_type": {"from": "SUV", "to": "SEDAN"},
             "cab_vehicle_number": {"from": "TS 09 EA 1234", "to": "TS 07 UB 5678"},
@@ -552,7 +552,7 @@ class TestAskingForAnotherDay:
         assert got["cab_extended_days"] == 0
 
         entry = log(db, made["id"], "SUBMIT")[-1]
-        assert entry.summary == f"Ravi Kumar asked to extend cab request #{made['id']} by a day"
+        assert entry.summary == f"Ravi Kumar asked to extend cab request {made['id']} by a day"
         assert entry.reason == "Audit runs into a second day"
 
     def test_the_admins_are_told_and_the_manager_in_app(self, client, db, org):

@@ -275,7 +275,7 @@ class TestRecommending:
         )).scalars().all()
         assert len(log) == 1
         assert log[0].reason == "Needed for the audit"
-        assert log[0].summary == f"Anil Mehta recommended Ravi Kumar on request #{made['id']}"
+        assert log[0].summary == f"Anil Mehta recommended Ravi Kumar on request {made['id']}"
 
         told = notices(db, "MANAGER_RECOMMENDED")
         assert {n.user_id for n in told} == {org["owner"].id, org["admin"].id}

@@ -253,6 +253,58 @@ def eligible(
     return sorted(rows, key=lambda t: (travel_date(t) or date.max, t.request_id, t.id))
 
 
+def why_not_listed(
+    db: Session, *, tenant_id: str, vendor_id: int, start: date, end: date
+) -> dict[str, int]:
+    """What stops trips in the period from showing for this vendor, counted.
+
+    For the invoice screen's empty state: "3 booked trips have no cost yet"
+    tells the admin what to do next; an empty table does not.
+    """
+    in_period = (
+        db.execute(
+            select(RequestTraveller)
+            .join(TravelRequest, RequestTraveller.request_id == TravelRequest.id)
+            .where(
+                TravelRequest.tenant_id == tenant_id,
+                TravelRequest.is_draft.is_(False),
+                TravelRequest.is_cancelled.is_(False),
+                _in_period(start, end),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    billed = set(
+        db.execute(
+            select(InvoiceLine.request_traveller_id).where(
+                InvoiceLine.request_traveller_id.in_([t.id for t in in_period] or [0])
+            )
+        ).scalars()
+    )
+    counts = {
+        "trips_in_period": len(in_period),
+        "not_booked_yet": 0,
+        "booked_without_cost": 0,
+        "other_vendor": 0,
+        "no_vendor_recorded": 0,
+        "already_invoiced": 0,
+    }
+    for t in in_period:
+        if t.status is not TravellerStatus.BOOKED:
+            if t.status in (TravellerStatus.PENDING, TravellerStatus.APPROVED):
+                counts["not_booked_yet"] += 1
+        elif t.cost_amount is None:
+            counts["booked_without_cost"] += 1
+        elif t.id in billed:
+            counts["already_invoiced"] += 1
+        elif t.vendor_id is None:
+            counts["no_vendor_recorded"] += 1
+        elif t.vendor_id != vendor_id:
+            counts["other_vendor"] += 1
+    return counts
+
+
 def billed_on(
     db: Session, traveller_ids: Iterable[int], *, besides: int | None = None
 ) -> dict[int, Invoice]:

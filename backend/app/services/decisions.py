@@ -290,7 +290,7 @@ def apply(
                 entity_id=traveller.id,
                 summary=(
                     f"{actor.full_name} approved {traveller.user.full_name} on request "
-                    f"#{request.id} over {len(clashes)} clash(es)"
+                    f"{request.id} over {len(clashes)} clash(es)"
                 ),
                 changes={"conflicts": [c.message for c in clashes]},
                 reason=override,
@@ -313,7 +313,7 @@ def apply(
         entity_id=traveller.id,
         summary=(
             f"{actor.full_name} {_VERB[target]} {traveller.user.full_name} "
-            f"on request #{request.id}"
+            f"on request {request.id}"
         ),
         changes={"status": {"from": str(previous), "to": str(target)}},
         reason=traveller.decision_reason,

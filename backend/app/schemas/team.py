@@ -10,7 +10,7 @@ from app.core import clock
 from app.core.enums import Designation, TeamChangeKind, TeamChangeStatus, UserStatus
 from app.schemas.auth import InviteLinkResponse
 from app.schemas.common import UTCInstant
-from app.schemas.user import PersonName, PhoneNumber, SelectableGender, WorkEmail
+from app.schemas.user import MobileNumber, PersonName, SelectableGender, WorkEmail
 
 
 def _tidy(value: str | None) -> str | None:
@@ -36,7 +36,7 @@ class TeamAddRequest(_Noted):
     full_name: PersonName = Field(min_length=2, max_length=160)
     designation: Designation | None = None
     gender: SelectableGender
-    phone: PhoneNumber = Field(default=None, max_length=32)
+    phone: MobileNumber = Field(default=None, max_length=32)
     employee_code: str | None = Field(default=None, max_length=40)
     base_state: str | None = Field(default=None, max_length=80)
     base_location: str | None = Field(default=None, max_length=120)
@@ -59,7 +59,7 @@ class TeamEditRequest(_Noted):
 
     full_name: PersonName | None = Field(default=None, min_length=2, max_length=160)
     designation: Designation | None = None
-    phone: PhoneNumber = Field(default=None, max_length=32)
+    phone: MobileNumber = Field(default=None, max_length=32)
     employee_code: str | None = Field(default=None, max_length=40)
     base_state: str | None = Field(default=None, max_length=80)
     base_location: str | None = Field(default=None, max_length=120)

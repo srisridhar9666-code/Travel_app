@@ -32,6 +32,7 @@ import {
 } from '@/lib/api';
 import { routeLabel } from '@/lib/places';
 import { formatInstantDate, todayInIndia } from '@/lib/time';
+import { MOBILE_HINT, mobileDigits } from '@/lib/utils';
 import {
   DESIGNATION_LABELS,
   GENDER_LABELS,
@@ -422,7 +423,7 @@ export default function MyTeamPage() {
                   <tr key={trip.id}>
                     <td className="px-5 py-3">
                       <div className="font-medium">
-                        #{trip.id} · {REQUEST_TYPE_LABELS[trip.request_type]}
+                        Request {trip.id} · {REQUEST_TYPE_LABELS[trip.request_type]}
                       </div>
                       <div className="text-xs text-text-muted">{trip.project_name}</div>
                     </td>
@@ -505,12 +506,13 @@ export default function MyTeamPage() {
               ))}
             </Select>
           </Field>
-          <Field label="Phone" htmlFor="add_phone">
+          <Field label="Phone" htmlFor="add_phone" hint={MOBILE_HINT}>
             <Input
               id="add_phone"
               value={addForm.phone ?? ''}
-              onChange={(e) => setAddForm({ ...addForm, phone: e.target.value })}
-              placeholder="+91 98765 43210"
+              onChange={(e) => setAddForm({ ...addForm, phone: mobileDigits(e.target.value) })}
+              placeholder="9876543210"
+              inputMode="numeric"
             />
           </Field>
           <Field label="Employee code" htmlFor="add_code">
@@ -583,11 +585,11 @@ export default function MyTeamPage() {
                 ))}
               </Select>
             </Field>
-            <Field label="Phone" htmlFor="edit_member_phone">
+            <Field label="Phone" htmlFor="edit_member_phone" hint={MOBILE_HINT}>
               <Input
                 id="edit_member_phone"
                 value={editDraft.phone}
-                onChange={(e) => setEditDraft({ ...editDraft, phone: e.target.value })}
+                onChange={(e) => setEditDraft({ ...editDraft, phone: mobileDigits(e.target.value) })}
               />
             </Field>
             <Field label="Employee code" htmlFor="edit_member_code">

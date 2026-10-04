@@ -150,6 +150,16 @@ class TestReportsTo:
         db.refresh(org["ravi"])
         assert org["ravi"].manager_id is None
 
+    def test_an_invite_refuses_a_number_someone_has(self, client, db, org):
+        org["ravi"].phone = "9876543210"
+        db.commit()
+        r = client.post("/users", headers=auth(org["admin"]),
+                        json=invite_body(phone="+91 98765 43210"))
+        assert r.status_code == 409
+        assert "Ravi Kumar" in r.json()["detail"]
+        r = client.post("/users", headers=auth(org["admin"]), json=invite_body(phone="91234 56780"))
+        assert r.status_code == 201, r.text
+
     def test_the_list_filters_by_manager(self, client, org):
         r = client.get("/users", headers=auth(org["admin"]),
                        params={"manager_id": org["lead"].id})
@@ -211,7 +221,7 @@ class TestTeamChanges:
         r = client.post(f"/team/changes/edit/{ravi.id}", headers=auth(org["lead"]),
                         json={"full_name": "Ravi Kumar", "phone": "+91 98765 43210"})
         assert r.status_code == 201, r.text
-        assert r.json()["payload"] == {"phone": {"from": None, "to": "+91 98765 43210"}}
+        assert r.json()["payload"] == {"phone": {"from": None, "to": "9876543210"}}
 
         # One open ask per person at a time.
         again = client.post(f"/team/changes/edit/{ravi.id}", headers=auth(org["lead"]),
@@ -222,7 +232,7 @@ class TestTeamChanges:
                         json={})
         assert r.status_code == 200, r.text
         db.refresh(ravi)
-        assert ravi.phone == "+91 98765 43210"
+        assert ravi.phone == "9876543210"
 
     def test_an_edit_that_changes_nothing_is_refused(self, client, org):
         r = client.post(f"/team/changes/edit/{org['ravi'].id}", headers=auth(org["lead"]),

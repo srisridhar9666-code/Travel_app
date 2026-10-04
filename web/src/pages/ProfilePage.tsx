@@ -18,6 +18,7 @@ import {
 } from '@/lib/api';
 import { passwordIssues } from '@/lib/password';
 import { formatInstant } from '@/lib/time';
+import { MOBILE_HINT, mobileDigits } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
 import {
   DESIGNATION_LABELS,
@@ -239,14 +240,15 @@ function Profile({ user }: { user: UserProfile }) {
                 onChange={(e) => edit({ full_name: e.target.value })}
               />
             </Field>
-            <Field label="Phone" htmlFor="profile_phone" hint="10 to 15 digits.">
+            <Field label="Phone" htmlFor="profile_phone" hint={MOBILE_HINT}>
               <Input
                 id="profile_phone"
                 type="tel"
                 autoComplete="tel"
                 value={details.phone}
-                onChange={(e) => edit({ phone: e.target.value })}
-                placeholder="+91 98765 43210"
+                onChange={(e) => edit({ phone: mobileDigits(e.target.value) })}
+                placeholder="9876543210"
+                inputMode="numeric"
               />
             </Field>
 

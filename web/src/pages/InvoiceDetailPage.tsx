@@ -321,7 +321,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
                     </td>
                     <td className="hidden px-2 py-2.5 align-top text-xs lg:table-cell">
                       {line.booking_reference ?? '—'}
-                      <span className="block text-2xs text-text-subtle">Request #{line.request_id}</span>
+                      <span className="block text-2xs text-text-subtle">Request {line.request_id}</span>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right align-top tabular-nums sm:pr-5">
                       {formatMoney(line.amount, true)}

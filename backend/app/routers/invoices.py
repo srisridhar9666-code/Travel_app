@@ -249,6 +249,23 @@ def list_invoices(
     )
 
 
+@router.get("/eligible/why")
+def why_not_listed(
+    actor: AdminUser,
+    db: DbSession,
+    vendor_id: Annotated[int, Query()],
+    start: Annotated[date, Query()],
+    end: Annotated[date, Query()],
+) -> dict[str, int]:
+    """Counts of the period's trips that cannot go on this vendor's invoice,
+    by reason - shown when the list of billable trips comes back empty."""
+    svc.check_period(start, end)
+    _vendor(db, actor, vendor_id)
+    return svc.why_not_listed(
+        db, tenant_id=actor.tenant_id, vendor_id=vendor_id, start=start, end=end
+    )
+
+
 @router.get("/eligible", response_model=list[EligibleRow])
 def eligible(
     actor: AdminUser,
@@ -801,7 +818,7 @@ def _csv(invoice: Invoice) -> str:
     if invoice.decided_by is not None and invoice.status in (
         InvoiceStatus.APPROVED, InvoiceStatus.REJECTED
     ):
-        when = clock.to_local(invoice.decided_at).strftime("%d %b %Y %H:%M") if invoice.decided_at else ""
+        when = clock.time_label(clock.to_local(invoice.decided_at)) if invoice.decided_at else ""
         status_line += f" by {invoice.decided_by.full_name} on {when}"
     header = [
         ("Invoice", invoice.number),
@@ -833,7 +850,7 @@ def _csv(invoice: Invoice) -> str:
             line.travel_date.isoformat() if line.travel_date else "",
             _cell(line.description),
             _cell(line.traveller.booking_reference or ""),
-            f"#{line.request_id}",
+            f"{line.request_id}",
             f"{line.amount:.2f}",
         ])
     writer.writerow(["", "", "", "", "Total", f"{invoice.total_amount:.2f}"])

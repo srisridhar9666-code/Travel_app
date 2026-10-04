@@ -93,7 +93,7 @@ def purge_expired(
             entity_type="id_proof",
             entity_id=proof.id,
             summary=(
-                f"Purged {proof_type} for user #{owner_id} - "
+                f"Purged {proof_type} for user {owner_id} - "
                 f"{settings.id_proof_retention_days} days past exit"
             ),
             reason="Scheduled retention policy",

@@ -190,7 +190,7 @@ def set_costs(
         action=AuditAction.UPDATE,
         entity_type="travel_request",
         entity_id=row.id,
-        summary=f"{actor.full_name} recorded cost on request #{row.id}{_paid_to(vendor)}",
+        summary=f"{actor.full_name} recorded cost on request {row.id}{_paid_to(vendor)}",
         changes={"costs": changes},
         tenant_id=actor.tenant_id,
         actor=actor,
@@ -275,7 +275,7 @@ def split_cost(
         entity_id=row.id,
         summary=(
             f"{actor.full_name} split {costs.to_money(payload.total_amount)} "
-            f"across {len(travellers)} traveller(s) on request #{row.id}{_paid_to(vendor)}"
+            f"across {len(travellers)} traveller(s) on request {row.id}{_paid_to(vendor)}"
         ),
         changes={"total": str(costs.to_money(payload.total_amount)), "costs": changes},
         tenant_id=actor.tenant_id,

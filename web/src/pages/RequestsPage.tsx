@@ -77,7 +77,8 @@ const dayMonth = (iso: string) =>
   });
 
 const dayTime = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, {
+  new Date(iso).toLocaleString('en-IN', {
+    hour12: true,
     day: '2-digit',
     month: 'short',
     hour: '2-digit',
@@ -132,7 +133,7 @@ function RevisionHistory({ requestId }: { requestId: number }) {
         <li key={revision.revision_number} className="border-l-2 border-border pl-3">
           <div className="flex flex-wrap items-baseline gap-x-2">
             <span className="text-xs font-medium">
-              #{revision.revision_number} {revision.summary}
+              {revision.revision_number}. {revision.summary}
             </span>
             <span className="text-2xs text-text-subtle">
               {revision.editor_name} · {formatInstant(revision.created_at)}
@@ -207,7 +208,7 @@ export default function RequestsPage() {
   const submit = useMutation({
     mutationFn: (id: number) => submitRequest(id),
     onSuccess: (saved) => {
-      toast.success(`Request #${saved.id} submitted`);
+      toast.success(`Request ${saved.id} submitted`);
       refresh();
     },
   });
@@ -232,7 +233,7 @@ export default function RequestsPage() {
   const cancel = useMutation({
     mutationFn: () => cancelRequest(cancelling!.id, cancelReason),
     onSuccess: (saved) => {
-      toast.success(`Request #${saved.id} cancelled`);
+      toast.success(`Request ${saved.id} cancelled`);
       setCancelling(null);
       setCancelReason('');
       refresh();
@@ -696,7 +697,7 @@ export default function RequestsPage() {
       <Modal
         open={cancelling !== null}
         onClose={() => setCancelling(null)}
-        title={`Cancel request #${cancelling?.id ?? ''}`}
+        title={`Cancel request ${cancelling?.id ?? ''}`}
         description="This cannot be undone. The reason is recorded in the activity log."
         footer={
           <>

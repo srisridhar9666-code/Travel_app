@@ -64,7 +64,8 @@ function presentFields(ticket: Ticket): [string, string][] {
     .map(([key, value]) => {
       const text =
         key === 'depart_at' || key === 'arrive_at'
-          ? new Date(String(value)).toLocaleString(undefined, {
+          ? new Date(String(value)).toLocaleString('en-IN', {
+              hour12: true,
               day: '2-digit',
               month: 'short',
               year: 'numeric',

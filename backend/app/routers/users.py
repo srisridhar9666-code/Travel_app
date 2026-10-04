@@ -257,6 +257,7 @@ def invite_account(
     """
     _guard_role_assignment(actor, payload.role)
     _email_taken(db, actor.tenant_id, payload.email)
+    accounts.assert_phone_free(db, actor.tenant_id, payload.phone)
     _check_department(db, actor, payload.department_id)
     _check_manager(db, actor, payload.manager_id, payload.role)
     # "hyd" under Telangana is stored as Hyderabad, as a request's places are.
@@ -551,6 +552,8 @@ def update_user(
         accounts.assert_keeps_a_system_admin(db, user, new_role=updates["role"])
     if "email" in updates and updates["email"] != user.email:
         _email_taken(db, actor.tenant_id, updates["email"], other_than=user.id)
+    if updates.get("phone"):
+        accounts.assert_phone_free(db, actor.tenant_id, updates["phone"], other_than=user.id)
     if "department_id" in updates:
         _check_department(db, actor, updates["department_id"])
     if "base_state" in updates or "base_location" in updates:

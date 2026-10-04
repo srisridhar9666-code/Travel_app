@@ -26,6 +26,7 @@ from fastapi import HTTPException, status as http_status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import clock
 from app.config import get_settings
 from app.core.enums import (
     ADMIN_ROLES,
@@ -46,11 +47,11 @@ _SENT_FIELDS = ("booked_cab_type", "cab_vehicle_number", "cab_driver_name", "cab
 
 
 def _when(request: TravelRequest) -> str:
-    return request.start_at.strftime("%d %b %Y, %H:%M") if request.start_at else "time to be set"
+    return clock.time_label(request.start_at) if request.start_at else "time to be set"
 
 
 def _until(request: TravelRequest) -> str:
-    return request.end_at.strftime("%d %b %Y, %H:%M") if request.end_at else "no end time"
+    return clock.time_label(request.end_at) if request.end_at else "no end time"
 
 
 def riders(request: TravelRequest) -> list[RequestTraveller]:
@@ -225,10 +226,10 @@ def record_booking(
         request.cab_booked_at = naive_utcnow()
         summary = (
             f"{admin.full_name} {'recorded' if first else 'changed'} the cab for request "
-            f"#{request.id}: {request.cab_sent_label}"
+            f"{request.id}: {request.cab_sent_label}"
         )
     else:
-        summary = f"{admin.full_name} recorded who was paid for the cab on request #{request.id}"
+        summary = f"{admin.full_name} recorded who was paid for the cab on request {request.id}"
     audit.record(
         db,
         action=AuditAction.UPDATE,
@@ -317,7 +318,7 @@ def ask_extension(
         action=AuditAction.SUBMIT,
         entity_type="travel_request",
         entity_id=request.id,
-        summary=f"{asker.full_name} asked to extend cab request #{request.id} by a day",
+        summary=f"{asker.full_name} asked to extend cab request {request.id} by a day",
         changes={
             "cab_extension_status": {
                 "from": str(previous) if previous else None,
@@ -338,7 +339,7 @@ def ask_extension(
     summary = trip_summary(request)
     link = f"{get_settings().frontend_base_url.rstrip('/')}/approvals"
     title = f"{asker.full_name} asked to keep a cab one more day"
-    later = (request.end_at + timedelta(days=1)).strftime("%d %b %Y, %H:%M")
+    later = clock.time_label(request.end_at + timedelta(days=1))
     queued: list[int] = []
     for admin in _admins(db, request, besides=asker):
         lines = [
@@ -435,7 +436,7 @@ def decide_extension(
         entity_type="travel_request",
         entity_id=request.id,
         summary=(
-            f"{admin.full_name} {verdict} {whose} ask to extend cab request #{request.id} by a day"
+            f"{admin.full_name} {verdict} {whose} ask to extend cab request {request.id} by a day"
             + (f"; it now runs until {_until(request)}" if approve else "")
         ),
         changes=changes,

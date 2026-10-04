@@ -52,6 +52,7 @@ import {
   type UserUpdatePayload,
 } from '@/lib/api';
 import { formatInstantDate } from '@/lib/time';
+import { MOBILE_HINT, mobileDigits } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
 import {
   ACCOUNT_ROLES,
@@ -103,6 +104,19 @@ const GENDER_REQUIRED = 'Choose Male or Female.';
 /** Lowest first, the order the role pickers list them in. */
 const ROLES_BY_RANK = (Object.keys(ROLE_RANK) as Role[]).sort((a, b) => ROLE_RANK[a] - ROLE_RANK[b]);
 const MANAGER_HINT = 'Their manager sees their trips (never costs) and can ask for changes to their details.';
+
+/** Designation "Manager" is a job title only; the list of managers is everyone
+ *  whose App access is Manager. Saying so, with names, when the two differ. */
+function reportsToHint(people: UserRow[]): string {
+  const titledOnly = people.filter(
+    (p) => p.designation === 'MANAGER' && p.role !== 'MANAGER' && p.status === 'ACTIVE',
+  );
+  if (titledOnly.length === 0) return MANAGER_HINT;
+  const names = titledOnly.slice(0, 3).map((p) => p.full_name).join(', ');
+  return `Only people whose App access is Manager are listed. ${names}${
+    titledOnly.length > 3 ? ' and others' : ''
+  } ${titledOnly.length === 1 ? 'has' : 'have'} the designation Manager but not Manager access - edit them and set App access to Manager.`;
+}
 const DEPARTMENT_HINT = 'e.g. Field Operations, Data, Finance. Type a new one to add it.';
 
 function isSelectableGender(gender: string): boolean {
@@ -782,7 +796,15 @@ export default function TeamPage() {
                   id="edit_role"
                   value={editForm.role}
                   disabled={editingSelf}
-                  onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
+                  onChange={(e) =>
+                    setEditForm({
+                      ...editForm,
+                      role: e.target.value,
+                      // A manager's job title follows their access, unless set.
+                      designation:
+                        e.target.value === 'MANAGER' && !editForm.designation ? 'MANAGER' : editForm.designation,
+                    })
+                  }
                 >
                   {ROLES_BY_RANK.filter(
                     (role) => grantable.includes(role) || role === editForm.role,
@@ -798,7 +820,7 @@ export default function TeamPage() {
                 <Field
                   label="Reports to"
                   htmlFor="edit_manager"
-                  hint={MANAGER_HINT}
+                  hint={reportsToHint(rows)}
                   className="sm:col-span-2"
                 >
                   <ManagerSelect
@@ -867,13 +889,14 @@ export default function TeamPage() {
                 </Select>
               </Field>
 
-              <Field label="Phone" htmlFor="edit_phone">
+              <Field label="Phone" htmlFor="edit_phone" hint={MOBILE_HINT}>
                 <Input
                   id="edit_phone"
                   type="tel"
                   value={editForm.phone}
-                  onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
-                  placeholder="+91 98765 43210"
+                  onChange={(e) => setEditForm({ ...editForm, phone: mobileDigits(e.target.value) })}
+                  placeholder="9876543210"
+                  inputMode="numeric"
                 />
               </Field>
 
@@ -986,7 +1009,16 @@ export default function TeamPage() {
               <Select
                 id="role"
                 value={form.role}
-                onChange={(e) => setForm({ ...form, role: e.target.value })}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    role: e.target.value,
+                    designation:
+                      e.target.value === 'MANAGER' && (!form.designation || form.designation === 'EXECUTIVE')
+                        ? 'MANAGER'
+                        : form.designation,
+                  })
+                }
               >
                 {grantable.map((role) => (
                   <option key={role} value={role}>
@@ -997,7 +1029,7 @@ export default function TeamPage() {
             </Field>
 
             {form.role === 'GROUND_STAFF' && (
-              <Field label="Reports to" htmlFor="manager" hint={MANAGER_HINT} className="sm:col-span-2">
+              <Field label="Reports to" htmlFor="manager" hint={reportsToHint(rows)} className="sm:col-span-2">
                 <ManagerSelect
                   id="manager"
                   value={form.manager_id ?? null}
@@ -1057,13 +1089,14 @@ export default function TeamPage() {
               </Select>
             </Field>
 
-            <Field label="Phone" htmlFor="phone">
+            <Field label="Phone" htmlFor="phone" hint={MOBILE_HINT}>
               <Input
                 id="phone"
                 type="tel"
                 value={form.phone ?? ''}
-                onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                placeholder="+91 98765 43210"
+                onChange={(e) => setForm({ ...form, phone: mobileDigits(e.target.value) })}
+                placeholder="9876543210"
+                inputMode="numeric"
               />
             </Field>
 

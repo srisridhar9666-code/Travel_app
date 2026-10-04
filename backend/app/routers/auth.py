@@ -287,6 +287,11 @@ def update_my_profile(
     if updates.get("full_name") is None:
         updates.pop("full_name", None)
 
+    if updates.get("phone"):
+        accounts.assert_phone_free(
+            db, user.tenant_id, updates["phone"], other_than=user.id, say_who=False
+        )
+
     before = {key: getattr(user, key) for key in updates}
     for key, value in updates.items():
         setattr(user, key, value)

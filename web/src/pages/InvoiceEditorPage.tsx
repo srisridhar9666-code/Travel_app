@@ -22,8 +22,10 @@ import {
   errorMessage,
   fetchEligible,
   fetchInvoice,
+  fetchWhyNotListed,
   submitInvoice,
   updateInvoice,
+  type WhyNotListed,
 } from '@/lib/api';
 import { dayLabel, lastMonth, sumAmounts } from '@/lib/invoices';
 import { todayInIndia } from '@/lib/time';
@@ -86,6 +88,28 @@ export default function InvoiceEditorPage() {
   return <InvoiceForm key={invoiceId ?? 'new'} invoice={existing.data ?? null} />;
 }
 
+/** The empty list explained: what is in the period, and what to do about it. */
+function whyText(why: WhyNotListed | undefined, includeUnassigned: boolean): string {
+  if (!why) return 'Only booked trips with a cost entered, travelling in these dates, can be billed.';
+  if (why.trips_in_period === 0) {
+    return 'No trips travel in these dates. Try a wider date range, e.g. "This month so far".';
+  }
+  const parts: string[] = [];
+  const n = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  if (why.booked_without_cost) {
+    parts.push(`${n(why.booked_without_cost, 'booked trip has', 'booked trips have')} no cost yet - enter it on Approvals, Booked tab, Cost`);
+  }
+  if (why.not_booked_yet) parts.push(`${n(why.not_booked_yet, 'trip is', 'trips are')} not marked booked yet`);
+  if (why.other_vendor) parts.push(`${n(why.other_vendor, 'trip was', 'trips were')} paid to another vendor`);
+  if (why.no_vendor_recorded && !includeUnassigned) {
+    parts.push(`${n(why.no_vendor_recorded, 'trip has', 'trips have')} no vendor recorded - tick "Also list trips with no vendor recorded"`);
+  }
+  if (why.already_invoiced) parts.push(`${n(why.already_invoiced, 'trip is', 'trips are')} already on another invoice`);
+  return parts.length
+    ? `In these dates: ${parts.join('; ')}.`
+    : 'Only booked trips with a cost entered, travelling in these dates, can be billed.';
+}
+
 function InvoiceForm({ invoice }: { invoice: Invoice | null }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -97,7 +121,9 @@ function InvoiceForm({ invoice }: { invoice: Invoice | null }) {
   const [vendorId, setVendorId] = useState<number | ''>(invoice?.vendor_id ?? '');
   const [start, setStart] = useState(initial.start);
   const [end, setEnd] = useState(initial.end);
-  const [includeUnassigned, setIncludeUnassigned] = useState(false);
+  // On by default: trips booked before vendors were recorded have none, and
+  // hiding them made a vendor look as if it had nothing to bill.
+  const [includeUnassigned, setIncludeUnassigned] = useState(true);
   const [selected, setSelected] = useState<Set<number>>(
     () => new Set(invoice?.lines.map((line) => line.traveller_id) ?? []),
   );
@@ -119,6 +145,11 @@ function InvoiceForm({ invoice }: { invoice: Invoice | null }) {
     placeholderData: keepPreviousData,
   });
   const rows = useMemo(() => eligible.data ?? [], [eligible.data]);
+  const why = useQuery({
+    queryKey: ['invoices', 'why', vendorId, start, end],
+    queryFn: () => fetchWhyNotListed({ vendor_id: vendorId as number, start, end }),
+    enabled: vendorId !== '' && periodOk && eligible.isSuccess && rows.length === 0,
+  });
   const pickable = rows.filter((row) => !row.problem);
 
   // A new vendor or period can leave trips out, and a line that can no longer
@@ -334,11 +365,7 @@ function InvoiceForm({ invoice }: { invoice: Invoice | null }) {
           <EmptyState
             icon={<Receipt size={28} />}
             title="No trips to bill"
-            description={
-              includeUnassigned
-                ? 'No booked trip with a cost falls in these dates that is not already on an invoice.'
-                : 'Nothing booked with a cost recorded against this vendor in these dates. Trips with no vendor recorded can be listed too.'
-            }
+            description={whyText(why.data, includeUnassigned)}
           />
         ) : (
           <div className="overflow-x-auto">
@@ -482,7 +509,7 @@ function TripRow({ row, ticked, onToggle }: { row: EligibleRow; ticked: boolean;
         <p className="font-medium">{row.traveller_name}</p>
         <p className="text-2xs text-text-subtle">
           {row.employee_code && `${row.employee_code} · `}
-          {row.booking_reference ? `Ref ${row.booking_reference}` : `Request #${row.request_id}`}
+          {row.booking_reference ? `Ref ${row.booking_reference}` : `Request ${row.request_id}`}
           {row.vendor_id === null && ' · no vendor recorded'}
         </p>
         <p className="text-2xs text-text-muted md:hidden">{row.trip}</p>

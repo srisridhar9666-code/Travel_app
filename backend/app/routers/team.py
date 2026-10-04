@@ -308,6 +308,7 @@ def ask_to_add(
     """Ask for someone new on the team. On approval they are invited as ground
     staff in the manager's department, reporting to the manager."""
     _email_taken(db, manager.tenant_id, payload.email)
+    accounts.assert_phone_free(db, manager.tenant_id, payload.phone)
     if any(c.payload.get("email") == payload.email for c in _pending_adds(db, manager.tenant_id)):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -349,6 +350,10 @@ def ask_to_edit(
         for field, value in sent.items()
         if field in EDITABLE_FIELDS and value != current[field]
     }
+    if "phone" in asked:
+        accounts.assert_phone_free(
+            db, manager.tenant_id, asked["phone"]["to"], other_than=member.id
+        )
     if not asked:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -515,6 +520,11 @@ def approve(
         target = _target_still_on_team(change, manager)
         if change.kind is TeamChangeKind.EDIT:
             before = {f: getattr(target, f) for f in change.payload}
+            if "phone" in change.payload:
+                # Someone else may have taken the number while this waited.
+                accounts.assert_phone_free(
+                    db, admin.tenant_id, change.payload["phone"]["to"], other_than=target.id
+                )
             for field, values in change.payload.items():
                 setattr(target, field, values["to"])
             audit.record(

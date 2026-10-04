@@ -48,14 +48,13 @@ function actionTone(action: string) {
 }
 
 function timestamp(iso: string) {
-  // 24-hour, so the seconds an audit trail needs still fit the column.
+  // With seconds, which an audit trail needs; 12-hour like every other time.
   return formatInstant(iso, {
     day: '2-digit',
     month: 'short',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    hourCycle: 'h23',
   });
 }
 
@@ -79,7 +78,7 @@ function Row({ entry }: { entry: AuditRow }) {
           <p className="mt-0.5 text-2xs text-text-subtle">
             {entry.actor_name ?? 'System'}
             {entry.actor_email ? ` · ${entry.actor_email}` : ''}
-            {` · ${entry.entity_type.replace(/_/g, ' ')}${entry.entity_id ? ` #${entry.entity_id}` : ''}`}
+            {` · ${entry.entity_type.replace(/_/g, ' ')}${entry.entity_id ? ` ${entry.entity_id}` : ''}`}
           </p>
 
           {open && hasDetail && (

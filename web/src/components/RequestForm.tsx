@@ -388,7 +388,7 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
     <Modal
       open={open}
       onClose={onClose}
-      title={editing ? `Edit request #${editing.id}` : 'New request'}
+      title={editing ? `Edit request ${editing.id}` : 'New request'}
       description={
         editing
           ? 'Every change is recorded and shown to the admin before they decide.'

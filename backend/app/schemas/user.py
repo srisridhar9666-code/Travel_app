@@ -13,7 +13,9 @@ from app.schemas.common import UTCInstant
 
 _PHONE_CHARS = re.compile(r"\+?[\d\s\-()]+")
 
-PHONE_MESSAGE = "Enter a phone number with 10 to 15 digits, e.g. +91 98765 43210."
+PHONE_MESSAGE = "Enter a phone number with 10 to 15 digits, e.g. 040 2345 6789."
+MOBILE_MESSAGE = "Enter a 10-digit mobile number starting with 6, 7, 8 or 9 - no country code."
+_MOBILE = re.compile(r"[6-9]\d{9}")
 GENDER_MESSAGE = "Choose Male or Female."
 
 
@@ -44,6 +46,30 @@ def tidy_phone(value: str | None) -> str | None:
     return cleaned
 
 
+def tidy_mobile(value: str | None) -> str | None:
+    """An employee's Indian mobile number as its bare ten digits, or None.
+
+    Staff numbers are stored one way so that "no two employees share a number"
+    can be checked, and so a number is shown and searched the same everywhere.
+    A pasted "+91 98765-43210" or "098765 43210" is accepted and stored as
+    9876543210; anything that is not then ten digits starting 6-9 is refused.
+    """
+    if value is None:
+        return None
+    digits = re.sub(r"[\s\-()]", "", value)
+    if not digits:
+        return None
+    if digits.startswith("+91") and len(digits) == 13:
+        digits = digits[3:]
+    elif digits.startswith("91") and len(digits) == 12:
+        digits = digits[2:]
+    elif digits.startswith("0") and len(digits) == 11:
+        digits = digits[1:]
+    if not _MOBILE.fullmatch(digits):
+        raise ValueError(MOBILE_MESSAGE)
+    return digits
+
+
 def selectable_gender(value: Gender) -> Gender:
     """Male or Female. The other two values exist only on rows saved before
     gender had to be chosen, and room sharing treats them as 'never share'."""
@@ -57,6 +83,8 @@ def selectable_gender(value: Gender) -> Gender:
 PersonName = Annotated[str, AfterValidator(tidy_name)]
 WorkEmail = Annotated[EmailStr, AfterValidator(tidy_email)]
 PhoneNumber = Annotated[str | None, AfterValidator(tidy_phone)]
+#: An employee's (or a cab driver's) mobile: ten digits, starting 6-9.
+MobileNumber = Annotated[str | None, AfterValidator(tidy_mobile)]
 SelectableGender = Annotated[Gender, AfterValidator(selectable_gender)]
 
 
@@ -67,7 +95,7 @@ class UserCreate(BaseModel):
     designation: Designation | None = None
     #: Required: it decides who may share a room, and nobody can guess it later.
     gender: SelectableGender
-    phone: PhoneNumber = Field(default=None, max_length=32)
+    phone: MobileNumber = Field(default=None, max_length=32)
     employee_code: str | None = Field(default=None, max_length=40)
     base_state: str | None = Field(default=None, max_length=80)
     #: The city or constituency they are based in.
@@ -106,7 +134,7 @@ class UserUpdate(BaseModel):
     role: Role | None = None
     designation: Designation | None = None
     gender: SelectableGender | None = None
-    phone: PhoneNumber = Field(default=None, max_length=32)
+    phone: MobileNumber = Field(default=None, max_length=32)
     employee_code: str | None = Field(default=None, max_length=40)
     base_state: str | None = Field(default=None, max_length=80)
     base_location: str | None = Field(default=None, max_length=120)

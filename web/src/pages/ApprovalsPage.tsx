@@ -435,7 +435,7 @@ function RevisionHistory({ requestId }: { requestId: number }) {
         <li key={revision.revision_number} className="border-l-2 border-border pl-3">
           <div className="flex flex-wrap items-baseline gap-x-2">
             <span className="text-xs font-medium">
-              #{revision.revision_number} {revision.summary}
+              {revision.revision_number}. {revision.summary}
             </span>
             <span className="text-2xs text-text-subtle">
               {revision.editor_name} · {formatInstant(revision.created_at)}

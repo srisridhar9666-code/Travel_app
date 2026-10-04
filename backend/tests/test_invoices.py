@@ -432,6 +432,26 @@ class TestEligibleTrips:
         with_unassigned = eligible(client, org, include_unassigned="true")
         assert unassigned in [r["traveller_id"] for r in with_unassigned]
 
+    def test_an_empty_list_comes_with_the_reasons(self, client, db, org):
+        trip(db, org, status=TravellerStatus.APPROVED)            # not booked yet
+        trip(db, org, cost=None)                                  # no cost recorded
+        trip(db, org, cost=None)
+        trip(db, org, vendor_key="zoom")                          # someone else's
+        trip(db, org, vendor_key=None)                            # vendor never recorded
+        trip(db, org, on=date(2026, 10, 1))                       # outside the period
+        r = client.get("/invoices/eligible/why", headers=auth(org["admin"]),
+                       params={"vendor_id": org["sai"], "start": START.isoformat(),
+                               "end": END.isoformat()})
+        assert r.status_code == 200, r.text
+        assert r.json() == {
+            "trips_in_period": 5, "not_booked_yet": 1, "booked_without_cost": 2,
+            "other_vendor": 1, "no_vendor_recorded": 1, "already_invoiced": 0,
+        }
+        r = client.get("/invoices/eligible/why", headers=auth(org["ravi"]),
+                       params={"vendor_id": org["sai"], "start": START.isoformat(),
+                               "end": END.isoformat()})
+        assert r.status_code == 403
+
     def test_a_trip_on_another_invoice_is_not_offered_again(self, client, db, org):
         traveller = trip(db, org)
         made = create(client, org, [traveller])
@@ -472,7 +492,7 @@ class TestCreating:
         assert made["line_count"] == 2
         assert [line["traveller_id"] for line in made["lines"]] == [one, two]   # by date
         assert made["lines"][0]["description"] == (
-            "Ravi Kumar · Flight: Hyderabad to Tirupati, 03 Sep 2026, 09:30 · CMP-2026-0002"
+            "Ravi Kumar · Flight: Hyderabad to Tirupati, 03 Sep 2026, 9:30 AM · CMP-2026-0002"
         )
         assert made["vendor_gstin"] == "36AABCD1234E1Z5"
         assert made["vendor_invoice_ref"] == "SAI/2026/118"

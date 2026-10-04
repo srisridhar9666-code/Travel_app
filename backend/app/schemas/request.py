@@ -25,7 +25,7 @@ from app.core.enums import (
     TravellerStatus,
 )
 from app.schemas.common import UTCInstant
-from app.schemas.user import PersonName, PhoneNumber
+from app.schemas.user import MobileNumber, PersonName
 
 #: Which fields each request type actually uses. Also the list the revision diff
 #: is taken over, so a field absent here is a field no one can amend.
@@ -528,7 +528,7 @@ class CabBookingPayload(BaseModel):
     booked_cab_type: CabType
     vehicle_number: str = Field(min_length=4, max_length=20)
     driver_name: PersonName = Field(min_length=2, max_length=120)
-    driver_phone: PhoneNumber = Field(max_length=32)
+    driver_phone: MobileNumber = Field(max_length=32)
     notify: bool = True
     #: The cab operator who was paid, recorded for everyone riding (approved
     #: or booked). Left out, each keeps the vendor they had. Admin-only, like
