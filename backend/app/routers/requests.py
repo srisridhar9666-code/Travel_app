@@ -23,7 +23,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, s
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.core.deps import AdminOrManager, AdminUser, CurrentUser, DbSession
+from app.core.deps import AdminOrManager, AdminUser, CurrentUser, DbSession, ManagerUser
 from app.core.enums import (
     PRIORITY_RANK,
     AuditAction,
@@ -45,6 +45,7 @@ from app.schemas.request import (
     ConflictCheckResponse,
     QueueCounts,
     QueueExport,
+    RecommendationPayload,
     RequestCreate,
     RequestEdit,
     RequestListResponse,
@@ -52,7 +53,7 @@ from app.schemas.request import (
     RevisionRead,
     RoomSharingChoicePayload,
 )
-from app.services import audit, costay, decisions, notifications
+from app.services import audit, costay, decisions, notifications, recommendations
 from app.services import requests as svc
 
 router = APIRouter(prefix="/requests", tags=["requests"])
@@ -60,6 +61,11 @@ router = APIRouter(prefix="/requests", tags=["requests"])
 #: Request statuses that still need an admin: the awaiting and partly approved
 #: tabs. Their high-priority rows are what the queue banner counts.
 WAITING = frozenset({RequestStatus.SUBMITTED, RequestStatus.PARTIALLY_APPROVED})
+
+#: The two-level approval filter. "waiting": someone still waiting on an admin
+#: has a manager who has not recommended yet. "reviewed": a manager has given
+#: their view. For a manager both mean their own team only.
+Review = Literal["waiting", "reviewed"]
 
 
 def _load(db: Session, request_id: int, user: User) -> TravelRequest:
@@ -154,6 +160,7 @@ def _matching(
     search: str | None,
     priority: RequestPriority | None,
     sort: str,
+    review: Review | None = None,
 ) -> list[TravelRequest]:
     """Every request the caller may see that matches the filters, in order.
 
@@ -215,6 +222,16 @@ def _matching(
     if request_status is not None:
         rows = [r for r in rows if svc.status_of(r) is request_status]
 
+    # The same reasoning applies to the manager's review: it is a fact about
+    # traveller rows and who they report to now, so it is read off the rows.
+    if review == "waiting":
+        rows = [
+            r for r in rows
+            if svc.status_of(r) in WAITING and recommendations.waits_on(r, user)
+        ]
+    elif review == "reviewed":
+        rows = [r for r in rows if recommendations.reviewed_by(r, user)]
+
     # The rows are already in memory, so "high first" is a stable re-sort of a
     # newest-first list rather than a second query.
     if sort == "priority":
@@ -233,6 +250,7 @@ def list_requests(
     search: Annotated[str | None, Query(max_length=120)] = None,
     priority: Annotated[RequestPriority | None, Query()] = None,
     sort: Annotated[Literal["newest", "priority"], Query()] = "newest",
+    review: Annotated[Review | None, Query(description="Two-level approval filter")] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> RequestListResponse:
@@ -241,6 +259,10 @@ def list_requests(
     Ground staff always see only what they are on, whatever `mine` says. Admins
     can widen to the whole tenant and managers to their team - minus everyone
     else's drafts. Costs are left out for everyone but admins.
+
+    `review=waiting` is a manager's "needs my recommendation" list (and, for
+    an admin, every request still waiting on a manager); `review=reviewed` is
+    what a manager has already given their view on.
     """
     rows = _matching(
         db,
@@ -252,6 +274,7 @@ def list_requests(
         search=search,
         priority=priority,
         sort=sort,
+        review=review,
     )
 
     total = len(rows)
@@ -264,7 +287,12 @@ def list_requests(
     return RequestListResponse(
         items=[
             svc.to_read(
-                db, r, tenant_id=user.tenant_id, with_conflicts=True, with_tickets=user.is_admin
+                db,
+                r,
+                tenant_id=user.tenant_id,
+                reader=user,
+                with_conflicts=True,
+                with_tickets=user.is_admin,
             )
             for r in window
         ],
@@ -351,6 +379,7 @@ def queue_counts(
     request_type: Annotated[RequestType | None, Query(alias="type")] = None,
     search: Annotated[str | None, Query(max_length=120)] = None,
     priority: Annotated[RequestPriority | None, Query()] = None,
+    review: Annotated[Review | None, Query()] = None,
 ) -> QueueCounts:
     """Headline numbers for the admin queue tabs.
 
@@ -373,6 +402,7 @@ def queue_counts(
             search=search,
             priority=priority,
             sort="newest",
+            review=review,
         )
         if not row.is_draft
     ]
@@ -380,12 +410,15 @@ def queue_counts(
     tally = {s: 0 for s in RequestStatus}
     conflicted = 0
     edited = 0
+    on_manager = 0
     urgent = {s: 0 for s in WAITING}
     for row in rows:
         row_status = svc.status_of(row)
         tally[row_status] += 1
         if row.priority is RequestPriority.HIGH and row_status in WAITING:
             urgent[row_status] += 1
+        if row_status in WAITING and recommendations.waits_on(row, actor):
+            on_manager += 1
         if svc.edit_count(db, row.id) > 0:
             edited += 1
         # Only requests still awaiting a decision are worth flagging as clashing:
@@ -408,6 +441,7 @@ def queue_counts(
         high_priority=sum(urgent.values()),
         high_priority_awaiting=urgent[RequestStatus.SUBMITTED],
         high_priority_partial=urgent[RequestStatus.PARTIALLY_APPROVED],
+        awaiting_manager=on_manager,
     )
 
 
@@ -420,6 +454,7 @@ def export_queue(
     project_id: Annotated[int | None, Query()] = None,
     search: Annotated[str | None, Query(max_length=120)] = None,
     priority: Annotated[RequestPriority | None, Query()] = None,
+    review: Annotated[Review | None, Query()] = None,
 ) -> QueueExport:
     """Every request in one queue tab, for the admin's CSV.
 
@@ -437,6 +472,7 @@ def export_queue(
         search=search,
         priority=priority,
         sort="priority",
+        review=review,
     )
     total = len(rows)
     rows = rows[: svc.MAX_EXPORT_ROWS]
@@ -525,6 +561,7 @@ def edit_request(
     )
 
     was_draft = row.is_draft
+    was_on = {t.user_id for t in row.travellers}
     before = svc.snapshot(row)
     svc.canonicalise_places(db, user.tenant_id, payload)
     svc.apply_body(row, payload)
@@ -550,16 +587,29 @@ def edit_request(
             summary=f"Edited {svc.describe_changes(changes)}",
             changes=changes,
         )
+        # A manager's view was of the trip as it was. Clear it and ask again,
+        # so an admin never reads "recommended" against dates nobody saw.
+        cleared = svc.clear_recommendations(row)
         audit.record(
             db,
             action=AuditAction.UPDATE,
             entity_type="travel_request",
             entity_id=row.id,
-            summary=f"{user.full_name} edited request #{row.id} ({svc.describe_changes(changes)})",
+            summary=(
+                f"{user.full_name} edited request #{row.id} ({svc.describe_changes(changes)})"
+                + ("; the manager's recommendation was cleared" if cleared else "")
+            ),
             changes=changes,
             tenant_id=user.tenant_id,
             actor=user,
             request=http_request,
+        )
+        background.add_task(
+            notifications.deliver_queued,
+            svc.ask_managers_after_edit(
+                db, request=row, actor=user, tenant_id=user.tenant_id,
+                cleared=cleared, was_on=was_on,
+            ),
         )
 
     db.commit()
@@ -887,3 +937,40 @@ def decide_batch(
     db.commit()
     db.refresh(row)
     return svc.to_read(db, row, tenant_id=actor.tenant_id, viewer=actor, with_conflicts=True)
+
+
+# ---------------------------------------------------------------------------
+# The manager's recommendation: the first of the two levels.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{request_id}/recommendation", response_model=RequestRead)
+def recommend(
+    request_id: int,
+    payload: RecommendationPayload,
+    manager: ManagerUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """A manager recommends their team members' trip, or does not, with a comment.
+
+    Covers their own people on the request who are still pending - or the ones
+    named in `traveller_ids`. They may change their mind until an admin
+    decides; every version is logged. The admins are told, comment included,
+    and the admin's decision stays final either way.
+    """
+    row = _load(db, request_id, manager)
+    queued = recommendations.record(
+        db,
+        request=row,
+        manager=manager,
+        recommendation=payload.recommendation,
+        comment=payload.comment,
+        traveller_ids=payload.traveller_ids,
+        http_request=http_request,
+    )
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, manager)

@@ -19,7 +19,9 @@ point has to obey them identically:
   `OVERRIDE_CONFLICT` *before* the approval it justifies.
 * **Every decision notifies the traveller.** In app and, from Phase 5, by email -
   through the notification ledger, so "was this person told?" has an answer
-  months later.
+  months later. Their manager is copied on the email and gets an in-app copy,
+  because the decision is the second of two levels and the manager gave the
+  first (`services/recommendations.py`).
 """
 from __future__ import annotations
 
@@ -37,7 +39,7 @@ from app.core.enums import (
 from app.models.base import naive_utcnow
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
-from app.services import audit, conflicts, notifications
+from app.services import audit, conflicts, notifications, recommendations
 
 #: Which audit action records which decision.
 _ACTION = {
@@ -122,16 +124,22 @@ def _notify(
     request: TravelRequest,
     target: TravellerStatus,
     reason: str | None,
+    actor: User | None = None,
 ) -> None:
-    """Tell the traveller what happened to them.
+    """Tell the traveller what happened to them, with their manager copied.
 
     Written per traveller, not per request, because on a group request the four
     people on it may have had four different answers. Goes through the ledger, so
     the email attempt is recorded alongside the in-app row.
+
+    The manager is on the email's Cc line rather than sent a second message, so
+    both read the same words - the admin's comment and, if they gave one, the
+    manager's own recommendation. They also get an in-app copy for the bell.
     """
     person = traveller.user
     if person is None:
         return
+    manager = person.active_manager
 
     where = (
         request.hotel_city
@@ -145,10 +153,15 @@ def _notify(
 
     greeting = person.full_name.split()[0] if person.full_name else "there"
     detail = [f"Hello {greeting},", "", short]
+    advice = recommendations.describe(traveller)
+    if advice:
+        detail += ["", f"Your manager's recommendation: {advice}"]
     if target is TravellerStatus.APPROVED:
         detail += ["", "Tickets will follow once they are booked."]
     if request.project:
         detail += ["", f"Campaign: {request.project.code} - {request.project.name}"]
+    if manager is not None:
+        detail += ["", f"{manager.full_name} is copied on this email."]
 
     notifications.notify(
         db,
@@ -160,6 +173,43 @@ def _notify(
         request_id=request.id,
         email_subject=f"Travel request {_VERB[target]} - {where}",
         email_body="\n".join(detail),
+        cc_users=[manager] if manager is not None else None,
+    )
+
+    by = f" by {actor.full_name}" if actor is not None else ""
+    copy = f"{person.full_name}'s {kind_of_trip} request for {where} was {_VERB[target]}{by}."
+    if reason:
+        copy += f" Reason: {reason}"
+    copy_manager(
+        db,
+        tenant_id=tenant_id,
+        person=person,
+        request=request,
+        title=f"{person.full_name}'s request was {_VERB[target]}",
+        body=copy,
+    )
+
+
+def copy_manager(
+    db: Session, *, tenant_id: str, person: User, request: TravelRequest, title: str, body: str
+) -> None:
+    """The manager's in-app copy of a decision on one of their team.
+
+    In app only: the email itself reached them as a Cc on the traveller's, and
+    a second message would say the same thing twice.
+    """
+    manager = person.active_manager
+    if manager is None:
+        return
+    notifications.notify(
+        db,
+        tenant_id=tenant_id,
+        user=manager,
+        kind="DECISION_COPY",
+        title=title,
+        body=body,
+        request_id=request.id,
+        send_email=False,
     )
 
 
@@ -266,6 +316,7 @@ def apply(
             request=request,
             target=target,
             reason=traveller.decision_reason,
+            actor=actor,
         )
     db.flush()
     return traveller

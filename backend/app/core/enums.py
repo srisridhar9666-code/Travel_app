@@ -175,6 +175,19 @@ ACTIVE_TRAVELLER_STATUSES = {
 }
 
 
+class ManagerRecommendation(StrEnum):
+    """What a traveller's manager said about their trip, before an admin decides.
+
+    Advice, not a decision: the admin is the final authority and may decide
+    before the manager answers, or against what they said. Held per traveller,
+    like status, because on a group request each person may have a different
+    manager.
+    """
+
+    RECOMMENDED = "RECOMMENDED"
+    NOT_RECOMMENDED = "NOT_RECOMMENDED"
+
+
 class RoomSharingChoice(StrEnum):
     """What the requester picked when the system offered a co-stay."""
 
@@ -214,6 +227,7 @@ class AuditAction(StrEnum):
     EXTRACT = "EXTRACT"
     NOTIFY = "NOTIFY"
     OVERRIDE_CONFLICT = "OVERRIDE_CONFLICT"
+    RECOMMEND = "RECOMMEND"             # a manager's advice on a team member's trip
     VIEW_SENSITIVE = "VIEW_SENSITIVE"   # ID proof opened - PII access trail
 
 
@@ -264,7 +278,7 @@ class NotificationCategory(StrEnum):
     BOOKINGS = "BOOKINGS"         # tickets confirmed, references issued
     ROOM_SHARING = "ROOM_SHARING"  # a colleague asked to share your room
     REMINDERS = "REMINDERS"       # nudges: travel coming up, requests going stale
-    NEW_REQUESTS = "NEW_REQUESTS"  # admins: someone raised a request to decide
+    NEW_REQUESTS = "NEW_REQUESTS"  # admins and managers: a request needs their answer
 
 
 #: Which category each notification kind belongs to. A kind that is missing here
@@ -280,6 +294,11 @@ NOTIFICATION_CATEGORIES: dict[str, NotificationCategory] = {
     "TRAVEL_REMINDER": NotificationCategory.REMINDERS,
     "REQUEST_STALE": NotificationCategory.REMINDERS,
     "REQUEST_SUBMITTED": NotificationCategory.NEW_REQUESTS,
+    "TEAM_REQUEST_SUBMITTED": NotificationCategory.NEW_REQUESTS,
+    "MANAGER_RECOMMENDED": NotificationCategory.NEW_REQUESTS,
+    # A manager's in-app copy of a decision on a team member's trip. The email
+    # itself reaches them as a Cc on the traveller's, so this never mails.
+    "DECISION_COPY": NotificationCategory.DECISIONS,
     "TEAM_CHANGE_REQUESTED": NotificationCategory.NEW_REQUESTS,
     "TEAM_CHANGE_APPROVED": NotificationCategory.DECISIONS,
     "TEAM_CHANGE_REJECTED": NotificationCategory.DECISIONS,
@@ -300,8 +319,10 @@ OPTIONAL_CATEGORIES = {
     NotificationCategory.NEW_REQUESTS,
 }
 
-#: Categories only an admin receives, so only an admin is offered the switch.
-ADMIN_CATEGORIES = {NotificationCategory.NEW_REQUESTS}
+#: Categories only someone who answers requests receives - admins deciding
+#: them, managers recommending their team's - so only they are offered the
+#: switch.
+APPROVER_CATEGORIES = {NotificationCategory.NEW_REQUESTS}
 
 
 class NotificationStatus(StrEnum):

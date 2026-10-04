@@ -95,25 +95,55 @@ def _may_send_to(address: str) -> bool:
     return address.strip().lower() in allowed
 
 
-def build(to_address: str, subject: str, body: str) -> EmailMessage:
+def build(
+    to_address: str, subject: str, body: str, cc: list[str] | None = None
+) -> EmailMessage:
     settings = get_settings()
     message = EmailMessage()
     message["Subject"] = subject
     message["From"] = f"{settings.email_from_name} <{settings.email_from}>"
     message["To"] = to_address
+    if cc:
+        # send_message() delivers to every address in To and Cc, so the header
+        # is the whole of what copying someone takes.
+        message["Cc"] = ", ".join(cc)
     message.set_content(body)
     return message
 
 
-def send(to_address: str, subject: str, body: str) -> Sent:
-    """Deliver one message, or record precisely why it was not delivered."""
+def _usable_copies(to_address: str, cc: list[str] | None) -> list[str]:
+    """The Cc list worth sending: real addresses, each once, never the main
+    recipient again."""
+    seen = {to_address.strip().lower()}
+    kept: list[str] = []
+    for address in cc or []:
+        address = (address or "").strip()
+        if "@" not in address or address.lower() in seen:
+            continue
+        seen.add(address.lower())
+        kept.append(address)
+    return kept
+
+
+def send(to_address: str, subject: str, body: str, *, cc: list[str] | None = None) -> Sent:
+    """Deliver one message, or record precisely why it was not delivered.
+
+    `cc` copies others in - a traveller's manager on a decision. The message
+    belongs to its main recipient, so whether it goes at all is decided by
+    them; each copy then passes the same allowlist on its own, and one that
+    may not be mailed here is simply left off.
+    """
     settings = get_settings()
 
     if not to_address or "@" not in to_address:
         return Sent(ok=False, detail="no usable address on this account")
 
+    copies = _usable_copies(to_address, cc)
+
     if _outbox is not None:
-        _outbox.messages.append({"to": to_address, "subject": subject, "body": body})
+        _outbox.messages.append(
+            {"to": to_address, "cc": copies, "subject": subject, "body": body}
+        )
         return Sent(ok=True)
 
     if not settings.email_enabled:
@@ -133,6 +163,11 @@ def send(to_address: str, subject: str, body: str) -> Sent:
             detail="address is outside EMAIL_ALLOWLIST for this environment",
         )
 
+    held_back = [address for address in copies if not _may_send_to(address)]
+    if held_back:
+        logger.info("Copy to %s not sent: outside EMAIL_ALLOWLIST", ", ".join(held_back))
+        copies = [address for address in copies if address not in held_back]
+
     missing = missing_settings()
     if missing:
         detail = f"SMTP is enabled but not configured: {', '.join(missing)} is not set"
@@ -142,8 +177,11 @@ def send(to_address: str, subject: str, body: str) -> Sent:
     try:
         with _connect(settings) as smtp:
             smtp.login(settings.smtp_username, settings.smtp_app_password)
-            smtp.send_message(build(to_address, subject, body))
-        logger.info("Mail sent to %s: %s", to_address, subject)
+            smtp.send_message(build(to_address, subject, body, cc=copies))
+        logger.info(
+            "Mail sent to %s%s: %s",
+            to_address, f" (cc {', '.join(copies)})" if copies else "", subject,
+        )
         return Sent(ok=True)
     except Exception as exc:
         # Deliberately broad: DNS, TLS, auth and refusal are all the same

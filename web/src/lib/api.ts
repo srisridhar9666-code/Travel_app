@@ -24,6 +24,7 @@ import type {
   JobResult,
   LedgerRow,
   LoginResponse,
+  ManagerRecommendation,
   NotificationPreferences,
   NotificationLedger,
   OpenTrips,
@@ -38,6 +39,7 @@ import type {
   RequestRevision,
   RequestType,
   RetentionStatus,
+  ReviewFilter,
   TravelHistory,
   SchedulerStatus,
   RoomSharingChoice,
@@ -61,7 +63,7 @@ import type {
  * shell compares it with what /health reports, to tell an admin when the API
  * process is older than this page.
  */
-export const API_VERSION = '0.10.0';
+export const API_VERSION = '0.11.0';
 
 /** Negative when `a` is older than `b`, by dotted number. */
 export function compareVersions(a: string, b: string): number {
@@ -518,6 +520,8 @@ export interface RequestQuery {
   priority?: RequestPriority;
   /** 'priority' puts high first, then medium, then low; newest first within each. */
   sort?: 'newest' | 'priority';
+  /** Two-level approval: still waiting on a manager, or already reviewed. */
+  review?: ReviewFilter;
   page?: number;
   page_size?: number;
 }
@@ -600,7 +604,12 @@ export const fetchColleagues = () =>
 /** Without filters, the whole queue; with them, only what matches - for tab
  *  labels that agree with the filtered list under them. */
 export const fetchQueueCounts = (
-  filters: { type?: RequestType; search?: string; priority?: RequestPriority } = {},
+  filters: {
+    type?: RequestType;
+    search?: string;
+    priority?: RequestPriority;
+    review?: ReviewFilter;
+  } = {},
 ) =>
   api.get<QueueCounts>('/requests/queue/counts', { params: filters }).then((r) => r.data);
 
@@ -611,6 +620,7 @@ export const exportQueue = (params: {
   type?: RequestType;
   search?: string;
   priority?: RequestPriority;
+  review?: ReviewFilter;
 }) =>
   api
     .get<QueueExport>('/requests/queue/export', { params, timeout: 120_000 })
@@ -620,6 +630,25 @@ export const exportQueue = (params: {
  *  the whole set back, so the queue never shows a half-applied decision. */
 export const decideBatch = (requestId: number, decisions: BatchDecisionItem[]) =>
   api.post<TravelRequest>(`/requests/${requestId}/decide`, { decisions }).then((r) => r.data);
+
+/** A manager's team requests: still waiting for their recommendation, or
+ *  already reviewed. One shared query key, so the sidebar badge and the Team
+ *  approvals page agree. */
+export const fetchTeamReviews = (review: ReviewFilter) =>
+  fetchRequests({ mine: false, review, sort: 'priority', page_size: 100 });
+
+export interface RecommendationBody {
+  recommendation: ManagerRecommendation;
+  comment: string;
+  /** Traveller rows on the request. Left out: every one of the manager's
+   *  team on it who is still pending. */
+  traveller_ids?: number[];
+}
+
+/** The first of the two levels: the manager's view, with a comment. Advice -
+ *  the admin makes the final decision. */
+export const recommendRequest = (requestId: number, body: RecommendationBody) =>
+  api.post<TravelRequest>(`/requests/${requestId}/recommendation`, body).then((r) => r.data);
 
 // --- tickets and extraction -----------------------------------------------
 

@@ -35,7 +35,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.enums import (
-    ADMIN_CATEGORIES,
+    APPROVER_CATEGORIES,
     OPTIONAL_CATEGORIES,
     NotificationCategory,
     NotificationChannel,
@@ -59,7 +59,9 @@ MAX_ATTEMPTS = 3
 STRANDED_AFTER = timedelta(minutes=5)
 
 
-def _send_email(to_address: str, subject: str, body: str) -> email.Sent:
+def _send_email(
+    to_address: str, subject: str, body: str, cc: list[str] | None = None
+) -> email.Sent:
     """Late-bound on purpose.
 
     Looking `email.send` up at call time rather than storing the function object
@@ -67,12 +69,18 @@ def _send_email(to_address: str, subject: str, body: str) -> email.Sent:
     have the registry honour that. A registry holding the original reference
     would silently ignore the swap, which is exactly the kind of bug that lets a
     test suite send real mail.
+
+    `cc` is passed only when there is someone to copy, so a stand-in transport
+    written for the plain three-argument call keeps working.
     """
+    if cc:
+        return email.send(to_address, subject, body, cc=cc)
     return email.send(to_address, subject, body)
 
 
-#: Channel -> transport. The one place to add SMS.
-SENDERS: dict[NotificationChannel, Callable[[str, str, str], email.Sent]] = {
+#: Channel -> transport. The one place to add SMS. Each takes the address,
+#: subject and body, and optionally who to copy.
+SENDERS: dict[NotificationChannel, Callable[..., email.Sent]] = {
     NotificationChannel.EMAIL: _send_email,
 }
 
@@ -116,6 +124,7 @@ def notify(
     send_email: bool = True,
     dedupe_key: str | None = None,
     deliver_now: bool = True,
+    cc_users: list[User] | None = None,
 ) -> list[Notification]:
     """Record a notice and try to deliver it.
 
@@ -130,6 +139,11 @@ def notify(
     `deliver_now=False` leaves the email row QUEUED for `deliver_queued` to send
     after the response, so the person who caused it is not kept waiting on the
     mail server - or on its timeout, when the mail server is unreachable.
+
+    `cc_users` are copied on the email - a traveller's manager on a decision.
+    Only active people with an address are copied, and only on a message that
+    goes at all: the email is the recipient's, so their preferences decide it.
+    Anything the people copied should see in the app is the caller's to write.
     """
     category = category_of(kind)
 
@@ -175,6 +189,7 @@ def notify(
             channel=NotificationChannel.EMAIL,
             status=NotificationStatus.QUEUED,
             to_address=user.email,
+            cc_addresses=_cc_line(user, cc_users),
             subject=(email_subject or title)[:255],
             dedupe_key=dedupe_key,
         )
@@ -186,6 +201,32 @@ def notify(
 
     db.flush()
     return rows
+
+
+#: The column is 500 characters; addresses past that are left off whole rather
+#: than cut in half.
+_CC_MAX = 500
+
+
+def _cc_line(recipient: User, cc_users: list[User] | None) -> str | None:
+    """The Cc list as stored on the email row: active people with an address,
+    each once, never the recipient themself."""
+    seen = {recipient.email.lower()} if recipient.email else set()
+    kept: list[str] = []
+    for person in cc_users or []:
+        address = (person.email or "").strip()
+        if not person.is_active or "@" not in address or address.lower() in seen:
+            continue
+        if len(", ".join([*kept, address])) > _CC_MAX:
+            break
+        seen.add(address.lower())
+        kept.append(address)
+    return ", ".join(kept) or None
+
+
+def cc_list(notification: Notification) -> list[str]:
+    """The addresses an email row copies, as a list."""
+    return [a.strip() for a in (notification.cc_addresses or "").split(",") if a.strip()]
 
 
 def _already_sent(db: Session, *, user_id: int, dedupe_key: str) -> bool:
@@ -219,6 +260,7 @@ def deliver(notification: Notification) -> Notification:
         notification.to_address or "",
         notification.subject or notification.title,
         f"{notification.body}{_signature()}",
+        cc_list(notification),
     )
 
     if result.ok:
@@ -343,7 +385,11 @@ def unread_count(db: Session, user: User) -> int:
 
 
 def preferences_for(db: Session, user: User) -> dict[str, bool]:
-    """This person's email preferences, one entry per switchable category."""
+    """This person's email preferences, one entry per switchable category.
+
+    "New requests" is offered only to the people who receive them: admins, who
+    decide requests, and managers, who recommend their team's.
+    """
     rows = (
         db.execute(
             select(NotificationPreference).where(
@@ -355,7 +401,8 @@ def preferences_for(db: Session, user: User) -> dict[str, bool]:
         .all()
     )
     stored = {str(r.category): r.enabled for r in rows}
-    offered = OPTIONAL_CATEGORIES if user.is_admin else OPTIONAL_CATEGORIES - ADMIN_CATEGORIES
+    answers_requests = user.is_admin or user.is_manager
+    offered = OPTIONAL_CATEGORIES if answers_requests else OPTIONAL_CATEGORIES - APPROVER_CATEGORIES
     return {str(c): stored.get(str(c), True) for c in sorted(offered, key=str)}
 
 

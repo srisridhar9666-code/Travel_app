@@ -138,6 +138,17 @@ class User(Base, TenantMixin, TimestampMixin):
         return self.manager.full_name if self.manager is not None else None
 
     @property
+    def active_manager(self) -> "User | None":
+        """The manager who answers for this person's trips right now.
+
+        None when their manager's account is switched off: nobody is left to
+        recommend, so a request must not look as if it is waiting on them, and
+        nobody should be copied on mail they can no longer act on.
+        """
+        manager = self.manager
+        return manager if manager is not None and manager.is_active else None
+
+    @property
     def is_admin(self) -> bool:
         return self.role in ADMIN_ROLES
 

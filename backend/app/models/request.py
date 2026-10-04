@@ -31,6 +31,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import (
+    ManagerRecommendation,
     NotificationCategory,
     NotificationChannel,
     NotificationStatus,
@@ -212,6 +213,28 @@ class RequestTraveller(Base, TimestampMixin):
     #: (addendum B3).
     booking_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
+    # --- the manager's recommendation (two-level approval) ------------------
+    #: The traveller's manager advises, an admin decides. Kept on the traveller
+    #: for the same reason the decision is: on a group request each person may
+    #: report to someone different. Advice only - an admin may decide before it
+    #: arrives - and it can be changed while the traveller is still pending,
+    #: every version kept in the activity log.
+    manager_recommendation: Mapped[ManagerRecommendation | None] = mapped_column(
+        _enum(ManagerRecommendation), nullable=True
+    )
+    #: Required with every recommendation; shown to admins and quoted in the
+    #: decision email the manager is copied on.
+    manager_comment: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    manager_reviewed_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "users.id",
+            ondelete="SET NULL",
+            name="fk_request_travellers_manager_reviewed_by",
+        ),
+        nullable=True,
+    )
+    manager_reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
     # --- what it cost (SOW sections 2 and 6, addendum C1) -------------------
     #: This person's share, not the whole request. Cost lives on the traveller
     #: for the same reason status does: a shared cab is one payment and several
@@ -247,6 +270,24 @@ class RequestTraveller(Base, TimestampMixin):
     share_with = relationship("User", foreign_keys=[share_with_user_id], lazy="joined")
     decided_by = relationship("User", foreign_keys=[decided_by_id], lazy="joined")
     cost_entered_by = relationship("User", foreign_keys=[cost_entered_by_id], lazy="joined")
+    manager_reviewed_by = relationship(
+        "User", foreign_keys=[manager_reviewed_by_id], lazy="joined"
+    )
+
+    @property
+    def awaits_manager(self) -> bool:
+        """Still pending, with a manager who has not said anything yet.
+
+        Never a reason the admin has to wait - they are the final authority -
+        only a fact the queue shows so a decision taken without the manager's
+        view is taken knowingly.
+        """
+        return (
+            self.status is TravellerStatus.PENDING
+            and self.manager_recommendation is None
+            and self.user is not None
+            and self.user.active_manager is not None
+        )
 
 
 class RequestRevision(Base):
@@ -335,6 +376,9 @@ class Notification(Base):
     #: Resolved when the row is written, not when it is sent, so the ledger
     #: records where it was meant to go even if the account changes later.
     to_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: Who else the email was copied to, comma separated - a traveller's manager
+    #: on a decision. Resolved when the row is written, like `to_address`.
+    cc_addresses: Mapped[str | None] = mapped_column(String(500), nullable=True)
     subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

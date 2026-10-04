@@ -396,6 +396,18 @@ export type RoomSharingChoice =
 
 export type ConflictKind = 'OVERLAPPING_TRAVEL' | 'OVERLAPPING_STAY' | 'DUPLICATE_REQUEST';
 
+/** A manager's advice on a team member's trip. The admin decides. */
+export type ManagerRecommendation = 'RECOMMENDED' | 'NOT_RECOMMENDED';
+
+export const RECOMMENDATION_LABELS: Record<ManagerRecommendation, string> = {
+  RECOMMENDED: 'Recommended',
+  NOT_RECOMMENDED: 'Not recommended',
+};
+
+/** The two-level approval list filter: still waiting on a manager, or
+ *  already given their view. For a manager, their own team only. */
+export type ReviewFilter = 'waiting' | 'reviewed';
+
 export interface RequestTraveller {
   id: number;
   user_id: number;
@@ -419,6 +431,17 @@ export interface RequestTraveller {
   /** On the admin queue list only: the uploaded ticket to open from this row - the
    *  confirmed one, else the newest still under review. */
   ticket_id?: number | null;
+
+  /** Two-level approval. Who this traveller reports to, if that manager is
+   *  active - shown to anyone who can see the request. */
+  manager_id: number | null;
+  manager_name: string | null;
+  /** What the manager said. Only an admin, or this traveller's own manager,
+   *  is sent it; everyone else - the traveller included - gets null. */
+  manager_recommendation: ManagerRecommendation | null;
+  manager_comment: string | null;
+  manager_reviewed_at: string | null;
+  manager_reviewed_by_name: string | null;
 
   /** This person's share of the cost. Admin-only — null for ground staff
    *  however they reach the request. Amounts are strings; see the note on
@@ -600,6 +623,9 @@ export interface QueueCounts {
   high_priority: number;
   high_priority_awaiting: number;
   high_priority_partial: number;
+  /** Still waiting on an admin, with someone whose manager has not
+   *  recommended yet. For a manager: their own team only. */
+  awaiting_manager: number;
 }
 
 /** Every request in one admin queue tab, read as the admin (so with cost), for
@@ -693,6 +719,9 @@ export interface LedgerRow {
   channel: NotificationChannel;
   status: NotificationStatus;
   to_address: string | null;
+  /** Who the email was copied to, comma separated - a traveller's manager on
+   *  a decision. */
+  cc_addresses: string | null;
   subject: string | null;
   attempts: number;
   sent_at: string | null;
@@ -785,7 +814,8 @@ export const CATEGORY_HINTS: Record<NotificationCategory, string> = {
   BOOKINGS: 'Your ticket reference once an admin has confirmed it.',
   ROOM_SHARING: 'When a colleague asks to share your room.',
   REMINDERS: 'A nudge shortly before a trip you are booked on.',
-  NEW_REQUESTS: 'Admins only: an email each time someone raises a request.',
+  NEW_REQUESTS:
+    'An email when a request needs your answer: a new one to decide, a manager’s recommendation, or your team’s request to recommend.',
 };
 
 /** The .env file the API reads. Key names only - never values. */

@@ -375,48 +375,91 @@ def ticket_per_traveller(db: Session, request_id: int) -> dict[int, int]:
     return {traveller_id: ticket_id for traveller_id, (_, ticket_id) in chosen.items()}
 
 
+def sees_review(reader: User | None, traveller: RequestTraveller) -> bool:
+    """Whether this reader may see a manager's recommendation and comment.
+
+    Admins, who weigh it, and the traveller's own manager, who wrote it. Not
+    the traveller or their colleagues on the request: it is advice to the
+    admin, not a message to them.
+    """
+    if reader is None or traveller.user is None:
+        return False
+    return reader.is_admin or traveller.user.manager_id == reader.id
+
+
+def _traveller_read(
+    t: RequestTraveller,
+    request: TravelRequest,
+    *,
+    show_cost: bool,
+    reader: User | None,
+    tickets: dict[int, int],
+) -> TravellerRead:
+    manager = t.user.active_manager if t.user else None
+    review = sees_review(reader, t)
+    return TravellerRead(
+        id=t.id,
+        user_id=t.user_id,
+        full_name=t.user.full_name if t.user else "",
+        email=t.user.email if t.user else "",
+        designation=t.user.designation if t.user else None,
+        status=t.status,
+        is_requester=t.user_id == request.requester_id,
+        room_sharing=t.room_sharing,
+        share_with_user_id=t.share_with_user_id,
+        share_with_name=t.share_with.full_name if t.share_with else None,
+        share_confirmed=t.share_confirmed_at is not None,
+        decided_by_name=t.decided_by.full_name if t.decided_by else None,
+        decided_at=t.decided_at,
+        decision_reason=t.decision_reason,
+        booking_reference=t.booking_reference,
+        ticket_id=tickets.get(t.id),
+        manager_id=manager.id if manager else None,
+        manager_name=manager.full_name if manager else None,
+        manager_recommendation=t.manager_recommendation if review else None,
+        manager_comment=t.manager_comment if review else None,
+        manager_reviewed_at=t.manager_reviewed_at if review else None,
+        manager_reviewed_by_name=(
+            t.manager_reviewed_by.full_name if review and t.manager_reviewed_by else None
+        ),
+        # Cost is admin-only. Ground staff seeing what a colleague's flight
+        # cost is a personnel problem nobody asked for, and nothing in
+        # section 6 needs it.
+        cost_amount=t.cost_amount if show_cost else None,
+        cost_currency=t.cost_currency if show_cost and t.cost_amount else None,
+        cost_note=t.cost_note if show_cost else None,
+        cost_entered_by_name=(
+            t.cost_entered_by.full_name if show_cost and t.cost_entered_by else None
+        ),
+    )
+
+
 def to_read(
     db: Session,
     request: TravelRequest,
     *,
     tenant_id: str,
     viewer: User | None = None,
+    reader: User | None = None,
     with_conflicts: bool = False,
     with_costay: bool = True,
     with_tickets: bool = False,
 ) -> RequestRead:
+    """The response shape of one request.
+
+    `viewer` unlocks the admin extras - cost, and co-stay matches for them.
+    `reader` is who the response is for, when that is not the viewer: the
+    paged list leaves cost and matching out for everyone, but still has to
+    show an admin or a manager the recommendations they may see. A caller that
+    passes `viewer` need not pass `reader`.
+    """
     show_cost = viewer is not None and viewer.is_admin
+    reader = reader or viewer
     # Only the admin queue asks: ticket files are admin-only to fetch, and the
     # export and single reads have no use for the extra query per request.
     tickets = ticket_per_traveller(db, request.id) if with_tickets else {}
     travellers = [
-        TravellerRead(
-            id=t.id,
-            user_id=t.user_id,
-            full_name=t.user.full_name if t.user else "",
-            email=t.user.email if t.user else "",
-            designation=t.user.designation if t.user else None,
-            status=t.status,
-            is_requester=t.user_id == request.requester_id,
-            room_sharing=t.room_sharing,
-            share_with_user_id=t.share_with_user_id,
-            share_with_name=t.share_with.full_name if t.share_with else None,
-            share_confirmed=t.share_confirmed_at is not None,
-            decided_by_name=t.decided_by.full_name if t.decided_by else None,
-            decided_at=t.decided_at,
-            decision_reason=t.decision_reason,
-            booking_reference=t.booking_reference,
-            ticket_id=tickets.get(t.id),
-            # Cost is admin-only. Ground staff seeing what a colleague's flight
-            # cost is a personnel problem nobody asked for, and nothing in
-            # section 6 needs it.
-            cost_amount=t.cost_amount if show_cost else None,
-            cost_currency=t.cost_currency if show_cost and t.cost_amount else None,
-            cost_note=t.cost_note if show_cost else None,
-            cost_entered_by_name=(
-                t.cost_entered_by.full_name if show_cost and t.cost_entered_by else None
-            ),
-        )
+        _traveller_read(t, request, show_cost=show_cost, reader=reader, tickets=tickets)
         for t in request.travellers
     ]
 
@@ -517,10 +560,11 @@ def clear_stale_shares(request: TravelRequest, changes: dict) -> None:
 def record_submission(
     db: Session, *, request: TravelRequest, actor: User, tenant_id: str, http_request=None
 ) -> list[int]:
-    """Mark a request submitted, open its revision trail at 1, and tell the admins.
+    """Mark a request submitted, open its revision trail at 1, and tell the
+    admins and the travellers' managers.
 
-    Returns the ids of the admin emails it queued, for the caller to send once
-    the response is on its way (`notifications.deliver_queued`).
+    Returns the ids of the emails it queued, for the caller to send once the
+    response is on its way (`notifications.deliver_queued`).
     """
     request.is_draft = False
     request.submitted_at = naive_utcnow()
@@ -541,7 +585,9 @@ def record_submission(
         actor=actor,
         request=http_request,
     )
-    return notify_admins_of_submission(db, request=request, actor=actor, tenant_id=tenant_id)
+    return notify_admins_of_submission(
+        db, request=request, actor=actor, tenant_id=tenant_id
+    ) + notify_managers_of_submission(db, request=request, actor=actor, tenant_id=tenant_id)
 
 
 def trip_summary(request: TravelRequest) -> str:
@@ -630,4 +676,158 @@ def notify_admins_of_submission(
             r.id for r in rows
             if r.channel == NotificationChannel.EMAIL and r.status == NotificationStatus.QUEUED
         ]
+    return queued
+
+
+def queued_emails(rows) -> list[int]:
+    """The ids of the email rows left QUEUED for an after-response send."""
+    return [
+        r.id for r in rows
+        if r.channel == NotificationChannel.EMAIL and r.status == NotificationStatus.QUEUED
+    ]
+
+
+def teams_on(request: TravelRequest) -> dict[int, tuple[User, list[RequestTraveller]]]:
+    """The travellers still pending on a request, grouped under the active
+    manager each reports to. Travellers with no manager are left out: there is
+    nobody to ask."""
+    teams: dict[int, tuple[User, list[RequestTraveller]]] = {}
+    for traveller in request.travellers:
+        manager = traveller.user.active_manager if traveller.user else None
+        if manager is None or traveller.status is not TravellerStatus.PENDING:
+            continue
+        teams.setdefault(manager.id, (manager, []))[1].append(traveller)
+    return teams
+
+
+def notify_managers_of_submission(
+    db: Session,
+    *,
+    request: TravelRequest,
+    actor: User,
+    tenant_id: str,
+    edited: bool = False,
+    only: set[int] | None = None,
+) -> list[int]:
+    """Ask each traveller's manager for their recommendation.
+
+    One notice per manager, naming only their own people. A manager who raised
+    the request themself is not told about it - they know, and can recommend
+    from Team approvals. `edited` says their earlier recommendation was cleared
+    by a change to the request, so they are being asked again; `only` limits
+    the notice to those managers.
+    """
+    summary = trip_summary(request)
+    link = f"{get_settings().frontend_base_url.rstrip('/')}/team-approvals"
+    campaign = f"{request.project.code} - {request.project.name}" if request.project else None
+    label = (request.priority or RequestPriority.MEDIUM).value.title()
+
+    queued: list[int] = []
+    for manager, members in teams_on(request).values():
+        if manager.id == actor.id or (only is not None and manager.id not in only):
+            continue
+        names = ", ".join(t.user.full_name for t in members)
+        whose = (
+            f"{actor.full_name}'s request"
+            if actor.manager_id == manager.id
+            else f"A request for {names}"
+        )
+        asked = "needs your recommendation again" if edited else "needs your recommendation"
+        title = f"{whose} {asked}"
+        lines = [
+            f"Hello {manager.full_name.split()[0] if manager.full_name else 'there'},",
+            "",
+            (
+                f"{actor.full_name} changed a travel request for your team, so your earlier "
+                "recommendation was cleared. Please look at it again."
+                if edited
+                else f"{actor.full_name} raised a travel request for your team."
+            ),
+            "",
+            summary,
+            f"Your team on it: {names}",
+        ]
+        if campaign:
+            lines.append(f"Campaign: {campaign}")
+        if request.travel_reason:
+            lines.append(f"Reason: {request.travel_reason}")
+        lines.append(f"Priority: {label}")
+        lines += [
+            "",
+            "Recommend it or not, with a comment. An admin makes the final decision "
+            "and sees what you said.",
+            f"Team approvals: {link}",
+        ]
+        queued += queued_emails(
+            notifications.notify(
+                db,
+                tenant_id=tenant_id,
+                user=manager,
+                kind="TEAM_REQUEST_SUBMITTED",
+                title=title[:200],
+                body=f"{summary} - for {names}. Priority: {label}.",
+                request_id=request.id,
+                email_subject=f"{title}: {summary}"[:255],
+                email_body="\n".join(lines),
+                deliver_now=False,
+            )
+        )
+    return queued
+
+
+def clear_recommendations(request: TravelRequest) -> list[RequestTraveller]:
+    """Forget what managers said about a request that has since changed.
+
+    A recommendation is advice about one version of a trip. Carried onto new
+    dates or a new route it would tell the admin the manager agreed to
+    something they never saw, so an edit wipes it and the manager is asked
+    again. The old advice stays in the activity log.
+    """
+    cleared = []
+    for traveller in request.travellers:
+        if traveller.manager_recommendation is None:
+            continue
+        traveller.manager_recommendation = None
+        traveller.manager_comment = None
+        traveller.manager_reviewed_by_id = None
+        traveller.manager_reviewed_at = None
+        cleared.append(traveller)
+    return cleared
+
+
+def ask_managers_after_edit(
+    db: Session,
+    *,
+    request: TravelRequest,
+    actor: User,
+    tenant_id: str,
+    cleared: list[RequestTraveller],
+    was_on: set[int],
+) -> list[int]:
+    """Who needs asking after a submitted request was changed.
+
+    Managers whose recommendation the edit cleared are asked again, and the
+    manager of anyone newly added is asked for the first time. A manager who
+    has not answered yet already has the request waiting for them, and is left
+    alone rather than told twice.
+    """
+    again = {
+        t.user.active_manager.id
+        for t in cleared
+        if t.user is not None and t.user.active_manager is not None
+    }
+    first_time = {
+        t.user.active_manager.id
+        for t in request.travellers
+        if t.user_id not in was_on and t.user is not None and t.user.active_manager is not None
+    } - again
+    queued: list[int] = []
+    if again:
+        queued += notify_managers_of_submission(
+            db, request=request, actor=actor, tenant_id=tenant_id, edited=True, only=again
+        )
+    if first_time:
+        queued += notify_managers_of_submission(
+            db, request=request, actor=actor, tenant_id=tenant_id, only=first_time
+        )
     return queued

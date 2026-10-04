@@ -588,6 +588,21 @@ def _send_confirmation(
         request_id=request.id,
         email_subject=f"Booking confirmed - {where}",
         email_body=_confirmation_body(ticket, request, person.full_name),
+        # The same Cc as every other decision on this traveller: their manager
+        # sees the booking land.
+        cc_users=[person.active_manager] if person.active_manager is not None else None,
+    )
+
+    decisions.copy_manager(
+        db,
+        tenant_id=ticket.tenant_id,
+        person=person,
+        request=request,
+        title=f"{person.full_name}'s booking is confirmed",
+        body=(
+            f"{person.full_name}'s booking for {where} is confirmed. "
+            f"Reference {ticket.confirmed_reference}."
+        ),
     )
 
     mail = next((r for r in rows if r.channel is NotificationChannel.EMAIL), None)

@@ -414,6 +414,9 @@ function Ledger() {
                       {row.to_address && (
                         <div className="text-2xs text-text-subtle">{row.to_address}</div>
                       )}
+                      {row.cc_addresses && (
+                        <div className="text-2xs text-text-subtle">Cc {row.cc_addresses}</div>
+                      )}
                     </td>
                     <td className="px-5 py-2.5">
                       <div className="text-xs">{row.subject ?? row.title}</div>

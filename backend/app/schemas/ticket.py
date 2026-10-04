@@ -98,6 +98,8 @@ class NotificationRow(BaseModel):
     channel: NotificationChannel
     status: NotificationStatus
     to_address: str | None = None
+    #: Who the email was copied to, comma separated.
+    cc_addresses: str | None = None
     subject: str | None = None
     attempts: int
     sent_at: UTCInstant | None = None

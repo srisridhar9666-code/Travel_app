@@ -62,6 +62,7 @@ def _row(entry: Notification, user_name: str | None) -> NotificationRow:
         channel=entry.channel,
         status=entry.status,
         to_address=entry.to_address,
+        cc_addresses=entry.cc_addresses,
         subject=entry.subject,
         attempts=entry.attempts,
         sent_at=entry.sent_at,

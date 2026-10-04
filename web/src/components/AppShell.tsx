@@ -6,6 +6,7 @@ import {
   CalendarCheck,
   CheckSquare,
   ChevronDown,
+  ClipboardCheck,
   FolderKanban,
   History,
   LayoutDashboard,
@@ -33,6 +34,7 @@ import {
   fetchMe,
   fetchQueueCounts,
   fetchTeamChanges,
+  fetchTeamReviews,
   fetchUnreadCount,
   logout,
   saveThemePreference,
@@ -53,8 +55,9 @@ interface NavItem {
   /** Which section it sits under in the sidebar. */
   group: Group;
   /** A live count beside it: unread notices, requests waiting on a decision,
-   *  or managers' team changes waiting on an admin. */
-  badge?: 'unread' | 'queue' | 'team';
+   *  managers' team changes waiting on an admin, or team requests waiting on
+   *  the manager's recommendation. */
+  badge?: 'unread' | 'queue' | 'team' | 'review';
   /** On a phone, the first three of these (lowest first) get the bottom bar. */
   bottom?: number;
 }
@@ -67,6 +70,9 @@ const NAV: NavItem[] = [
   { to: '/requests', label: 'My requests', icon: CalendarCheck, group: 'Workspace', bottom: 2 },
   { to: '/notifications', label: 'Notifications', icon: Bell, group: 'Workspace', badge: 'unread', bottom: 3 },
   { to: '/approvals', label: 'Approvals', icon: CheckSquare, roles: ADMINS, group: 'Operations', badge: 'queue', bottom: 0 },
+  // A manager's half of two-level approval. On the phone bar too: for a
+  // manager it is the page with work waiting on them.
+  { to: '/team-approvals', label: 'Team approvals', icon: ClipboardCheck, roles: ['MANAGER'], group: 'Operations', badge: 'review', bottom: 0 },
   { to: '/travel-logs', label: 'Travel logs', icon: History, roles: ADMINS, group: 'Operations' },
   { to: '/analytics', label: 'Cost analytics', icon: BarChart3, roles: ADMINS, group: 'Operations' },
   { to: '/my-team', label: 'My team', icon: UsersRound, roles: ['MANAGER'], group: 'Manage' },
@@ -189,6 +195,12 @@ export default function AppShell() {
     queryFn: () => fetchTeamChanges('PENDING'),
     enabled: isAdmin,
   });
+  // The same query Team approvals reads, so the badge and the tab agree.
+  const reviews = useQuery({
+    queryKey: ['team-reviews', 'waiting'],
+    queryFn: () => fetchTeamReviews('waiting'),
+    enabled: user?.role === 'MANAGER',
+  });
   const countFor = (item: NavItem) =>
     item.badge === 'unread'
       ? (unread.data?.unread ?? 0)
@@ -196,7 +208,9 @@ export default function AppShell() {
         ? queue.data.awaiting + queue.data.partially_approved
         : item.badge === 'team'
           ? (teamChanges.data?.pending ?? 0)
-          : 0;
+          : item.badge === 'review'
+            ? (reviews.data?.total ?? 0)
+            : 0;
 
   const signOutMutation = useMutation({
     mutationFn: logout,

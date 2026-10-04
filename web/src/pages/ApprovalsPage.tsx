@@ -15,10 +15,12 @@ import {
   Plane,
   Ticket,
   Gavel,
+  UserCheck,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 
+import { ManagerReview } from '@/components/ManagerReview';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
 import { ConflictList } from '@/components/RequestForm';
@@ -46,14 +48,14 @@ import {
 } from '@/lib/api';
 import { downloadCsv, slug, type CsvCell } from '@/lib/csv';
 import { openFileTab, showFile } from '@/lib/files';
-import { routeLabel } from '@/lib/places';
-import { campaignLabel, revisionValue } from '@/lib/requests';
+import { campaignLabel, itinerary, revisionValue } from '@/lib/requests';
 import { fileStamp, formatInstant, parseInstant, sheetInstant } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import {
   DESIGNATION_LABELS,
   PRIORITY_LABELS,
   PRIORITY_ORDER,
+  RECOMMENDATION_LABELS,
   REQUEST_STATUS_LABELS,
   REQUEST_TYPE_LABELS,
   TRAVELLER_STATUS_LABELS,
@@ -63,6 +65,7 @@ import {
   type RequestType,
   type RequestStatus,
   type RequestTraveller,
+  type ReviewFilter,
   type TravelRequest,
   type TravellerStatus,
 } from '@/types';
@@ -125,30 +128,6 @@ type CountShape = {
   cancelled: number;
   expired: number;
 };
-
-const dayMonth = (iso: string) =>
-  new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso).toLocaleDateString(undefined, {
-    day: '2-digit',
-    month: 'short',
-  });
-
-const dayTime = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-
-function itinerary(request: TravelRequest): string {
-  if (request.request_type === 'HOTEL') {
-    const nights = request.check_out
-      ? `${dayMonth(request.check_in!)} – ${dayMonth(request.check_out)}`
-      : dayMonth(request.check_in!);
-    return `${request.hotel_city} · ${nights}`;
-  }
-  return `${routeLabel(request)} · ${request.start_at ? dayTime(request.start_at) : ''}`;
-}
 
 // --- CSV export ------------------------------------------------------------
 //
@@ -219,6 +198,16 @@ const COMMON_COLUMNS: ExportColumn[] = [
   { header: 'Traveller email', value: (_, t) => t.email },
   { header: 'Designation', value: (_, t) => (t.designation ? DESIGNATION_LABELS[t.designation] : '') },
   { header: 'Traveller status', value: (_, t) => TRAVELLER_STATUS_LABELS[t.status] },
+  { header: 'Manager', value: (_, t) => t.manager_reviewed_by_name ?? t.manager_name },
+  {
+    header: 'Manager recommendation',
+    value: (_, t) =>
+      t.manager_recommendation
+        ? `${RECOMMENDATION_LABELS[t.manager_recommendation]}${t.manager_comment ? ` - ${t.manager_comment}` : ''}`
+        : t.manager_name
+          ? 'Not given'
+          : '',
+  },
   { header: 'Request status', value: (r) => REQUEST_STATUS_LABELS[r.status] },
   { header: 'Times edited', value: (r) => r.edit_count },
 ];
@@ -457,6 +446,9 @@ export default function ApprovalsPage() {
   const [kind, setKindState] = useState<RequestType | ''>('');
   const [search, setSearchState] = useState('');
   const [priority, setPriorityState] = useState<RequestPriority | ''>('');
+  // Two-level approval: only requests still waiting on someone's manager.
+  // Those can only be on the two waiting tabs, so it is offered there alone.
+  const [review, setReviewState] = useState<ReviewFilter | ''>('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -469,6 +461,11 @@ export default function ApprovalsPage() {
   // a different tab is not a place anyone meant to go.
   const setTab = (next: TabKey) => {
     setTabState(next);
+    if (next !== 'SUBMITTED' && next !== 'PARTIALLY_APPROVED') setReviewState('');
+    setPage(1);
+  };
+  const setReview = (next: ReviewFilter | '') => {
+    setReviewState(next);
     setPage(1);
   };
   const setKind = (next: RequestType | '') => {
@@ -490,23 +487,29 @@ export default function ApprovalsPage() {
     type: kind || undefined,
     search: search.trim() || undefined,
     priority: priority || undefined,
+    review: review || undefined,
   };
 
   // The banners count the whole queue. The tab labels follow the search and
   // priority, as the list under them does: "Booked 12" over a high-priority
   // list of two read as the filter not working.
   const counts = useQuery({ queryKey: ['queue-counts'], queryFn: () => fetchQueueCounts() });
-  const sliced = Boolean(filters.type || filters.search || filters.priority);
+  const sliced = Boolean(filters.type || filters.search || filters.priority || filters.review);
   const slicedCounts = useQuery({
-    queryKey: ['queue-counts', filters.type, filters.search, filters.priority],
+    queryKey: ['queue-counts', filters.type, filters.search, filters.priority, filters.review],
     queryFn: () =>
-      fetchQueueCounts({ type: filters.type, search: filters.search, priority: filters.priority }),
+      fetchQueueCounts({
+        type: filters.type,
+        search: filters.search,
+        priority: filters.priority,
+        review: filters.review,
+      }),
     enabled: sliced,
     placeholderData: keepPreviousData,
   });
   const tabCounts = sliced ? slicedCounts.data : counts.data;
   const requests = useQuery({
-    queryKey: ['queue', tab, kind, search, priority, page, pageSize],
+    queryKey: ['queue', tab, kind, search, priority, review, page, pageSize],
     queryFn: () =>
       fetchRequests({
         mine: false,
@@ -638,6 +641,8 @@ export default function ApprovalsPage() {
   const pages = Math.max(1, Math.ceil(total / (requests.data?.page_size ?? pageSize)));
   const countData = counts.data;
   const urgent = countData?.high_priority ?? 0;
+  const onManager = tabCounts?.awaiting_manager ?? 0;
+  const waitingTab = tab === 'SUBMITTED' || tab === 'PARTIALLY_APPROVED';
 
   // Deciding the last row on the last page moves it to another tab; step back
   // rather than leave the admin looking at an empty page with work behind it.
@@ -820,6 +825,24 @@ export default function ApprovalsPage() {
               </option>
             ))}
           </Select>
+          {waitingTab && (onManager > 0 || review) && (
+            <button
+              type="button"
+              aria-pressed={review === 'waiting'}
+              onClick={() => setReview(review === 'waiting' ? '' : 'waiting')}
+              title="Requests where a traveller's manager has not recommended yet. You can still decide them."
+              className={cn(
+                'inline-flex h-10 items-center gap-1.5 rounded-md border px-3 text-sm transition-colors',
+                review === 'waiting'
+                  ? 'border-warning/50 bg-warning-soft font-medium text-warning'
+                  : 'border-border bg-surface text-text-muted hover:bg-surface-sunken hover:text-text',
+              )}
+            >
+              <UserCheck size={15} />
+              Waiting for a manager
+              <span className="tabular-nums">{onManager}</span>
+            </button>
+          )}
         </div>
 
         {requests.isPending ? (
@@ -839,11 +862,13 @@ export default function ApprovalsPage() {
             icon={<CheckSquare size={28} />}
             title="Nothing here"
             description={
-              search.trim() || priority
-                ? 'Nothing in this tab matches that search or priority.'
-                : tab === 'SUBMITTED'
-                  ? 'No requests are waiting on a decision.'
-                  : 'No requests in this state.'
+              review
+                ? 'Nothing in this tab is waiting for a manager.'
+                : search.trim() || priority
+                  ? 'Nothing in this tab matches that search or priority.'
+                  : tab === 'SUBMITTED'
+                    ? 'No requests are waiting on a decision.'
+                    : 'No requests in this state.'
             }
           />
         ) : (
@@ -934,6 +959,13 @@ export default function ApprovalsPage() {
                           <span className="text-2xs text-text-subtle">
                             by {traveller.decided_by_name}
                           </span>
+                        )}
+                        {/* The first level, where there is one: what the
+                            traveller's manager said, or that they have not yet. */}
+                        {(traveller.manager_recommendation || traveller.manager_name) && (
+                          <div className="order-last basis-full">
+                            <ManagerReview traveller={traveller} />
+                          </div>
                         )}
 
                         <div className="ml-auto flex gap-1.5">
@@ -1104,6 +1136,20 @@ export default function ApprovalsPage() {
         )}
 
         <div className="space-y-4">
+          {/* The admin decides with the manager's view in front of them - or
+              knowing it has not come yet, which never stops them deciding. */}
+          {pending && (pending.traveller.manager_recommendation || pending.traveller.manager_name) && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium">Manager’s recommendation</p>
+              <ManagerReview traveller={pending.traveller} />
+              {!pending.traveller.manager_recommendation && pending.traveller.status === 'PENDING' && (
+                <p className="text-2xs text-text-subtle">
+                  You can decide now - the final decision is yours.
+                </p>
+              )}
+            </div>
+          )}
+
           {pending?.to === 'BOOKED' && (
             <Field
               label="Ticket or booking reference"
@@ -1157,7 +1203,11 @@ export default function ApprovalsPage() {
               <span className="font-medium">Email {pending?.traveller.full_name}</span>
               <span className="block text-text-muted">
                 {notify
-                  ? 'They get an email with this decision and the reason.'
+                  ? `They get an email with this decision and the reason.${
+                      pending?.traveller.manager_name
+                        ? ` ${pending.traveller.manager_name} is copied on it.`
+                        : ''
+                    }`
                   : 'No email. The in-app notice and the activity log are still written.'}
               </span>
             </span>

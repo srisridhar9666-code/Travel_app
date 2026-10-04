@@ -15,6 +15,7 @@ import ProjectsPage from '@/pages/ProjectsPage';
 import RequestsPage from '@/pages/RequestsPage';
 import SetPasswordPage from '@/pages/SetPasswordPage';
 import MyTeamPage from '@/pages/MyTeamPage';
+import TeamApprovalsPage from '@/pages/TeamApprovalsPage';
 import TeamPage from '@/pages/TeamPage';
 import TravelLogsPage from '@/pages/TravelLogsPage';
 import { useAuth, useHasHydrated } from '@/store/auth';
@@ -105,6 +106,14 @@ export default function App() {
             element={
               <RequireAuth roles={ADMIN_ROLES}>
                 <TeamPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="team-approvals"
+            element={
+              <RequireAuth roles={['MANAGER']}>
+                <TeamApprovalsPage />
               </RequireAuth>
             }
           />

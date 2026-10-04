@@ -4,12 +4,13 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.enums import (
     ConflictKind,
     ConflictSeverity,
     Designation,
+    ManagerRecommendation,
     RequestPriority,
     RequestStatus,
     RequestType,
@@ -184,6 +185,18 @@ class TravellerRead(BaseModel):
     #: The uploaded ticket to open from this row (GET /tickets/{id}/file):
     #: the confirmed one, else the newest under review. On the admin queue list only.
     ticket_id: int | None = None
+
+    # --- the manager's view, before an admin decides (two-level approval) ----
+    #: Who this traveller reports to, if that manager's account is active.
+    #: Shown to anyone who can see the request.
+    manager_id: int | None = None
+    manager_name: str | None = None
+    #: What the manager said. Only an admin, or this traveller's own manager,
+    #: is shown it; everyone else - the traveller included - reads None.
+    manager_recommendation: ManagerRecommendation | None = None
+    manager_comment: str | None = None
+    manager_reviewed_at: UTCInstant | None = None
+    manager_reviewed_by_name: str | None = None
 
     # --- cost (SOW 2 and 6, addendum C1). Admin-only; see the router. -------
     cost_amount: Decimal | None = None
@@ -374,6 +387,27 @@ class BatchDecisionPayload(BaseModel):
     decisions: list[BatchDecisionItem] = Field(min_length=1)
 
 
+class RecommendationPayload(BaseModel):
+    """A manager's advice on their team members' part of one request.
+
+    `traveller_ids` are traveller rows on the request (the same ids decisions
+    use). Left out, it covers every member of the manager's team on the
+    request who is still pending - the usual case, one person on one trip.
+    """
+
+    recommendation: ManagerRecommendation
+    comment: str = Field(min_length=3, max_length=500)
+    traveller_ids: list[int] | None = None
+
+    @field_validator("comment")
+    @classmethod
+    def _tidy_comment(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if len(cleaned) < 3:
+            raise ValueError("Add a comment for the admin, in a few words.")
+        return cleaned
+
+
 class QueueCounts(BaseModel):
     """Headline counts for the admin queue tabs."""
 
@@ -392,3 +426,7 @@ class QueueCounts(BaseModel):
     #: The same, split by tab, so the banner opens the one the work is on.
     high_priority_awaiting: int = 0
     high_priority_partial: int = 0
+    #: Requests still waiting on an admin where someone pending has a manager
+    #: who has not recommended yet. For a manager, only their own team counts -
+    #: so it is the number waiting on them.
+    awaiting_manager: int = 0
