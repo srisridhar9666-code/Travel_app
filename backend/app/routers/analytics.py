@@ -14,7 +14,7 @@ nothing in section 6 needs it.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core import clock
@@ -22,6 +22,7 @@ from app.core.deps import AdminUser, DbSession
 from app.core.enums import AuditAction, TravellerStatus
 from app.models.base import naive_utcnow
 from app.models.request import RequestTraveller, TravelRequest
+from app.models.vendor import Vendor
 from app.schemas.analytics import (
     AnalyticsBundle,
     CampaignSpend,
@@ -39,7 +40,7 @@ from app.schemas.analytics import (
 )
 from app.routers.insights import ReportFilters
 from app.schemas.request import RequestRead
-from app.services import analytics, audit, costs
+from app.services import analytics, audit, costs, invoices, notifications, vendors
 from app.services import requests as svc
 
 router = APIRouter(tags=["analytics"])
@@ -79,6 +80,29 @@ def _assert_costable(traveller: RequestTraveller) -> None:
         )
 
 
+class _VendorChoice:
+    """What the payload said about who was paid: nothing (each traveller keeps
+    theirs), a vendor, or null to clear it."""
+
+    def __init__(self, sent: bool, vendor: Vendor | None):
+        self.sent = sent
+        self.vendor = vendor
+
+    def id_for(self, traveller: RequestTraveller) -> int | None:
+        if not self.sent:
+            return traveller.vendor_id
+        return self.vendor.id if self.vendor is not None else None
+
+
+def _vendor_choice(
+    db: Session, actor, payload, travellers: list[RequestTraveller]
+) -> _VendorChoice:
+    if "vendor_id" not in payload.model_fields_set:
+        return _VendorChoice(False, None)
+    keeping = {t.vendor_id for t in travellers if t.vendor_id is not None}
+    return _VendorChoice(True, vendors.pick(db, actor.tenant_id, payload.vendor_id, keeping=keeping))
+
+
 def _apply(
     db: Session,
     *,
@@ -86,18 +110,31 @@ def _apply(
     amount,
     note: str | None,
     actor,
+    vendor: _VendorChoice,
 ) -> dict:
     before = traveller.cost_amount
+    vendor_before = vendors.name_of(traveller)
     traveller.cost_amount = costs.to_money(amount) if amount is not None else None
     traveller.cost_currency = costs.DEFAULT_CURRENCY
     traveller.cost_note = (note or "").strip() or None
     traveller.cost_entered_by_id = actor.id
     traveller.cost_entered_at = naive_utcnow()
-    return {
+    if vendor.sent:
+        traveller.vendor = vendor.vendor
+        traveller.vendor_id = vendor.id_for(traveller)
+    change = {
         "traveller": traveller.user.full_name,
         "from": str(before) if before is not None else None,
         "to": str(traveller.cost_amount) if traveller.cost_amount is not None else None,
     }
+    vendor_after = vendors.name_of(traveller)
+    if vendor_after != vendor_before:
+        change["vendor"] = {"from": vendor_before, "to": vendor_after}
+    return change
+
+
+def _paid_to(vendor: _VendorChoice) -> str:
+    return f", paid to {vendor.vendor.name}" if vendor.sent and vendor.vendor else ""
 
 
 # ---------------------------------------------------------------------------
@@ -111,12 +148,16 @@ def set_costs(
     payload: CostEntry,
     actor: AdminUser,
     http_request: Request,
+    background: BackgroundTasks,
     db: DbSession,
 ) -> RequestRead:
-    """Record what each person's travel cost - the explicit, override path.
+    """Record what each person's travel cost, and who was paid - the explicit,
+    override path.
 
     Also the ordinary path for a single traveller, where "splitting" a cost one
-    way would be a strange way to describe typing a number in.
+    way would be a strange way to describe typing a number in. A cost billed on
+    an approved invoice is locked; one on an invoice still being prepared
+    carries its new amount onto that invoice.
     """
     row = _load(db, request_id, actor.tenant_id)
 
@@ -127,26 +168,37 @@ def set_costs(
             detail="The same traveller appears twice in this payload.",
         )
     travellers = _travellers(row, ids)
-
-    changes = []
-    for entry, traveller in zip(payload.amounts, travellers, strict=True):
+    for traveller in travellers:
         _assert_costable(traveller)
-        changes.append(
-            _apply(db, traveller=traveller, amount=entry.amount, note=entry.note, actor=actor)
-        )
+    vendor = _vendor_choice(db, actor, payload, travellers)
+    invoices.guard_cost_change(
+        db,
+        [
+            (t, costs.to_money(e.amount) if e.amount is not None else None, vendor.id_for(t))
+            for e, t in zip(payload.amounts, travellers, strict=True)
+        ],
+    )
+
+    changes = [
+        _apply(db, traveller=traveller, amount=entry.amount, note=entry.note, actor=actor,
+               vendor=vendor)
+        for entry, traveller in zip(payload.amounts, travellers, strict=True)
+    ]
 
     audit.record(
         db,
         action=AuditAction.UPDATE,
         entity_type="travel_request",
         entity_id=row.id,
-        summary=f"{actor.full_name} recorded cost on request #{row.id}",
+        summary=f"{actor.full_name} recorded cost on request #{row.id}{_paid_to(vendor)}",
         changes={"costs": changes},
         tenant_id=actor.tenant_id,
         actor=actor,
         request=http_request,
     )
+    queued = invoices.follow_costs(db, travellers, actor=actor, http_request=http_request)
     db.commit()
+    background.add_task(notifications.deliver_queued, queued)
     db.refresh(row)
     return svc.to_read(db, row, tenant_id=actor.tenant_id, viewer=actor)
 
@@ -183,6 +235,7 @@ def split_cost(
     payload: CostSplit,
     actor: AdminUser,
     http_request: Request,
+    background: BackgroundTasks,
     db: DbSession,
 ) -> RequestRead:
     """Share one total evenly across several people and save it.
@@ -204,9 +257,14 @@ def split_cost(
 
     shares = costs.split_evenly(payload.total_amount, len(travellers))
     note = payload.note or f"Shared cost, split {len(travellers)} ways"
+    vendor = _vendor_choice(db, actor, payload, travellers)
+    invoices.guard_cost_change(
+        db,
+        [(t, share, vendor.id_for(t)) for t, share in zip(travellers, shares, strict=True)],
+    )
 
     changes = [
-        _apply(db, traveller=traveller, amount=share, note=note, actor=actor)
+        _apply(db, traveller=traveller, amount=share, note=note, actor=actor, vendor=vendor)
         for traveller, share in zip(travellers, shares, strict=True)
     ]
 
@@ -217,14 +275,16 @@ def split_cost(
         entity_id=row.id,
         summary=(
             f"{actor.full_name} split {costs.to_money(payload.total_amount)} "
-            f"across {len(travellers)} traveller(s) on request #{row.id}"
+            f"across {len(travellers)} traveller(s) on request #{row.id}{_paid_to(vendor)}"
         ),
         changes={"total": str(costs.to_money(payload.total_amount)), "costs": changes},
         tenant_id=actor.tenant_id,
         actor=actor,
         request=http_request,
     )
+    queued = invoices.follow_costs(db, travellers, actor=actor, http_request=http_request)
     db.commit()
+    background.add_task(notifications.deliver_queued, queued)
     db.refresh(row)
     return svc.to_read(db, row, tenant_id=actor.tenant_id, viewer=actor)
 

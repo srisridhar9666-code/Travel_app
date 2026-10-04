@@ -112,9 +112,14 @@ require_super_admin = require_roles(Role.SUPER_ADMIN)
 require_manager = require_roles(Role.MANAGER)
 #: Admins, and managers for their own work: campaigns, their team.
 require_admin_or_manager = require_roles(*ADMIN_ROLES, Role.MANAGER)
+#: Who prepares vendor invoices and keeps the vendor list: admins and system
+#: admins. Not the super admin, on purpose - they approve invoices, and the
+#: person who approves a bill must not be the one who wrote it.
+require_invoice_editor = require_roles(Role.ADMIN, Role.SYSTEM_ADMIN)
 
 AdminUser = Annotated[User, Depends(require_admin)]
 SystemAdminUser = Annotated[User, Depends(require_system_admin)]
 SuperAdminUser = Annotated[User, Depends(require_super_admin)]
 ManagerUser = Annotated[User, Depends(require_manager)]
 AdminOrManager = Annotated[User, Depends(require_admin_or_manager)]
+InvoiceEditor = Annotated[User, Depends(require_invoice_editor)]

@@ -27,6 +27,7 @@ from app.routers import departments as departments_router
 from app.routers import id_proofs as id_proofs_router
 from app.routers import insights as insights_router
 from app.routers import internal as internal_router
+from app.routers import invoices as invoices_router
 from app.routers import locations as locations_router
 from app.routers import notifications as notifications_router
 from app.routers import projects as projects_router
@@ -34,6 +35,7 @@ from app.routers import requests as requests_router
 from app.routers import tickets as tickets_router
 from app.routers import team as team_router
 from app.routers import users as users_router
+from app.routers import vendors as vendors_router
 from app.services import email as email_service
 from app.services import gemini, scheduler
 from app.services import locations as location_service
@@ -50,7 +52,7 @@ logger = logging.getLogger("travel_ops")
 #: older than the page calling it. The usual cause is an API that was not
 #: restarted after an update, which otherwise shows up as "Not Found", "Method
 #: Not Allowed" and pages with missing numbers.
-API_VERSION = "0.12.0"
+API_VERSION = "0.13.0"
 
 
 @cache
@@ -214,6 +216,8 @@ app.include_router(analytics_router.router)
 app.include_router(insights_router.router)
 app.include_router(id_proofs_router.router)
 app.include_router(audit_router.router)
+app.include_router(vendors_router.router)
+app.include_router(invoices_router.router)
 app.include_router(locations_router.router)
 app.include_router(internal_router.router)
 

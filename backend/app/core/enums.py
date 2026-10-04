@@ -281,6 +281,37 @@ class AuditAction(StrEnum):
     OVERRIDE_CONFLICT = "OVERRIDE_CONFLICT"
     RECOMMEND = "RECOMMEND"             # a manager's advice on a team member's trip
     VIEW_SENSITIVE = "VIEW_SENSITIVE"   # ID proof opened - PII access trail
+    EXPORT = "EXPORT"                   # a document left the system, e.g. an invoice CSV
+
+
+class VendorKind(StrEnum):
+    """Who an organisation pays for travel. Reporting only: any vendor can be
+    recorded against any trip, because a travel agent books hotels too."""
+
+    TRAVEL_AGENT = "TRAVEL_AGENT"
+    CAB = "CAB"
+    HOTEL = "HOTEL"
+    OTHER = "OTHER"
+
+
+class InvoiceStatus(StrEnum):
+    """Where a vendor's invoice stands. Admins prepare it (DRAFT), send it for
+    approval (SUBMITTED), and only a super admin decides it. A rejected one goes
+    back to the admins to fix and send again; an approved one never changes.
+    """
+
+    DRAFT = "DRAFT"
+    SUBMITTED = "SUBMITTED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+#: Invoice states an admin may still edit. Everything but approved: editing a
+#: rejected one is how it gets fixed, and editing a submitted one is allowed
+#: (the super admins are told it changed) rather than forcing a reject first.
+EDITABLE_INVOICE_STATUSES = frozenset(
+    {InvoiceStatus.DRAFT, InvoiceStatus.SUBMITTED, InvoiceStatus.REJECTED}
+)
 
 
 class IdProofType(StrEnum):
@@ -359,6 +390,12 @@ NOTIFICATION_CATEGORIES: dict[str, NotificationCategory] = {
     "CAB_EXTENSION_REQUESTED": NotificationCategory.NEW_REQUESTS,
     "CAB_EXTENSION_APPROVED": NotificationCategory.DECISIONS,
     "CAB_EXTENSION_REJECTED": NotificationCategory.DECISIONS,
+    # Vendor invoices: the super admins are asked to approve one, and told when
+    # one waiting on them changes; whoever prepared it hears the decision.
+    "INVOICE_SUBMITTED": NotificationCategory.NEW_REQUESTS,
+    "INVOICE_CHANGED": NotificationCategory.NEW_REQUESTS,
+    "INVOICE_APPROVED": NotificationCategory.DECISIONS,
+    "INVOICE_REJECTED": NotificationCategory.DECISIONS,
 }
 
 

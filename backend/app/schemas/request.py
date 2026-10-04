@@ -15,6 +15,7 @@ from app.core.enums import (
     ConflictKind,
     ConflictSeverity,
     Designation,
+    InvoiceStatus,
     ManagerRecommendation,
     RequestPriority,
     RequestStatus,
@@ -245,6 +246,13 @@ class TravellerRead(BaseModel):
     cost_currency: str | None = None
     cost_note: str | None = None
     cost_entered_by_name: str | None = None
+    #: Who was paid for this person's trip, and the invoice it is billed on.
+    #: Admin-only, like cost. A cost on an approved invoice is locked.
+    vendor_id: int | None = None
+    vendor_name: str | None = None
+    invoice_id: int | None = None
+    invoice_number: str | None = None
+    invoice_status: InvoiceStatus | None = None
 
 
 class ConflictRead(BaseModel):
@@ -522,6 +530,10 @@ class CabBookingPayload(BaseModel):
     driver_name: PersonName = Field(min_length=2, max_length=120)
     driver_phone: PhoneNumber = Field(max_length=32)
     notify: bool = True
+    #: The cab operator who was paid, recorded for everyone riding (approved
+    #: or booked). Left out, each keeps the vendor they had. Admin-only, like
+    #: cost: the travellers are never told it.
+    vendor_id: int | None = None
 
     @field_validator("booked_cab_type")
     @classmethod

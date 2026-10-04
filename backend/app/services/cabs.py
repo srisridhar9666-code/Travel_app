@@ -38,7 +38,7 @@ from app.models.base import naive_utcnow
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
 from app.schemas.request import CabBookingPayload
-from app.services import audit, decisions, notifications
+from app.services import audit, decisions, invoices, notifications, vendors
 from app.services.requests import RIDING, extension_refusal, queued_emails, trip_summary
 
 #: The columns that describe the car sent, as the activity log names them.
@@ -159,6 +159,32 @@ def _tell_traveller(
 # ---------------------------------------------------------------------------
 
 
+def _record_vendor(
+    db: Session, *, request: TravelRequest, admin: User, payload: CabBookingPayload
+) -> dict:
+    """Record the cab operator as the vendor for everyone riding, when the
+    admin named one. Refused for anyone whose cost an approved invoice billed
+    to someone else. Returns the change for the activity log, or {}."""
+    if "vendor_id" not in payload.model_fields_set:
+        return {}
+    people = riders(request)
+    keeping = {t.vendor_id for t in people if t.vendor_id is not None}
+    vendor = vendors.pick(db, request.tenant_id, payload.vendor_id, keeping=keeping)
+    new_id = vendor.id if vendor is not None else None
+    invoices.guard_cost_change(db, [(t, t.cost_amount, new_id) for t in people])
+    moved = {}
+    for traveller in people:
+        if traveller.vendor_id == new_id:
+            continue
+        moved[traveller.user.full_name] = {
+            "from": vendors.name_of(traveller),
+            "to": vendor.name if vendor is not None else None,
+        }
+        traveller.vendor = vendor
+        traveller.vendor_id = new_id
+    return {"vendor": moved} if moved else {}
+
+
 def record_booking(
     db: Session,
     *,
@@ -168,6 +194,8 @@ def record_booking(
     http_request=None,
 ) -> list[int]:
     """Record, or change, the car sent for a cab, and tell everyone riding.
+    When the admin names the cab operator, it is recorded as the vendor paid
+    for everyone riding - for the invoice, not for the travellers' eyes.
 
     Saving the same details twice is a no-op - no log row, no second message.
     The caller owns the commit and returns the queued email ids for sending
@@ -187,34 +215,44 @@ def record_booking(
     request.cab_vehicle_number = payload.vehicle_number
     request.cab_driver_name = payload.driver_name
     request.cab_driver_phone = payload.driver_phone
-    changes = audit.diff(before, {field: getattr(request, field) for field in _SENT_FIELDS})
-    if not changes:
+    car_changes = audit.diff(before, {field: getattr(request, field) for field in _SENT_FIELDS})
+    paid = _record_vendor(db, request=request, admin=admin, payload=payload)
+    if not car_changes and not paid:
         return []
 
-    request.cab_booked_by_id = admin.id
-    request.cab_booked_at = naive_utcnow()
+    if car_changes:
+        request.cab_booked_by_id = admin.id
+        request.cab_booked_at = naive_utcnow()
+        summary = (
+            f"{admin.full_name} {'recorded' if first else 'changed'} the cab for request "
+            f"#{request.id}: {request.cab_sent_label}"
+        )
+    else:
+        summary = f"{admin.full_name} recorded who was paid for the cab on request #{request.id}"
     audit.record(
         db,
         action=AuditAction.UPDATE,
         entity_type="travel_request",
         entity_id=request.id,
-        summary=(
-            f"{admin.full_name} {'recorded' if first else 'changed'} the cab for request "
-            f"#{request.id}: {request.cab_sent_label}"
-        ),
-        changes=changes,
+        summary=summary,
+        changes={**car_changes, **paid},
         tenant_id=request.tenant_id,
         actor=admin,
         request=http_request,
     )
     db.flush()
-    if not payload.notify:
-        return []
+    queued = (
+        invoices.follow_costs(db, riders(request), actor=admin, http_request=http_request)
+        if paid
+        else []
+    )
+    # Who was paid is the admins' business; the travellers hear only about the car.
+    if not payload.notify or not car_changes:
+        return queued
 
     where = request.route_label(" to ")
     car = CAB_TYPE_LABELS[request.booked_cab_type]
     headline = "Your cab is arranged" if first else "Your cab has changed"
-    queued: list[int] = []
     for traveller in riders(request):
         person = traveller.user
         short = (

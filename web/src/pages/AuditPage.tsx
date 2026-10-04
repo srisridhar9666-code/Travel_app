@@ -37,13 +37,13 @@ import type { AuditRow } from '@/types';
 const ACTIONS = [
   'CREATE', 'UPDATE', 'DELETE', 'LOGIN', 'LOGIN_FAILED', 'LOGOUT',
   'SUBMIT', 'APPROVE', 'REJECT', 'CANCEL', 'BOOK', 'UPLOAD',
-  'EXTRACT', 'NOTIFY', 'OVERRIDE_CONFLICT', 'VIEW_SENSITIVE',
+  'EXTRACT', 'NOTIFY', 'OVERRIDE_CONFLICT', 'RECOMMEND', 'VIEW_SENSITIVE', 'EXPORT',
 ];
 
 function actionTone(action: string) {
   if (action === 'LOGIN_FAILED' || action === 'REJECT' || action === 'DELETE') return 'danger';
   if (action === 'APPROVE' || action === 'BOOK' || action === 'CREATE') return 'success';
-  if (action === 'OVERRIDE_CONFLICT' || action === 'VIEW_SENSITIVE') return 'warning';
+  if (action === 'OVERRIDE_CONFLICT' || action === 'VIEW_SENSITIVE' || action === 'EXPORT') return 'warning';
   return 'neutral';
 }
 

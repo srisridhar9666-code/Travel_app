@@ -43,6 +43,7 @@ from app.core.enums import (
     is_editable,
 )
 from app.models.base import naive_utcnow
+from app.models.invoice import Invoice, InvoiceLine
 from app.models.project import Project
 from app.models.request import RequestRevision, RequestTraveller, TravelRequest
 from app.models.ticket import TicketDocument
@@ -437,6 +438,20 @@ def sees_review(reader: User | None, traveller: RequestTraveller) -> bool:
     return reader.is_admin or traveller.user.manager_id == reader.id
 
 
+def invoices_for(db: Session, request: TravelRequest) -> dict[int, Invoice]:
+    """The invoice each traveller on this request is billed on, if any. One
+    query for the request; asked only when cost is being shown."""
+    ids = [t.id for t in request.travellers]
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(InvoiceLine.request_traveller_id, Invoice)
+        .join(Invoice, InvoiceLine.invoice_id == Invoice.id)
+        .where(InvoiceLine.request_traveller_id.in_(ids))
+    ).all()
+    return {traveller_id: invoice for traveller_id, invoice in rows}
+
+
 def _traveller_read(
     t: RequestTraveller,
     request: TravelRequest,
@@ -444,9 +459,11 @@ def _traveller_read(
     show_cost: bool,
     reader: User | None,
     tickets: dict[int, int],
+    billed: dict[int, Invoice],
 ) -> TravellerRead:
     manager = t.user.active_manager if t.user else None
     review = sees_review(reader, t)
+    invoice = billed.get(t.id) if show_cost else None
     return TravellerRead(
         id=t.id,
         user_id=t.user_id,
@@ -481,6 +498,11 @@ def _traveller_read(
         cost_entered_by_name=(
             t.cost_entered_by.full_name if show_cost and t.cost_entered_by else None
         ),
+        vendor_id=t.vendor_id if show_cost else None,
+        vendor_name=t.vendor.name if show_cost and t.vendor_id else None,
+        invoice_id=invoice.id if invoice else None,
+        invoice_number=invoice.number if invoice else None,
+        invoice_status=invoice.status if invoice else None,
     )
 
 
@@ -512,8 +534,11 @@ def to_read(
     # Only the admin queue asks: ticket files are admin-only to fetch, and the
     # export and single reads have no use for the extra query per request.
     tickets = ticket_per_traveller(db, request.id) if with_tickets else {}
+    billed = invoices_for(db, request) if show_cost else {}
     travellers = [
-        _traveller_read(t, request, show_cost=show_cost, reader=reader, tickets=tickets)
+        _traveller_read(
+            t, request, show_cost=show_cost, reader=reader, tickets=tickets, billed=billed
+        )
         for t in request.travellers
     ]
 

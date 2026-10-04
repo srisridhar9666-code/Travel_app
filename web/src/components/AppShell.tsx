@@ -15,8 +15,10 @@ import {
   Monitor,
   PanelLeftClose,
   PanelLeftOpen,
+  Receipt,
   ScrollText,
   Smartphone,
+  Store,
   Users,
   UsersRound,
   X,
@@ -31,6 +33,7 @@ import { PageErrorBoundary, ServerStatusBanner } from '@/components/ServerStatus
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Spinner } from '@/components/ui';
 import {
+  fetchInvoices,
   fetchMe,
   fetchQueueCounts,
   fetchTeamChanges,
@@ -57,7 +60,7 @@ interface NavItem {
   /** A live count beside it: unread notices, requests waiting on a decision,
    *  managers' team changes waiting on an admin, or team requests waiting on
    *  the manager's recommendation. */
-  badge?: 'unread' | 'queue' | 'team' | 'review';
+  badge?: 'unread' | 'queue' | 'team' | 'review' | 'invoices';
   /** On a phone, the first three of these (lowest first) get the bottom bar. */
   bottom?: number;
 }
@@ -75,10 +78,14 @@ const NAV: NavItem[] = [
   { to: '/team-approvals', label: 'Team approvals', icon: ClipboardCheck, roles: ['MANAGER'], group: 'Operations', badge: 'review', bottom: 0 },
   { to: '/travel-logs', label: 'Travel logs', icon: History, roles: ADMINS, group: 'Operations' },
   { to: '/analytics', label: 'Cost analytics', icon: BarChart3, roles: ADMINS, group: 'Operations' },
+  // Every admin tier reads invoices; the count is for the super admin, the
+  // only one who can approve the ones waiting.
+  { to: '/invoices', label: 'Invoices', icon: Receipt, roles: ADMINS, group: 'Operations', badge: 'invoices' },
   { to: '/my-team', label: 'My team', icon: UsersRound, roles: ['MANAGER'], group: 'Manage' },
   { to: '/projects', label: 'Campaigns', icon: FolderKanban, roles: [...ADMINS, 'MANAGER'], group: 'Manage' },
   { to: '/team', label: 'Team', icon: Users, roles: ADMINS, group: 'Manage', badge: 'team' },
   { to: '/departments', label: 'Departments', icon: Building2, roles: ADMINS, group: 'Manage' },
+  { to: '/vendors', label: 'Vendors', icon: Store, roles: ADMINS, group: 'Manage' },
   { to: '/audit', label: 'Activity log', icon: ScrollText, roles: ADMINS, group: 'Manage' },
 ];
 
@@ -201,6 +208,13 @@ export default function AppShell() {
     queryFn: () => fetchTeamReviews('waiting'),
     enabled: user?.role === 'MANAGER',
   });
+  // Invoices waiting for a super admin. Read with the list's own call, so the
+  // number matches the Submitted tab.
+  const invoices = useQuery({
+    queryKey: ['invoices', 'badge'],
+    queryFn: () => fetchInvoices({ status: 'SUBMITTED', limit: 1 }),
+    enabled: user?.role === 'SUPER_ADMIN',
+  });
   const countFor = (item: NavItem) =>
     item.badge === 'unread'
       ? (unread.data?.unread ?? 0)
@@ -211,7 +225,9 @@ export default function AppShell() {
           ? (teamChanges.data?.pending ?? 0)
           : item.badge === 'review'
             ? (reviews.data?.total ?? 0)
-            : 0;
+            : item.badge === 'invoices'
+              ? (invoices.data?.counts.SUBMITTED ?? 0)
+              : 0;
 
   const signOutMutation = useMutation({
     mutationFn: logout,

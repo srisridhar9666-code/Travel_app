@@ -148,9 +148,12 @@ export const ROLE_DESCRIPTIONS: Record<Role, string> = {
   GROUND_STAFF: 'Raises and tracks their own travel. Can report to a manager.',
   MANAGER:
     "Leads a team: sees their trips (never costs), asks an admin to add, edit or remove members, and runs campaigns.",
-  ADMIN: 'Runs the travel desk: approvals, bookings, costs, people, departments and the activity log.',
-  SYSTEM_ADMIN: 'Everything an admin does, plus email settings and identity-document retention.',
-  SUPER_ADMIN: 'The top level: everything a system admin does, and the only one who can manage super admins.',
+  ADMIN:
+    'Runs the travel desk: approvals, bookings, costs, people, departments and the activity log. Keeps vendors and creates and edits vendor invoices.',
+  SYSTEM_ADMIN:
+    'Everything an admin does, including vendors and invoices, plus email settings and identity-document retention.',
+  SUPER_ADMIN:
+    'The top level: the only one who approves vendor invoices and manages super admins. Reads, but does not create or edit, invoices and vendors.',
 };
 
 /** A manager's ask to change their team, held until an admin decides. */
@@ -489,6 +492,13 @@ export interface RequestTraveller {
   cost_currency: string | null;
   cost_note: string | null;
   cost_entered_by_name: string | null;
+  /** Who was paid for this person's trip, and the invoice it is billed on.
+   *  Admin-only like cost. A cost on an approved invoice is locked. */
+  vendor_id?: number | null;
+  vendor_name?: string | null;
+  invoice_id?: number | null;
+  invoice_number?: string | null;
+  invoice_status?: InvoiceStatus | null;
 }
 
 export interface RequestConflict {
@@ -1255,4 +1265,171 @@ export interface FilterOptions {
   states: string[];
   /** Destination cities in use, with the state each is in. */
   cities: { state: string | null; city: string }[];
+}
+
+// --- vendors and invoices (vendor reconciliation) ---------------------------
+
+export type VendorKind = 'TRAVEL_AGENT' | 'CAB' | 'HOTEL' | 'OTHER';
+
+export const VENDOR_KINDS: VendorKind[] = ['TRAVEL_AGENT', 'CAB', 'HOTEL', 'OTHER'];
+
+export const VENDOR_KIND_LABELS: Record<VendorKind, string> = {
+  TRAVEL_AGENT: 'Travel agent',
+  CAB: 'Cab operator',
+  HOTEL: 'Hotel',
+  OTHER: 'Other',
+};
+
+/** Someone the organisation pays for travel. Switched off, never deleted. */
+export interface Vendor {
+  id: number;
+  name: string;
+  kind: VendorKind;
+  contact_name: string | null;
+  phone: string | null;
+  email: string | null;
+  gstin: string | null;
+  notes: string | null;
+  is_active: boolean;
+  created_at: string;
+  /** Trips whose cost was paid to them, and invoices raised against them. */
+  traveller_count: number;
+  invoice_count: number;
+}
+
+export interface VendorPayload {
+  name: string;
+  kind: VendorKind;
+  contact_name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  gstin?: string | null;
+  notes?: string | null;
+}
+
+export type InvoiceStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
+
+export const INVOICE_STATUSES: InvoiceStatus[] = ['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED'];
+
+export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
+  DRAFT: 'Draft',
+  SUBMITTED: 'Waiting for approval',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
+};
+
+export const INVOICE_STATUS_TONES: Record<InvoiceStatus, 'neutral' | 'warning' | 'success' | 'danger'> = {
+  DRAFT: 'neutral',
+  SUBMITTED: 'warning',
+  APPROVED: 'success',
+  REJECTED: 'danger',
+};
+
+/** Who prepares invoices and keeps the vendor list. Not the super admin: they
+ *  approve invoices, and whoever approves a bill must not have written it. */
+export const INVOICE_EDITOR_ROLES: Role[] = ['ADMIN', 'SYSTEM_ADMIN'];
+
+export const isInvoiceEditor = (role: Role | null | undefined): boolean =>
+  !!role && INVOICE_EDITOR_ROLES.includes(role);
+
+export interface InvoiceSummary {
+  id: number;
+  number: string;
+  vendor_id: number;
+  vendor_name: string;
+  vendor_kind: VendorKind;
+  period_start: string;
+  period_end: string;
+  status: InvoiceStatus;
+  currency: string;
+  /** Always the sum of the lines, worked out by the server. */
+  total_amount: string;
+  line_count: number;
+  vendor_invoice_ref: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  submitted_at: string | null;
+  decided_at: string | null;
+}
+
+export interface InvoiceLine {
+  id: number;
+  traveller_id: number;
+  request_id: number;
+  traveller_name: string;
+  employee_code: string | null;
+  request_type: RequestType | null;
+  travel_date: string | null;
+  /** As billed: name, trip and campaign, kept with the line. */
+  description: string;
+  project_code: string | null;
+  booking_reference: string | null;
+  amount: string;
+  /** Why it cannot be billed as it stands - cancelled, cost removed, paid to
+   *  someone else. Submitting and approving wait until it is dealt with. */
+  problem: string | null;
+}
+
+export interface InvoiceEvent {
+  action: string;
+  actor_name: string | null;
+  at: string;
+  summary: string;
+  comment: string | null;
+}
+
+export interface Invoice extends InvoiceSummary {
+  vendor_gstin: string | null;
+  vendor_contact_name: string | null;
+  vendor_phone: string | null;
+  vendor_email: string | null;
+  notes: string | null;
+  updated_by_name: string | null;
+  updated_at: string;
+  submitted_by_name: string | null;
+  decided_by_name: string | null;
+  decision_comment: string | null;
+  lines: InvoiceLine[];
+  history: InvoiceEvent[];
+  /** What the viewer may do now - the same rules the server enforces. */
+  can_edit: boolean;
+  can_submit: boolean;
+  can_delete: boolean;
+  can_decide: boolean;
+}
+
+export interface InvoiceList {
+  items: InvoiceSummary[];
+  /** Per status, whatever the status filter: the tabs' counts. */
+  counts: Record<InvoiceStatus, number>;
+  total: number;
+}
+
+/** A booked trip an invoice could carry. */
+export interface EligibleRow {
+  traveller_id: number;
+  request_id: number;
+  traveller_name: string;
+  employee_code: string | null;
+  request_type: RequestType;
+  travel_date: string | null;
+  trip: string;
+  project_code: string;
+  project_name: string;
+  booking_reference: string | null;
+  amount: string;
+  /** Null when nobody recorded who was paid; saving it records this vendor. */
+  vendor_id: number | null;
+  on_this_invoice: boolean;
+  /** Only on a line already on the invoice: why it can no longer be kept. */
+  problem: string | null;
+}
+
+export interface InvoicePayload {
+  vendor_id: number;
+  period_start: string;
+  period_end: string;
+  traveller_ids: number[];
+  vendor_invoice_ref?: string | null;
+  notes?: string | null;
 }

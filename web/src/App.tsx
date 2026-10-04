@@ -18,8 +18,13 @@ import MyTeamPage from '@/pages/MyTeamPage';
 import TeamApprovalsPage from '@/pages/TeamApprovalsPage';
 import TeamPage from '@/pages/TeamPage';
 import TravelLogsPage from '@/pages/TravelLogsPage';
+import InvoiceDetailPage from '@/pages/InvoiceDetailPage';
+import InvoiceEditorPage from '@/pages/InvoiceEditorPage';
+import InvoicePrintPage from '@/pages/InvoicePrintPage';
+import InvoicesPage from '@/pages/InvoicesPage';
+import VendorsPage from '@/pages/VendorsPage';
 import { useAuth, useHasHydrated } from '@/store/auth';
-import { ADMIN_ROLES, type Role } from '@/types';
+import { ADMIN_ROLES, INVOICE_EDITOR_ROLES, type Role } from '@/types';
 
 const ADMINS_AND_MANAGERS: Role[] = [...ADMIN_ROLES, 'MANAGER'];
 
@@ -57,6 +62,15 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/set-password" element={<SetPasswordPage />} />
+        {/* A page for paper: no sidebar or header around it. */}
+        <Route
+          path="/invoices/:id/print"
+          element={
+            <RequireAuth roles={ADMIN_ROLES}>
+              <InvoicePrintPage />
+            </RequireAuth>
+          }
+        />
 
         <Route
           element={
@@ -130,6 +144,46 @@ export default function App() {
             element={
               <RequireAuth roles={ADMIN_ROLES}>
                 <DepartmentsPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="vendors"
+            element={
+              <RequireAuth roles={ADMIN_ROLES}>
+                <VendorsPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="invoices"
+            element={
+              <RequireAuth roles={ADMIN_ROLES}>
+                <InvoicesPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="invoices/new"
+            element={
+              <RequireAuth roles={INVOICE_EDITOR_ROLES}>
+                <InvoiceEditorPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="invoices/:id"
+            element={
+              <RequireAuth roles={ADMIN_ROLES}>
+                <InvoiceDetailPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="invoices/:id/edit"
+            element={
+              <RequireAuth roles={INVOICE_EDITOR_ROLES}>
+                <InvoiceEditorPage />
               </RequireAuth>
             }
           />

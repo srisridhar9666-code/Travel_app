@@ -37,6 +37,7 @@ import { PriorityBadge } from '@/components/PriorityBadge';
 import { ConflictList } from '@/components/RequestForm';
 import CostPanel from '@/components/CostPanel';
 import TicketPanel from '@/components/TicketPanel';
+import { VendorSelect, sharedVendor } from '@/components/VendorSelect';
 import {
   Badge,
   Button,
@@ -54,6 +55,7 @@ import {
   errorMessage,
   exportQueue,
   fetchQueueCounts,
+  fetchRequest,
   fetchRequests,
   fetchRevisions,
   fetchTicketFile,
@@ -509,6 +511,19 @@ export default function ApprovalsPage() {
   // The car sent, typed in the booking dialog for a cab or in Cab details.
   const [cabDraft, setCabDraft] = useState<CabDraft | null>(null);
   const [cabEditing, setCabEditing] = useState<TravelRequest | null>(null);
+  // The cab operator paid, picked in Cab details. Null until the admin picks:
+  // the queue list leaves vendors out, so what is recorded is read below.
+  const [cabVendorPick, setCabVendorPick] = useState<number | '' | null>(null);
+  const cabDetail = useQuery({
+    queryKey: ['request', cabEditing?.id],
+    queryFn: () => fetchRequest(cabEditing!.id),
+    enabled: cabEditing !== null,
+  });
+  const cabVendorWas = cabDetail.data ? sharedVendor(cabDetail.data.travellers.filter(riding)) : '';
+  const cabVendor = cabVendorPick ?? cabVendorWas;
+  const cabVendorChanged = cabVendor !== '' && cabVendor !== cabVendorWas;
+  const cabCarChanged =
+    cabEditing !== null && cabDraft !== null && cabDraftChanged(cabDraft, cabEditing);
   // An answer to "one more day": the cab, and approve or reject.
   const [extension, setExtension] = useState<{ request: TravelRequest; approve: boolean } | null>(
     null,
@@ -697,13 +712,19 @@ export default function ApprovalsPage() {
   });
 
   const saveCab = useMutation({
-    mutationFn: (vars: { request: TravelRequest; body: CabBookingBody }) =>
+    mutationFn: (vars: { request: TravelRequest; body: CabBookingBody; carChanged: boolean }) =>
       recordCabBooking(vars.request.id, vars.body),
     meta: { errorFallback: 'Could not save the cab details.' },
-    onSuccess: () => {
-      toast.success('Cab details saved — everyone riding is told');
+    onSuccess: (_, vars) => {
+      // Who was paid is the admins' business: only a new car is told to anyone.
+      toast.success(
+        vars.carChanged ? 'Cab details saved — everyone riding is told' : 'Cab operator recorded',
+      );
       setCabEditing(null);
       setCabDraft(null);
+      setCabVendorPick(null);
+      queryClient.invalidateQueries({ queryKey: ['request', vars.request.id] });
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
       refresh();
     },
   });
@@ -1475,6 +1496,7 @@ export default function ApprovalsPage() {
         onClose={() => {
           setCabEditing(null);
           setCabDraft(null);
+          setCabVendorPick(null);
         }}
         title={cabEditing?.cab_vehicle_number ? 'Change the cab' : 'Record the cab sent'}
         description="Everyone approved or booked on this cab is told, with their manager copied. Every change is kept in the activity log."
@@ -1485,6 +1507,7 @@ export default function ApprovalsPage() {
               onClick={() => {
                 setCabEditing(null);
                 setCabDraft(null);
+                setCabVendorPick(null);
               }}
             >
               Cancel
@@ -1495,15 +1518,21 @@ export default function ApprovalsPage() {
                 !cabEditing ||
                 !cabDraft ||
                 !cabDraftComplete(cabDraft) ||
-                !cabDraftChanged(cabDraft, cabEditing)
+                (!cabCarChanged && !cabVendorChanged)
               }
-              onClick={() =>
-                cabEditing &&
-                cabDraft &&
-                saveCab.mutate({ request: cabEditing, body: cabBody(cabDraft, true) })
-              }
+              onClick={() => {
+                if (!cabEditing || !cabDraft) return;
+                saveCab.mutate({
+                  request: cabEditing,
+                  carChanged: cabCarChanged,
+                  body: {
+                    ...cabBody(cabDraft, true),
+                    ...(cabVendorChanged ? { vendor_id: cabVendor } : {}),
+                  },
+                });
+              }}
             >
-              Save and tell them
+              {!cabCarChanged && cabVendorChanged ? 'Save cab operator' : 'Save and tell them'}
             </Button>
           </>
         }
@@ -1517,6 +1546,19 @@ export default function ApprovalsPage() {
               idPrefix="cab"
               asked={cabAsked(cabEditing)}
             />
+            <Field
+              label="Cab operator paid"
+              htmlFor="cab-vendor"
+              hint="For matching the operator's invoice. Recorded for everyone riding; travellers are not told it."
+            >
+              <VendorSelect
+                id="cab-vendor"
+                value={cabVendor}
+                onChange={setCabVendorPick}
+                disabled={cabDetail.isPending}
+                emptyLabel="Not recorded — choose a vendor"
+              />
+            </Field>
           </div>
         )}
       </Modal>

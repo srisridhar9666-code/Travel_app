@@ -12,6 +12,7 @@ import type {
   CoStayMatch,
   CostPreview,
   Department,
+  EligibleRow,
   EmailStatus,
   EmailTestResult,
   FilterOptions,
@@ -22,6 +23,10 @@ import type {
   IdProof,
   ImportPreview,
   ImportResult,
+  Invoice,
+  InvoiceList,
+  InvoicePayload,
+  InvoiceStatus,
   InviteLink,
   JobResult,
   LedgerRow,
@@ -56,6 +61,8 @@ import type {
   TravelRequest,
   UserProfile,
   UserRow,
+  Vendor,
+  VendorPayload,
   UserStatus,
 } from '@/types';
 
@@ -65,7 +72,7 @@ import type {
  * shell compares it with what /health reports, to tell an admin when the API
  * process is older than this page.
  */
-export const API_VERSION = '0.12.0';
+export const API_VERSION = '0.13.0';
 
 /** Negative when `a` is older than `b`, by dotted number. */
 export function compareVersions(a: string, b: string): number {
@@ -668,6 +675,8 @@ export interface CabBookingBody {
   /** Off when the same dialog is about to mark the traveller booked: the
    *  booking notice then carries the car, so one message goes, not two. */
   notify?: boolean;
+  /** The cab operator paid, for everyone riding. Left out, each keeps theirs. */
+  vendor_id?: number;
 }
 
 /** Record or change the car sent for a cab. Admins only; logged, and everyone
@@ -786,10 +795,19 @@ export const runReminderJobs = () =>
 export const fetchAnalytics = (params: InsightFilters = {}) =>
   api.get<AnalyticsBundle>('/analytics', { params: repeatParams({ ...params }) }).then((r) => r.data);
 
+/** `vendorId`: who was paid, for everyone in `amounts`. Left out, each keeps
+ *  the vendor they had. */
 export const setCosts = (
   requestId: number,
   amounts: { traveller_id: number; amount: string | null; note?: string | null }[],
-) => api.post<TravelRequest>(`/requests/${requestId}/costs`, { amounts }).then((r) => r.data);
+  vendorId?: number,
+) =>
+  api
+    .post<TravelRequest>(`/requests/${requestId}/costs`, {
+      amounts,
+      ...(vendorId !== undefined ? { vendor_id: vendorId } : {}),
+    })
+    .then((r) => r.data);
 
 /** What an even split comes to, before saving. Shown so the odd paisa on the
  *  first row does not look like a bug the first time someone divides by three. */
@@ -800,8 +818,70 @@ export const previewSplit = (
 
 export const splitCost = (
   requestId: number,
-  body: { total_amount: string; traveller_ids: number[]; note?: string | null },
+  body: { total_amount: string; traveller_ids: number[]; note?: string | null; vendor_id?: number },
 ) => api.post<TravelRequest>(`/requests/${requestId}/costs/split`, body).then((r) => r.data);
+
+// --- vendors and invoices ---------------------------------------------------
+
+export const fetchVendors = (active?: boolean) =>
+  api
+    .get<Vendor[]>('/vendors', { params: active === undefined ? {} : { active } })
+    .then((r) => r.data);
+
+export const createVendor = (payload: VendorPayload) =>
+  api.post<Vendor>('/vendors', payload).then((r) => r.data);
+
+export const updateVendor = (id: number, payload: Partial<VendorPayload>) =>
+  api.patch<Vendor>(`/vendors/${id}`, payload).then((r) => r.data);
+
+/** Switched off, a vendor is no longer offered for new costs; its invoices
+ *  can still be finished. */
+export const setVendorActive = (id: number, active: boolean) =>
+  api.post<Vendor>(`/vendors/${id}/${active ? 'activate' : 'deactivate'}`).then((r) => r.data);
+
+export const fetchInvoices = (params: { status?: InvoiceStatus; vendor_id?: number; limit?: number } = {}) =>
+  api.get<InvoiceList>('/invoices', { params }).then((r) => r.data);
+
+export const fetchInvoice = (id: number) =>
+  api.get<Invoice>(`/invoices/${id}`).then((r) => r.data);
+
+/** Booked trips with a cost, paid to the vendor, in the period, on no other
+ *  invoice. With `invoice_id`, that invoice's own lines are included and marked. */
+export const fetchEligible = (params: {
+  vendor_id: number;
+  start: string;
+  end: string;
+  invoice_id?: number;
+  include_unassigned?: boolean;
+}) => api.get<EligibleRow[]>('/invoices/eligible', { params }).then((r) => r.data);
+
+export const createInvoice = (payload: InvoicePayload) =>
+  api.post<Invoice>('/invoices', payload).then((r) => r.data);
+
+export const updateInvoice = (id: number, payload: Partial<InvoicePayload>) =>
+  api.patch<Invoice>(`/invoices/${id}`, payload).then((r) => r.data);
+
+export const submitInvoice = (id: number) =>
+  api.post<Invoice>(`/invoices/${id}/submit`).then((r) => r.data);
+
+/** `expected_total` is the total on screen: if a cost moved it since, the
+ *  server refuses and the page shows the new figures instead. */
+export const approveInvoice = (id: number, body: { comment?: string | null; expected_total?: string }) =>
+  api.post<Invoice>(`/invoices/${id}/approve`, body).then((r) => r.data);
+
+export const rejectInvoice = (id: number, comment: string) =>
+  api.post<Invoice>(`/invoices/${id}/reject`, { comment }).then((r) => r.data);
+
+export const deleteInvoice = (id: number) => api.delete(`/invoices/${id}`).then(() => undefined);
+
+/** Fetched as a blob so the bearer token is attached; the download is logged. */
+export const downloadInvoiceCsv = (id: number) =>
+  api.get(`/invoices/${id}/export.csv`, { responseType: 'blob' }).then((r) => r.data as Blob);
+
+/** The print view tells the server it was opened, so the PDF copy is logged
+ *  beside the CSV downloads. */
+export const markInvoicePrinted = (id: number) =>
+  api.post(`/invoices/${id}/printed`).then(() => undefined);
 
 // --- audit viewer, hardening ----------------------------------------------
 

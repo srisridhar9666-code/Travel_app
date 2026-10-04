@@ -287,9 +287,13 @@ Roles are ranked, and nobody grants or changes the account of someone above them
 | --- | --- |
 | Ground staff | Raise and track their own travel. Can report to one manager. |
 | Manager | See their team's people, trips and travel history - never costs. Ask an admin to add, edit or remove a member (**My team**). Create and edit campaigns, but not archive or delete them. |
-| Admin | Run the desk: approvals, bookings, costs, Team, Departments, and the activity log. Approve or reject managers' team changes, with a comment the manager is sent. |
+| Admin | Run the desk: approvals, bookings, costs, Team, Departments, and the activity log. Approve or reject managers' team changes, with a comment the manager is sent. Keep the **Vendors** list and create, edit, submit and delete vendor **Invoices**. |
 | System admin | Everything an admin does, plus email settings and identity-document retention. |
-| Super admin | Everything, and the only role that can manage super admins. The migration makes the earliest active system admin of each organisation the first one. |
+| Super admin | Everything else, and the only role that can manage super admins. The only role that **approves or rejects invoices** - and so the one admin tier that cannot create or edit invoices or vendors (they read and download both). The migration makes the earliest active system admin of each organisation the first one. |
+
+Invoices: Admin and System admin create and edit them, only the Super admin approves, and
+Admin, System admin and Super admin can all read, download (CSV, or print to PDF) and see
+every step in the activity log.
 
 Teams are one level deep: only ground staff report to a manager, picked as **Reports to**
 on Team. A manager who is demoted or switched off releases their team for an admin to
@@ -558,6 +562,20 @@ invoices differs by trips that never happened.
 **A missing cost is reported as missing, never as zero.** `uncosted` rides on every analytics
 response, and the screen says out loud that the figures understate the truth until it is
 zero. A campaign with a blank fare must not look cheaper than one that was booked properly.
+
+**An invoice's money is never typed.** Each line is a booked traveller's recorded cost and
+the total is the sum of the lines (`app/services/invoices.py`); a client sending
+`total_amount` gets a 422. Only `BOOKED` trips can be billed, for the same reason only they
+count as spend. Lines follow the travellers' costs until a super admin approves, and are
+frozen from then on: the cost endpoints refuse (409, naming the invoice) to change the cost
+or vendor of a traveller on an approved invoice. A traveller is on one invoice line at most,
+held by the unique index `uq_invoice_lines_traveller`.
+
+**Nobody approves their own bill.** Admins and system admins prepare invoices
+(`deps.InvoiceEditor`); only a super admin decides them, and never one whose name is on the
+invoice's create, edit or submit rows in the log - which covers an admin promoted after
+preparing one. Invoice numbers (`INV-<year>-<n>`) are never reused, even after a draft is
+deleted, because the log still names the old one.
 
 **Cost is admin-only to read as well as to write.** Ground staff seeing what a colleague's
 flight cost is a personnel problem nobody asked for, and nothing in section 6 needs it.

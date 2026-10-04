@@ -343,6 +343,14 @@ class RequestTraveller(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     cost_entered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: Who was paid for this person's seat, room or cab - the travel agent, the
+    #: cab operator, the hotel. Recorded with the cost, and what a vendor's
+    #: invoice is reconciled against. Admin-only to read, like the cost.
+    vendor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vendors.id", ondelete="SET NULL", name="fk_request_travellers_vendor"),
+        nullable=True,
+        index=True,
+    )
 
     # --- co-stay (addendum B7, open question C2) ----------------------------
     room_sharing: Mapped[RoomSharingChoice] = mapped_column(
@@ -367,6 +375,9 @@ class RequestTraveller(Base, TimestampMixin):
     manager_reviewed_by = relationship(
         "User", foreign_keys=[manager_reviewed_by_id], lazy="joined"
     )
+    # Loaded on first use: vendors are few, so after the first one the
+    # session's identity map answers without a query.
+    vendor = relationship("Vendor")
 
     @property
     def awaits_manager(self) -> bool:
