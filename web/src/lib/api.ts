@@ -41,6 +41,10 @@ import type {
   TravelHistory,
   SchedulerStatus,
   RoomSharingChoice,
+  TeamChange,
+  TeamChangeList,
+  TeamChangeStatus,
+  TeamDecision,
   ThemePreference,
   Ticket,
   TokenPreview,
@@ -254,6 +258,8 @@ export interface UserQuery {
   /** Without it, everyone except deleted accounts. */
   status?: UserStatus;
   department_id?: number;
+  /** Only the people who report to this manager. */
+  manager_id?: number;
   page?: number;
   page_size?: number;
 }
@@ -274,6 +280,8 @@ export interface UserPayload {
   /** The city or constituency. */
   base_location?: string | null;
   department_id?: number | null;
+  /** Ground staff only: the manager they report to. */
+  manager_id?: number | null;
   /** Create only: email the invitation as well as showing the link. */
   send_email?: boolean;
 }
@@ -305,6 +313,61 @@ export const reinviteUser = (id: number, sendEmail = true) =>
   api
     .post<InviteLink>(`/users/${id}/reinvite`, null, { params: { send_email: sendEmail } })
     .then((r) => r.data);
+
+// --- a manager's team ---------------------------------------------------------
+
+/** The people who report to the signed-in manager. */
+export const fetchMyTeam = () => api.get<UserRow[]>('/team/members').then((r) => r.data);
+
+export interface TeamAddPayload {
+  email: string;
+  full_name: string;
+  gender: string;
+  designation?: string | null;
+  phone?: string | null;
+  employee_code?: string | null;
+  base_state?: string | null;
+  base_location?: string | null;
+  note?: string | null;
+}
+
+export type TeamEditPayload = Partial<Omit<TeamAddPayload, 'email' | 'gender'>>;
+
+export interface TeamRemovePayload {
+  status: 'LEFT' | 'DEACTIVATED';
+  exited_on?: string | null;
+  reason: string;
+  note?: string | null;
+}
+
+export const askToAddMember = (payload: TeamAddPayload) =>
+  api.post<TeamChange>('/team/changes/add', payload).then((r) => r.data);
+
+export const askToEditMember = (userId: number, payload: TeamEditPayload) =>
+  api.post<TeamChange>(`/team/changes/edit/${userId}`, payload).then((r) => r.data);
+
+export const askToRemoveMember = (userId: number, payload: TeamRemovePayload) =>
+  api.post<TeamChange>(`/team/changes/remove/${userId}`, payload).then((r) => r.data);
+
+export const withdrawTeamChange = (id: number) =>
+  api.post<TeamChange>(`/team/changes/${id}/cancel`).then((r) => r.data);
+
+/** A manager's own asks, or every ask for an admin. */
+export const fetchTeamChanges = (status?: TeamChangeStatus) =>
+  api
+    .get<TeamChangeList>('/team/changes', { params: status ? { status } : {} })
+    .then((r) => r.data);
+
+export const approveTeamChange = (id: number, comment: string, sendEmail = true) =>
+  api
+    .post<TeamDecision>(`/team/changes/${id}/approve`, {
+      comment: comment.trim() || null,
+      send_email: sendEmail,
+    })
+    .then((r) => r.data);
+
+export const rejectTeamChange = (id: number, comment: string) =>
+  api.post<TeamDecision>(`/team/changes/${id}/reject`, { comment }).then((r) => r.data);
 
 export const unlockUser = (id: number) =>
   api.post<UserRow>(`/users/${id}/unlock`).then((r) => r.data);

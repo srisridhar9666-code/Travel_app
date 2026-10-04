@@ -17,6 +17,7 @@ import {
   ScrollText,
   Smartphone,
   Users,
+  UsersRound,
   X,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -31,6 +32,7 @@ import { Spinner } from '@/components/ui';
 import {
   fetchMe,
   fetchQueueCounts,
+  fetchTeamChanges,
   fetchUnreadCount,
   logout,
   saveThemePreference,
@@ -39,7 +41,7 @@ import { cn } from '@/lib/utils';
 import { isPhone, setViewMode, viewMode } from '@/lib/viewMode';
 import { useAuth } from '@/store/auth';
 import { useTheme } from '@/store/theme';
-import { ROLE_LABELS, type Role } from '@/types';
+import { ADMIN_ROLES, ROLE_LABELS, isAdminRole, type Role } from '@/types';
 
 type Group = 'Workspace' | 'Operations' | 'Manage';
 
@@ -50,13 +52,14 @@ interface NavItem {
   roles?: Role[];
   /** Which section it sits under in the sidebar. */
   group: Group;
-  /** A live count beside it: unread notices, or requests waiting on a decision. */
-  badge?: 'unread' | 'queue';
+  /** A live count beside it: unread notices, requests waiting on a decision,
+   *  or managers' team changes waiting on an admin. */
+  badge?: 'unread' | 'queue' | 'team';
   /** On a phone, the first three of these (lowest first) get the bottom bar. */
   bottom?: number;
 }
 
-const ADMINS: Role[] = ['ADMIN', 'SYSTEM_ADMIN'];
+const ADMINS = ADMIN_ROLES;
 
 // My profile is not here: the name card at the foot of the sidebar opens it.
 const NAV: NavItem[] = [
@@ -66,10 +69,11 @@ const NAV: NavItem[] = [
   { to: '/approvals', label: 'Approvals', icon: CheckSquare, roles: ADMINS, group: 'Operations', badge: 'queue', bottom: 0 },
   { to: '/travel-logs', label: 'Travel logs', icon: History, roles: ADMINS, group: 'Operations' },
   { to: '/analytics', label: 'Cost analytics', icon: BarChart3, roles: ADMINS, group: 'Operations' },
-  { to: '/projects', label: 'Campaigns', icon: FolderKanban, roles: ADMINS, group: 'Manage' },
-  { to: '/team', label: 'Team', icon: Users, roles: ADMINS, group: 'Manage' },
+  { to: '/my-team', label: 'My team', icon: UsersRound, roles: ['MANAGER'], group: 'Manage' },
+  { to: '/projects', label: 'Campaigns', icon: FolderKanban, roles: [...ADMINS, 'MANAGER'], group: 'Manage' },
+  { to: '/team', label: 'Team', icon: Users, roles: ADMINS, group: 'Manage', badge: 'team' },
   { to: '/departments', label: 'Departments', icon: Building2, roles: ADMINS, group: 'Manage' },
-  { to: '/audit', label: 'Activity log', icon: ScrollText, roles: ['SYSTEM_ADMIN'], group: 'Manage' },
+  { to: '/audit', label: 'Activity log', icon: ScrollText, roles: ADMINS, group: 'Manage' },
 ];
 
 const GROUPS: Group[] = ['Workspace', 'Operations', 'Manage'];
@@ -172,7 +176,7 @@ export default function AppShell() {
     if (me.data) useAuth.getState().setUser(me.data);
   }, [me.data]);
 
-  const isAdmin = !!user && ADMINS.includes(user.role);
+  const isAdmin = isAdminRole(user?.role);
   // The same queries the bell and the approvals page read, so the counts agree.
   const unread = useQuery({ queryKey: ['unread-count'], queryFn: fetchUnreadCount });
   const queue = useQuery({
@@ -180,12 +184,19 @@ export default function AppShell() {
     queryFn: () => fetchQueueCounts(),
     enabled: isAdmin,
   });
+  const teamChanges = useQuery({
+    queryKey: ['team-changes', 'PENDING'],
+    queryFn: () => fetchTeamChanges('PENDING'),
+    enabled: isAdmin,
+  });
   const countFor = (item: NavItem) =>
     item.badge === 'unread'
       ? (unread.data?.unread ?? 0)
       : item.badge === 'queue' && queue.data
         ? queue.data.awaiting + queue.data.partially_approved
-        : 0;
+        : item.badge === 'team'
+          ? (teamChanges.data?.pending ?? 0)
+          : 0;
 
   const signOutMutation = useMutation({
     mutationFn: logout,

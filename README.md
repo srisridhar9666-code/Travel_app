@@ -270,7 +270,7 @@ regenerated with `scripts/make_ticket_fixture.py`.
 
 ## Signing in
 
-On first run the API creates one system administrator from `ADMIN_EMAIL` / `ADMIN_PASSWORD`
+On first run the API creates one super admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD`
 in `.env` and logs a warning. **Change that password immediately** — it is sitting in a
 config file. The bootstrap is idempotent and never touches an existing account, so
 restarting cannot silently reset it.
@@ -278,6 +278,22 @@ restarting cannot silently reset it.
 Everyone else is created from **Team**, which issues a single-use invite link. The link is
 emailed when email is turned on (below), and the dialog always shows it too, along with why
 it was not emailed if it was not. Links are valid for 72 hours and can be used once.
+
+### Who can do what
+
+Roles are ranked, and nobody grants or changes the account of someone above them:
+
+| Role | Can |
+| --- | --- |
+| Ground staff | Raise and track their own travel. Can report to one manager. |
+| Manager | See their team's people, trips and travel history - never costs. Ask an admin to add, edit or remove a member (**My team**). Create and edit campaigns, but not archive or delete them. |
+| Admin | Run the desk: approvals, bookings, costs, Team, Departments, and the activity log. Approve or reject managers' team changes, with a comment the manager is sent. |
+| System admin | Everything an admin does, plus email settings and identity-document retention. |
+| Super admin | Everything, and the only role that can manage super admins. The migration makes the earliest active system admin of each organisation the first one. |
+
+Teams are one level deep: only ground staff report to a manager, picked as **Reports to**
+on Team. A manager who is demoted or switched off releases their team for an admin to
+reassign.
 
 ### Turning email on
 

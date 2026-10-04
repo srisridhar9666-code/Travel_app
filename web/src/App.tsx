@@ -14,10 +14,13 @@ import ProfilePage from '@/pages/ProfilePage';
 import ProjectsPage from '@/pages/ProjectsPage';
 import RequestsPage from '@/pages/RequestsPage';
 import SetPasswordPage from '@/pages/SetPasswordPage';
+import MyTeamPage from '@/pages/MyTeamPage';
 import TeamPage from '@/pages/TeamPage';
 import TravelLogsPage from '@/pages/TravelLogsPage';
 import { useAuth, useHasHydrated } from '@/store/auth';
-import type { Role } from '@/types';
+import { ADMIN_ROLES, type Role } from '@/types';
+
+const ADMINS_AND_MANAGERS: Role[] = [...ADMIN_ROLES, 'MANAGER'];
 
 function RequireAuth({ roles, children }: { roles?: Role[]; children: ReactNode }) {
   const location = useLocation();
@@ -68,7 +71,7 @@ export default function App() {
           <Route
             path="approvals"
             element={
-              <RequireAuth roles={['ADMIN', 'SYSTEM_ADMIN']}>
+              <RequireAuth roles={ADMIN_ROLES}>
                 <ApprovalsPage />
               </RequireAuth>
             }
@@ -76,7 +79,7 @@ export default function App() {
           <Route
             path="travel-logs"
             element={
-              <RequireAuth roles={['ADMIN', 'SYSTEM_ADMIN']}>
+              <RequireAuth roles={ADMIN_ROLES}>
                 <TravelLogsPage />
               </RequireAuth>
             }
@@ -84,7 +87,7 @@ export default function App() {
           <Route
             path="analytics"
             element={
-              <RequireAuth roles={['ADMIN', 'SYSTEM_ADMIN']}>
+              <RequireAuth roles={ADMIN_ROLES}>
                 <AnalyticsPage />
               </RequireAuth>
             }
@@ -92,7 +95,7 @@ export default function App() {
           <Route
             path="projects"
             element={
-              <RequireAuth roles={['ADMIN', 'SYSTEM_ADMIN']}>
+              <RequireAuth roles={ADMINS_AND_MANAGERS}>
                 <ProjectsPage />
               </RequireAuth>
             }
@@ -100,15 +103,23 @@ export default function App() {
           <Route
             path="team"
             element={
-              <RequireAuth roles={['ADMIN', 'SYSTEM_ADMIN']}>
+              <RequireAuth roles={ADMIN_ROLES}>
                 <TeamPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="my-team"
+            element={
+              <RequireAuth roles={['MANAGER']}>
+                <MyTeamPage />
               </RequireAuth>
             }
           />
           <Route
             path="departments"
             element={
-              <RequireAuth roles={['ADMIN', 'SYSTEM_ADMIN']}>
+              <RequireAuth roles={ADMIN_ROLES}>
                 <DepartmentsPage />
               </RequireAuth>
             }
@@ -116,7 +127,7 @@ export default function App() {
           <Route
             path="audit"
             element={
-              <RequireAuth roles={['SYSTEM_ADMIN']}>
+              <RequireAuth roles={ADMIN_ROLES}>
                 <AuditPage />
               </RequireAuth>
             }

@@ -1,4 +1,22 @@
-export type Role = 'SYSTEM_ADMIN' | 'ADMIN' | 'GROUND_STAFF';
+export type Role = 'SUPER_ADMIN' | 'SYSTEM_ADMIN' | 'ADMIN' | 'MANAGER' | 'GROUND_STAFF';
+
+/** Highest first. Nobody grants or manages a role above their own. */
+export const ROLE_RANK: Record<Role, number> = {
+  GROUND_STAFF: 0,
+  MANAGER: 1,
+  ADMIN: 2,
+  SYSTEM_ADMIN: 3,
+  SUPER_ADMIN: 4,
+};
+
+/** Every role that runs the travel desk: approvals, bookings, costs, Team. */
+export const ADMIN_ROLES: Role[] = ['ADMIN', 'SYSTEM_ADMIN', 'SUPER_ADMIN'];
+/** The roles that look after accounts and settings. */
+export const ACCOUNT_ROLES: Role[] = ['SYSTEM_ADMIN', 'SUPER_ADMIN'];
+
+export function isAdminRole(role: Role | undefined | null): boolean {
+  return role != null && ADMIN_ROLES.includes(role);
+}
 export type Designation = 'EXECUTIVE' | 'TEAM_LEAD' | 'MANAGER';
 /** OTHER and UNDISCLOSED only appear on people saved before gender had to be
  *  chosen; new input is Male or Female (SELECTABLE_GENDERS). */
@@ -21,6 +39,9 @@ export interface UserProfile {
   base_location: string | null;
   department_id: number | null;
   department_name: string | null;
+  /** Who they report to - ground staff in a manager's team. */
+  manager_id?: number | null;
+  manager_name?: string | null;
   theme_preference: ThemePreference;
   status: UserStatus;
   is_active: boolean;
@@ -50,6 +71,9 @@ export interface UserRow {
   base_location: string | null;
   department_id: number | null;
   department_name: string | null;
+  /** Who they report to - ground staff in a manager's team. */
+  manager_id: number | null;
+  manager_name: string | null;
   status: UserStatus;
   status_changed_at: string | null;
   /** Mirrors status === 'ACTIVE'. */
@@ -112,10 +136,54 @@ export interface ChainVerification {
 }
 
 export const ROLE_LABELS: Record<Role, string> = {
+  SUPER_ADMIN: 'Super admin',
   SYSTEM_ADMIN: 'System admin',
   ADMIN: 'Admin',
+  MANAGER: 'Manager',
   GROUND_STAFF: 'Ground staff',
 };
+
+/** What each role can do, in a line - shown under the role pickers. */
+export const ROLE_DESCRIPTIONS: Record<Role, string> = {
+  GROUND_STAFF: 'Raises and tracks their own travel. Can report to a manager.',
+  MANAGER:
+    "Leads a team: sees their trips (never costs), asks an admin to add, edit or remove members, and runs campaigns.",
+  ADMIN: 'Runs the travel desk: approvals, bookings, costs, people, departments and the activity log.',
+  SYSTEM_ADMIN: 'Everything an admin does, plus email settings and identity-document retention.',
+  SUPER_ADMIN: 'The top level: everything a system admin does, and the only one who can manage super admins.',
+};
+
+/** A manager's ask to change their team, held until an admin decides. */
+export type TeamChangeKind = 'ADD' | 'EDIT' | 'REMOVE';
+export type TeamChangeStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+
+export interface TeamChange {
+  id: number;
+  kind: TeamChangeKind;
+  status: TeamChangeStatus;
+  requested_by_id: number;
+  requested_by_name: string | null;
+  target_user_id: number | null;
+  target_name: string | null;
+  /** ADD: the new person's details. EDIT: { field: { from, to } }.
+   *  REMOVE: { status, exited_on, reason }. */
+  payload: Record<string, unknown>;
+  note: string | null;
+  decided_by_name: string | null;
+  decided_at: string | null;
+  decision_comment: string | null;
+  created_at: string;
+}
+
+export interface TeamChangeList {
+  items: TeamChange[];
+  pending: number;
+}
+
+export interface TeamDecision {
+  change: TeamChange;
+  invite: InviteLink | null;
+}
 
 export const DESIGNATION_LABELS: Record<Designation, string> = {
   EXECUTIVE: 'Executive',

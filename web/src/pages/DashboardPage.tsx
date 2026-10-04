@@ -31,6 +31,7 @@ import {
   type Insights,
   type TravelMode,
   type TravellerStatus,
+  isAdminRole,
 } from '@/types';
 
 const STATUS_BAR: Record<TravellerStatus, string> = {
@@ -409,7 +410,7 @@ export default function DashboardPage() {
 
   // The operational picture, for the people who act on it. Ground staff get
   // their own travel below instead - nothing in the admin half is theirs to do.
-  const isAdmin = user?.role === 'ADMIN' || user?.role === 'SYSTEM_ADMIN';
+  const isAdmin = isAdminRole(user?.role);
   const firstName = user?.full_name.split(/\s+/)[0] ?? 'there';
 
   return (

@@ -37,7 +37,9 @@ import {
 } from '@/lib/api';
 import { campaignPlace } from '@/lib/projects';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/store/auth';
 import {
+  isAdminRole,
   PROJECT_STATUS_HELP,
   PROJECT_STATUS_LABELS,
   type Project,
@@ -102,6 +104,8 @@ function requestsLabel(count: number) {
 
 export default function ProjectsPage() {
   const queryClient = useQueryClient();
+  // Managers create and edit campaigns; archiving and deleting stay with admins.
+  const isAdmin = isAdminRole(useAuth((s) => s.user)?.role);
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -229,7 +233,9 @@ export default function ProjectsPage() {
   };
 
   const rows = projects.data?.items ?? [];
-  const statusChoices = editing ? ALL_STATUSES : NEW_STATUSES;
+  const statusChoices = (editing ? ALL_STATUSES : NEW_STATUSES).filter(
+    (s) => isAdmin || s !== 'ARCHIVED' || editing?.status === 'ARCHIVED',
+  );
 
   return (
     <div className="space-y-6">
@@ -373,7 +379,7 @@ export default function ProjectsPage() {
                         >
                           <Pencil size={14} />
                         </Button>
-                        {!project.is_fallback &&
+                        {isAdmin && !project.is_fallback &&
                           (project.status === 'ARCHIVED' ? (
                             <Button
                               variant="ghost"
@@ -399,7 +405,7 @@ export default function ProjectsPage() {
                               <Archive size={14} />
                             </Button>
                           ))}
-                        {!project.is_fallback && project.request_count === 0 && (
+                        {isAdmin && !project.is_fallback && project.request_count === 0 && (
                           <Button
                             variant="ghost"
                             size="sm"

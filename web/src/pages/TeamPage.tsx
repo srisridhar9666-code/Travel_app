@@ -21,10 +21,12 @@ import { BulkImportModal } from '@/components/BulkImportModal';
 import { ChangeStatusModal } from '@/components/ChangeStatusModal';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { DepartmentPicker } from '@/components/DepartmentPicker';
+import { EmailLinkChoice } from '@/components/EmailLinkChoice';
 import { IdProofsPanel } from '@/components/IdProofsPanel';
 import { PlacePicker } from '@/components/PlacePicker';
 import { TravelHistoryPanel } from '@/components/TravelHistoryPanel';
 import { Modal } from '@/components/Modal';
+import { TeamChangesPanel } from '@/components/TeamChangesPanel';
 import {
   Badge,
   Button,
@@ -52,9 +54,12 @@ import {
 import { formatInstantDate } from '@/lib/time';
 import { useAuth } from '@/store/auth';
 import {
+  ACCOUNT_ROLES,
   DESIGNATION_LABELS,
   GENDER_LABELS,
+  ROLE_DESCRIPTIONS,
   ROLE_LABELS,
+  ROLE_RANK,
   SELECTABLE_GENDERS,
   USER_STATUS_LABELS,
   type Designation,
@@ -76,6 +81,7 @@ const BLANK: UserPayload = {
   base_state: '',
   base_location: '',
   department_id: null,
+  manager_id: null,
   send_email: true,
 };
 
@@ -90,10 +96,13 @@ interface EditForm {
   base_state: string;
   base_location: string;
   department_id: number | null;
+  manager_id: number | null;
 }
 
 const GENDER_REQUIRED = 'Choose Male or Female.';
-const ROLE_HINT = 'What they can do in this app.';
+/** Lowest first, the order the role pickers list them in. */
+const ROLES_BY_RANK = (Object.keys(ROLE_RANK) as Role[]).sort((a, b) => ROLE_RANK[a] - ROLE_RANK[b]);
+const MANAGER_HINT = 'Their manager sees their trips (never costs) and can ask for changes to their details.';
 const DEPARTMENT_HINT = 'e.g. Field Operations, Data, Finance. Type a new one to add it.';
 
 function isSelectableGender(gender: string): boolean {
@@ -139,36 +148,6 @@ interface IssuedLink {
   kind: 'invite' | 'reset';
 }
 
-/** "Email the link to them" - the choice on every invite and reset. */
-function EmailLinkChoice({
-  name,
-  checked,
-  onChange,
-}: {
-  name: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="flex cursor-pointer items-start gap-2.5 rounded-md bg-surface-sunken px-3 py-2.5">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 h-3.5 w-3.5 accent-[rgb(var(--primary))]"
-      />
-      <span className="text-xs">
-        <span className="font-medium">Email the link to {name || 'them'}</span>
-        <span className="block text-text-muted">
-          {checked
-            ? 'They get it by email. You also see it next, to copy and share.'
-            : 'No email. You copy the link next and share it yourself - on WhatsApp, SMS or email.'}
-        </span>
-      </span>
-    </label>
-  );
-}
-
 function issued(
   name: string,
   result: InviteLink,
@@ -190,20 +169,61 @@ function issued(
   };
 }
 
+/** "Reports to": an active manager, or nobody. */
+function ManagerSelect({
+  id,
+  value,
+  managers,
+  current,
+  onChange,
+}: {
+  id: string;
+  value: number | null;
+  managers: UserRow[];
+  /** Their manager now, kept in the list even if no longer active. */
+  current?: { id: number; name: string | null } | null;
+  onChange: (managerId: number | null) => void;
+}) {
+  const stale = current && !managers.some((m) => m.id === current.id);
+  return (
+    <Select
+      id={id}
+      value={value ?? ''}
+      onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}
+    >
+      <option value="">{managers.length ? 'Nobody - not in a team' : 'No managers yet'}</option>
+      {stale && (
+        <option value={current.id} disabled>
+          {current.name ?? 'Their manager'} (no longer a manager)
+        </option>
+      )}
+      {managers.map((m) => (
+        <option key={m.id} value={m.id}>
+          {m.full_name}
+          {m.department_name ? ` · ${m.department_name}` : ''}
+        </option>
+      ))}
+    </Select>
+  );
+}
+
 export default function TeamPage() {
   const queryClient = useQueryClient();
   const me = useAuth((s) => s.user);
-  const isSystemAdmin = me?.role === 'SYSTEM_ADMIN';
+  const isSystemAdmin = !!me && ACCOUNT_ROLES.includes(me.role);
+  const myRank = me ? ROLE_RANK[me.role] : 0;
+  /** The roles this admin may hand out: their own and those below it. */
+  const grantable = ROLES_BY_RANK.filter((role) => ROLE_RANK[role] <= myRank);
 
-  /** Only a system admin may change another system admin's account; the
-   *  server refuses it too, this just keeps the buttons from offering it. */
-  const canManage = (user: UserRow) =>
-    isSystemAdmin || user.role !== 'SYSTEM_ADMIN' || user.id === me?.id;
+  /** Nobody changes the account of someone above them; the server refuses it
+   *  too, this just keeps the buttons from offering it. */
+  const canManage = (user: UserRow) => ROLE_RANK[user.role] <= myRank || user.id === me?.id;
 
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<UserStatus | ''>('');
   const [departmentFilter, setDepartmentFilter] = useState('');
+  const [managerFilter, setManagerFilter] = useState('');
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [form, setForm] = useState<UserPayload>(BLANK);
@@ -222,16 +242,23 @@ export default function TeamPage() {
   const [editError, setEditError] = useState<string | null>(null);
 
   const users = useQuery({
-    queryKey: ['users', search, roleFilter, statusFilter, departmentFilter],
+    queryKey: ['users', search, roleFilter, statusFilter, departmentFilter, managerFilter],
     queryFn: () =>
       fetchUsers({
         search: search.trim() || undefined,
         role: roleFilter || undefined,
         status: statusFilter || undefined,
         department_id: departmentFilter ? Number(departmentFilter) : undefined,
+        manager_id: managerFilter ? Number(managerFilter) : undefined,
         page_size: 100,
       }),
   });
+  // Who ground staff can report to, for the pickers and the filter.
+  const managers = useQuery({
+    queryKey: ['users', 'managers'],
+    queryFn: () => fetchUsers({ role: 'MANAGER', status: 'ACTIVE', page_size: 200 }),
+  });
+  const managerOptions = managers.data?.items ?? [];
 
   const departments = useQuery({ queryKey: ['departments'], queryFn: fetchDepartments });
   const retention = useQuery({ queryKey: ['retention'], queryFn: fetchRetentionStatus });
@@ -253,6 +280,7 @@ export default function TeamPage() {
         employee_code: form.employee_code?.trim() || null,
         base_state: form.base_state || null,
         base_location: form.base_location || null,
+        manager_id: form.role === 'GROUND_STAFF' ? (form.manager_id ?? null) : null,
       }),
     meta: { errorFallback: 'Could not create this account.' },
     onSuccess: (result) => {
@@ -281,6 +309,7 @@ export default function TeamPage() {
         base_state: editForm!.base_state || null,
         base_location: editForm!.base_location || null,
         department_id: editForm!.department_id,
+        manager_id: editForm!.role === 'GROUND_STAFF' ? editForm!.manager_id : null,
       };
       // Sent only when it changed: the server tells the old address, and
       // refuses a change to your own (that needs your password, on My profile).
@@ -358,6 +387,7 @@ export default function TeamPage() {
       base_state: user.base_state ?? '',
       base_location: user.base_location ?? '',
       department_id: user.department_id,
+      manager_id: user.manager_id,
     });
     setEditError(null);
   };
@@ -424,6 +454,10 @@ export default function TeamPage() {
         </div>
       )}
 
+      <TeamChangesPanel
+        onInvite={(name, result, byHand) => setIssuedLink(issued(name, result, false, byHand))}
+      />
+
       <Card>
         <CardHeader
           title={`${users.data?.total ?? 0} ${users.data?.total === 1 ? 'person' : 'people'}`}
@@ -475,12 +509,27 @@ export default function TeamPage() {
                 className="w-36"
               >
                 <option value="">Any access</option>
-                {(Object.keys(ROLE_LABELS) as Role[]).map((role) => (
+                {ROLES_BY_RANK.map((role) => (
                   <option key={role} value={role}>
                     {ROLE_LABELS[role]}
                   </option>
                 ))}
               </Select>
+              {managerOptions.length > 0 && (
+                <Select
+                  value={managerFilter}
+                  onChange={(e) => setManagerFilter(e.target.value)}
+                  aria-label="Filter by manager"
+                  className="w-44"
+                >
+                  <option value="">Any manager</option>
+                  {managerOptions.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      Reports to {m.full_name}
+                    </option>
+                  ))}
+                </Select>
+              )}
             </div>
           }
         />
@@ -536,7 +585,12 @@ export default function TeamPage() {
                         </div>
                         <div className="text-xs text-text-muted">{user.email}</div>
                       </td>
-                      <td className="px-5 py-3 text-text-muted">{ROLE_LABELS[user.role]}</td>
+                      <td className="px-5 py-3 text-text-muted">
+                        {ROLE_LABELS[user.role]}
+                        {user.manager_name && (
+                          <div className="text-xs text-text-subtle">Reports to {user.manager_name}</div>
+                        )}
+                      </td>
                       <td className="hidden px-5 py-3 text-text-muted md:table-cell">
                         {user.department_name || '—'}
                       </td>
@@ -719,20 +773,43 @@ export default function TeamPage() {
                 />
               </Field>
 
-              <Field label="App access" htmlFor="edit_role" hint={ROLE_HINT}>
+              <Field
+                label="App access"
+                htmlFor="edit_role"
+                hint={ROLE_DESCRIPTIONS[editForm.role as Role]}
+              >
                 <Select
                   id="edit_role"
                   value={editForm.role}
                   disabled={editingSelf}
                   onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
                 >
-                  <option value="GROUND_STAFF">{ROLE_LABELS.GROUND_STAFF}</option>
-                  <option value="ADMIN">{ROLE_LABELS.ADMIN}</option>
-                  {(isSystemAdmin || editForm.role === 'SYSTEM_ADMIN') && (
-                    <option value="SYSTEM_ADMIN">{ROLE_LABELS.SYSTEM_ADMIN}</option>
-                  )}
+                  {ROLES_BY_RANK.filter(
+                    (role) => grantable.includes(role) || role === editForm.role,
+                  ).map((role) => (
+                    <option key={role} value={role}>
+                      {ROLE_LABELS[role]}
+                    </option>
+                  ))}
                 </Select>
               </Field>
+
+              {editForm.role === 'GROUND_STAFF' && (
+                <Field
+                  label="Reports to"
+                  htmlFor="edit_manager"
+                  hint={MANAGER_HINT}
+                  className="sm:col-span-2"
+                >
+                  <ManagerSelect
+                    id="edit_manager"
+                    value={editForm.manager_id}
+                    managers={managerOptions}
+                    current={editUser.manager_id ? { id: editUser.manager_id, name: editUser.manager_name } : null}
+                    onChange={(manager_id) => setEditForm({ ...editForm, manager_id })}
+                  />
+                </Field>
+              )}
 
               <Field label="Designation" htmlFor="edit_designation">
                 <Select
@@ -900,17 +977,35 @@ export default function TeamPage() {
               />
             </Field>
 
-            <Field label="App access" htmlFor="role" required hint={ROLE_HINT}>
+            <Field
+              label="App access"
+              htmlFor="role"
+              required
+              hint={ROLE_DESCRIPTIONS[form.role as Role]}
+            >
               <Select
                 id="role"
                 value={form.role}
                 onChange={(e) => setForm({ ...form, role: e.target.value })}
               >
-                <option value="GROUND_STAFF">{ROLE_LABELS.GROUND_STAFF}</option>
-                <option value="ADMIN">{ROLE_LABELS.ADMIN}</option>
-                {isSystemAdmin && <option value="SYSTEM_ADMIN">{ROLE_LABELS.SYSTEM_ADMIN}</option>}
+                {grantable.map((role) => (
+                  <option key={role} value={role}>
+                    {ROLE_LABELS[role]}
+                  </option>
+                ))}
               </Select>
             </Field>
+
+            {form.role === 'GROUND_STAFF' && (
+              <Field label="Reports to" htmlFor="manager" hint={MANAGER_HINT} className="sm:col-span-2">
+                <ManagerSelect
+                  id="manager"
+                  value={form.manager_id ?? null}
+                  managers={managerOptions}
+                  onChange={(manager_id) => setForm({ ...form, manager_id })}
+                />
+              </Field>
+            )}
 
             <Field
               label="Designation"
