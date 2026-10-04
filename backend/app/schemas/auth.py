@@ -30,6 +30,9 @@ class UserProfile(BaseModel):
     base_location: str | None = None
     department_id: int | None = None
     department_name: str | None = None
+    #: Who they report to, for ground staff in a team.
+    manager_id: int | None = None
+    manager_name: str | None = None
     theme_preference: str
     status: UserStatus
     is_active: bool

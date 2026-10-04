@@ -17,7 +17,7 @@ from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import and_, func, or_, select
 
 from app.core import clock
-from app.core.deps import DbSession, SystemAdminUser
+from app.core.deps import AdminUser, DbSession
 from app.core.enums import AuditAction
 from app.models.audit import AuditLog
 from app.models.request import RequestTraveller
@@ -31,7 +31,7 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 
 @router.get("", response_model=AuditListResponse)
 def list_audit(
-    actor: SystemAdminUser,
+    actor: AdminUser,
     db: DbSession,
     action: Annotated[AuditAction | None, Query()] = None,
     entity_type: Annotated[str | None, Query(max_length=50)] = None,
@@ -78,7 +78,7 @@ def list_audit(
 
 
 @router.get("/verify")
-def verify(actor: SystemAdminUser, db: DbSession) -> dict:
+def verify(actor: AdminUser, db: DbSession) -> dict:
     """Walk the hash chain and report the first break, if any.
 
     A clean result means no row has been edited, removed or reordered since it
@@ -88,7 +88,7 @@ def verify(actor: SystemAdminUser, db: DbSession) -> dict:
 
 
 @router.get("/grants")
-def grants(actor: SystemAdminUser, db: DbSession) -> dict:
+def grants(actor: AdminUser, db: DbSession) -> dict:
     """Whether the database itself refuses to rewrite the ledger (addendum B9).
 
     The hash chain makes tampering detectable; the grant makes it impossible
@@ -109,7 +109,7 @@ def grants(actor: SystemAdminUser, db: DbSession) -> dict:
 def entity_history(
     entity_type: str,
     entity_id: int,
-    actor: SystemAdminUser,
+    actor: AdminUser,
     db: DbSession,
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> list[AuditRead]:
@@ -169,7 +169,7 @@ def entity_history(
 
 @router.get("/export")
 def export_csv(
-    actor: SystemAdminUser,
+    actor: AdminUser,
     db: DbSession,
     request: Request,
     action: Annotated[AuditAction | None, Query()] = None,
@@ -250,7 +250,7 @@ def export_csv(
 
 
 @router.get("/summary")
-def summary(actor: SystemAdminUser, db: DbSession) -> dict:
+def summary(actor: AdminUser, db: DbSession) -> dict:
     """Counts by action and by entity, so the viewer can offer real filters
     rather than a dropdown of every value the enum happens to define."""
     by_action = dict(

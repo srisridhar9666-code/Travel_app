@@ -32,6 +32,7 @@ from app.routers import notifications as notifications_router
 from app.routers import projects as projects_router
 from app.routers import requests as requests_router
 from app.routers import tickets as tickets_router
+from app.routers import team as team_router
 from app.routers import users as users_router
 from app.services import email as email_service
 from app.services import gemini, scheduler
@@ -49,7 +50,7 @@ logger = logging.getLogger("travel_ops")
 #: older than the page calling it. The usual cause is an API that was not
 #: restarted after an update, which otherwise shows up as "Not Found", "Method
 #: Not Allowed" and pages with missing numbers.
-API_VERSION = "0.9.0"
+API_VERSION = "0.10.0"
 
 
 @cache
@@ -203,6 +204,7 @@ async def database_behind(request: Request, exc: DBAPIError):
 
 app.include_router(auth_router.router)
 app.include_router(users_router.router)
+app.include_router(team_router.router)
 app.include_router(departments_router.router)
 app.include_router(projects_router.router)
 app.include_router(requests_router.router)

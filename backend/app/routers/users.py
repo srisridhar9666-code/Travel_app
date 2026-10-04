@@ -7,6 +7,7 @@ an emailed invite link. There is no self-registration - addendum B10.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import date
 from typing import Annotated
 
@@ -66,6 +67,8 @@ def _to_read(user: User) -> UserRead:
         base_location=user.base_location,
         department_id=user.department_id,
         department_name=user.department_name,
+        manager_id=user.manager_id,
+        manager_name=user.manager_name,
         status=user.status,
         status_changed_at=user.status_changed_at,
         is_active=user.is_active,
@@ -78,15 +81,42 @@ def _to_read(user: User) -> UserRead:
 
 
 def _guard_role_assignment(actor: User, target_role: Role | None) -> None:
-    """Only a system admin may mint another system admin.
+    """Nobody grants a role above their own.
 
-    Without this, any admin could promote themselves past the role that governs
-    user management and the audit log.
+    Without this, any admin could promote someone - or, through a friend,
+    themselves - past the role that governs user management.
     """
-    if target_role is Role.SYSTEM_ADMIN and actor.role is not Role.SYSTEM_ADMIN:
+    if target_role is not None and accounts.outranks(target_role, actor.role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only a system administrator can grant the system administrator role.",
+            detail=f"Only a {target_role.replace('_', ' ').lower()} or above can grant that role.",
+        )
+
+
+def _check_manager(db: Session, actor: User, manager_id: int | None, role: Role) -> None:
+    """A team member reports to an active manager of this organisation.
+
+    One level only: ground staff report to a manager, and nobody else reports
+    to anyone. 422, because a stale pick from another tab is a bad value in the
+    form, not a missing page.
+    """
+    if manager_id is None:
+        return
+    if role is not Role.GROUND_STAFF:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Only ground staff report to a manager.",
+        )
+    manager = db.get(User, manager_id)
+    if (
+        manager is None
+        or manager.tenant_id != actor.tenant_id
+        or manager.role is not Role.MANAGER
+        or manager.status is not UserStatus.ACTIVE
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Pick an active manager for them to report to.",
         )
 
 
@@ -144,6 +174,7 @@ def list_users(
     is_active: Annotated[bool | None, Query()] = None,
     user_status: Annotated[UserStatus | None, Query(alias="status")] = None,
     department_id: Annotated[int | None, Query()] = None,
+    manager_id: Annotated[int | None, Query()] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 25,
 ) -> UserListResponse:
@@ -175,6 +206,8 @@ def list_users(
         filters.append(User.status == user_status)
     if department_id is not None:
         filters.append(User.department_id == department_id)
+    if manager_id is not None:
+        filters.append(User.manager_id == manager_id)
 
     # Joined for the search on its name; the department itself loads with the
     # user anyway.
@@ -204,9 +237,28 @@ def list_users(
 def create_user(
     payload: UserCreate, actor: AdminUser, request: Request, db: DbSession
 ) -> InviteLinkResponse:
+    return invite_account(db, actor, payload, request)
+
+
+def invite_account(
+    db: Session,
+    actor: User,
+    payload: UserCreate,
+    request: Request,
+    *,
+    before_commit: Callable[[User], None] | None = None,
+) -> InviteLinkResponse:
+    """Create the account and its one-time invite link, and commit.
+
+    Shared by the Team page and by an admin approving a manager's request to
+    add someone, so both check, record and send exactly the same way.
+    `before_commit` gets the new account while it can still join the same
+    transaction - the approval records itself there.
+    """
     _guard_role_assignment(actor, payload.role)
     _email_taken(db, actor.tenant_id, payload.email)
     _check_department(db, actor, payload.department_id)
+    _check_manager(db, actor, payload.manager_id, payload.role)
     # "hyd" under Telangana is stored as Hyderabad, as a request's places are.
     base_state, base_location = locations.canonical(
         db, actor.tenant_id, payload.base_state, payload.base_location
@@ -224,6 +276,7 @@ def create_user(
         base_state=base_state,
         base_location=base_location,
         department_id=payload.department_id,
+        manager_id=payload.manager_id,
         password_hash=None,  # set by the invitee, never by the admin
         created_by_id=actor.id,
     )
@@ -249,6 +302,8 @@ def create_user(
         actor=actor,
         request=request,
     )
+    if before_commit is not None:
+        before_commit(user)
     db.commit()
 
     invite_url = build_invite_url(raw)
@@ -506,12 +561,21 @@ def update_user(
             updates.get("base_state", user.base_state),
             updates.get("base_location", user.base_location),
         )
+    new_role = updates.get("role", user.role)
+    if "manager_id" in updates:
+        _check_manager(db, actor, updates["manager_id"], new_role)
+    elif new_role is not Role.GROUND_STAFF and user.manager_id is not None:
+        # Promoted out of a team: they report to nobody now.
+        updates["manager_id"] = None
+    stops_managing = user.role is Role.MANAGER and new_role is not Role.MANAGER
 
     old_email = user.email
     before = {key: getattr(user, key) for key in updates}
     for key, value in updates.items():
         setattr(user, key, value)
     after = {key: getattr(user, key) for key in updates}
+    if stops_managing:
+        accounts.release_team(db, manager=user, actor=actor, request=request)
     if user.email != old_email:
         # Invite and reset links went to the old address; left live, whoever
         # holds that mailbox could still set the password. Reinvite re-sends.
@@ -585,6 +649,8 @@ def change_status(
         reason=payload.reason,
         request=request,
     )
+    if user.role is Role.MANAGER and payload.status is not UserStatus.ACTIVE:
+        accounts.release_team(db, manager=user, actor=actor, request=request)
     db.commit()
     db.refresh(user)
     return _to_read(user)
@@ -706,15 +772,16 @@ def travel_history(
     Costs are included only for admins: a ground staff member reading their own
     history has no business seeing what the company paid for their seat.
     """
-    if actor.id != user_id and not actor.is_admin:
+    target = db.get(User, user_id)
+    if target is None or target.tenant_id != actor.tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    # Their own, an admin, or their manager - who sees where the team went,
+    # never what it cost.
+    if actor.id != user_id and not actor.is_admin and target.manager_id != actor.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only view your own travel history.",
         )
-
-    target = db.get(User, user_id)
-    if target is None or target.tenant_id != actor.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
     result = history.build(
         db,

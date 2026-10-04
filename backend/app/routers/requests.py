@@ -23,7 +23,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, s
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.core.deps import AdminUser, CurrentUser, DbSession
+from app.core.deps import AdminOrManager, AdminUser, CurrentUser, DbSession
 from app.core.enums import (
     PRIORITY_RANK,
     AuditAction,
@@ -76,9 +76,22 @@ def _load(db: Session, request_id: int, user: User) -> TravelRequest:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found.")
 
     on_it = row.requester_id == user.id or any(t.user_id == user.id for t in row.travellers)
-    if not on_it and not user.is_admin:
+    if not on_it and not user.is_admin and not _leads_someone_on(row, user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found.")
     return row
+
+
+def _leads_someone_on(row: TravelRequest, user: User) -> bool:
+    """Whether a manager's team member raised this request or travels on it."""
+    if not user.is_manager:
+        return False
+    people = [row.requester, *(t.user for t in row.travellers)]
+    return any(p is not None and p.manager_id == user.id for p in people)
+
+
+def _team_and_self(user: User):
+    """The ids a manager answers for: their own and their team members'."""
+    return select(User.id).where(or_(User.id == user.id, User.manager_id == user.id))
 
 
 def _assert_owner(row: TravelRequest, user: User) -> None:
@@ -149,11 +162,18 @@ def _matching(
     """
     filters = [TravelRequest.tenant_id == user.tenant_id]
 
-    restrict_to_self = mine or not user.is_admin
-    if restrict_to_self:
+    if mine or not (user.is_admin or user.is_manager):
         on_request = select(RequestTraveller.request_id).where(RequestTraveller.user_id == user.id)
         filters.append(
             or_(TravelRequest.requester_id == user.id, TravelRequest.id.in_(on_request))
+        )
+    elif not user.is_admin:
+        # A manager's wider view is their team's trips - never the whole
+        # organisation's.
+        people = _team_and_self(user)
+        on_request = select(RequestTraveller.request_id).where(RequestTraveller.user_id.in_(people))
+        filters.append(
+            or_(TravelRequest.requester_id.in_(people), TravelRequest.id.in_(on_request))
         )
 
     # Someone else's draft does not exist as far as this list is concerned.
@@ -219,7 +239,8 @@ def list_requests(
     """The caller's requests, newest first (or high priority first).
 
     Ground staff always see only what they are on, whatever `mine` says. Admins
-    can widen to the whole tenant - minus everyone else's drafts.
+    can widen to the whole tenant and managers to their team - minus everyone
+    else's drafts. Costs are left out for everyone but admins.
     """
     rows = _matching(
         db,
@@ -325,7 +346,7 @@ def create_request(
 
 @router.get("/queue/counts", response_model=QueueCounts)
 def queue_counts(
-    actor: AdminUser,
+    actor: AdminOrManager,
     db: DbSession,
     request_type: Annotated[RequestType | None, Query(alias="type")] = None,
     search: Annotated[str | None, Query(max_length=120)] = None,

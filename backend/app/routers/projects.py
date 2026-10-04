@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.deps import AdminUser, CurrentUser, DbSession
+from app.core.deps import AdminOrManager, AdminUser, CurrentUser, DbSession
 from app.core.enums import AuditAction, ProjectStatus
 from app.models.project import Project
 from app.schemas.project import (
@@ -79,6 +79,16 @@ def _get_or_404(db: DbSession, project_id: int, tenant_id: str) -> Project:
     return project
 
 
+def _admins_archive(actor, new_status: ProjectStatus | None) -> None:
+    """Managers create and edit campaigns; putting one away is an admin's call,
+    as archiving, restoring and deleting are."""
+    if new_status is ProjectStatus.ARCHIVED and not actor.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an admin can archive a campaign.",
+        )
+
+
 def _fallback_locked(what: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
@@ -104,7 +114,7 @@ def list_projects(
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> ProjectListResponse:
     """Every signed-in user can read the campaign list - ground staff need it to
-    tag a request. Only admins can change it."""
+    tag a request. Admins and managers can change it."""
     # The "Other" campaign is normally created at startup, but that step can
     # fail on a server that started before its migration ran. Making sure of
     # it here means the request form's "Other" option cannot silently vanish.
@@ -126,7 +136,7 @@ def list_projects(
         )
     if project_status is not None:
         filters.append(Project.status == project_status)
-    if not user.is_admin:
+    if not (user.is_admin or user.is_manager):
         # Ground staff never see archived campaigns, even by asking for them;
         # an archived campaign is one they must not be raising requests against.
         filters.append(Project.status != ProjectStatus.ARCHIVED)
@@ -155,8 +165,9 @@ def list_projects(
 
 @router.post("", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
 def create_project(
-    payload: ProjectCreate, actor: AdminUser, request: Request, db: DbSession
+    payload: ProjectCreate, actor: AdminOrManager, request: Request, db: DbSession
 ) -> ProjectRead:
+    _admins_archive(actor, payload.status)
     # Spelling cleaned the way request places are, so "hyd" is Hyderabad.
     state, city = locations.canonical(db, actor.tenant_id, payload.state, payload.city)
     fields = payload.model_dump(exclude={"state", "city"})
@@ -213,7 +224,7 @@ def create_project(
 @router.get("/{project_id}", response_model=ProjectRead)
 def get_project(project_id: int, user: CurrentUser, db: DbSession) -> ProjectRead:
     project = _get_or_404(db, project_id, user.tenant_id)
-    if not user.is_admin and project.status is ProjectStatus.ARCHIVED:
+    if not (user.is_admin or user.is_manager) and project.status is ProjectStatus.ARCHIVED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
     return _to_read(project, _count(db, project))
 
@@ -222,12 +233,13 @@ def get_project(project_id: int, user: CurrentUser, db: DbSession) -> ProjectRea
 def update_project(
     project_id: int,
     payload: ProjectUpdate,
-    actor: AdminUser,
+    actor: AdminOrManager,
     request: Request,
     db: DbSession,
 ) -> ProjectRead:
     project = _get_or_404(db, project_id, actor.tenant_id)
     updates = payload.model_dump(exclude_unset=True)
+    _admins_archive(actor, updates.get("status"))
 
     if is_fallback(project):
         # The request form and seed find it by its code, and offer it only

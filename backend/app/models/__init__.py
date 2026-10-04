@@ -14,6 +14,7 @@ from app.models.request import (
     RequestTraveller,
     TravelRequest,
 )
+from app.models.team_change import TeamChange
 from app.models.ticket import TicketDocument
 from app.models.user import User
 
@@ -30,6 +31,7 @@ __all__ = [
     "RequestRevision",
     "RequestTraveller",
     "TravelRequest",
+    "TeamChange",
     "TenantMixin",
     "TicketDocument",
     "TimestampMixin",

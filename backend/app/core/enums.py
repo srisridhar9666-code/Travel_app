@@ -12,9 +12,44 @@ from enum import StrEnum
 class Role(StrEnum):
     """What a user may do. Orthogonal to Designation."""
 
+    SUPER_ADMIN = "SUPER_ADMIN"     # everything a system admin can; approves invoices
     SYSTEM_ADMIN = "SYSTEM_ADMIN"   # user management, settings, audit log
     ADMIN = "ADMIN"                 # fulfilment: approve, book, upload tickets
+    MANAGER = "MANAGER"             # their own team: members (admin-approved), campaigns
     GROUND_STAFF = "GROUND_STAFF"   # raise and edit own requests
+
+
+#: Seniority. Someone may grant, or manage the account of, only a role at or
+#: below their own - so no admin can promote themselves past the tier that
+#: governs accounts, and nobody below the top can touch the top.
+ROLE_RANK: dict[Role, int] = {
+    Role.GROUND_STAFF: 0,
+    Role.MANAGER: 1,
+    Role.ADMIN: 2,
+    Role.SYSTEM_ADMIN: 3,
+    Role.SUPER_ADMIN: 4,
+}
+
+#: Who works the queue and sees everything, costs included.
+ADMIN_ROLES = frozenset({Role.ADMIN, Role.SYSTEM_ADMIN, Role.SUPER_ADMIN})
+
+#: Who manages accounts at the top tier. The last active one is protected.
+ACCOUNT_ROLES = frozenset({Role.SYSTEM_ADMIN, Role.SUPER_ADMIN})
+
+
+class TeamChangeKind(StrEnum):
+    """What a manager asked to do to their team. An admin approves each one."""
+
+    ADD = "ADD"
+    EDIT = "EDIT"
+    REMOVE = "REMOVE"
+
+
+class TeamChangeStatus(StrEnum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"   # withdrawn by the manager before a decision
 
 
 class Designation(StrEnum):
@@ -245,6 +280,9 @@ NOTIFICATION_CATEGORIES: dict[str, NotificationCategory] = {
     "TRAVEL_REMINDER": NotificationCategory.REMINDERS,
     "REQUEST_STALE": NotificationCategory.REMINDERS,
     "REQUEST_SUBMITTED": NotificationCategory.NEW_REQUESTS,
+    "TEAM_CHANGE_REQUESTED": NotificationCategory.NEW_REQUESTS,
+    "TEAM_CHANGE_APPROVED": NotificationCategory.DECISIONS,
+    "TEAM_CHANGE_REJECTED": NotificationCategory.DECISIONS,
 }
 
 

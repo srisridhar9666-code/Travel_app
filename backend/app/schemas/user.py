@@ -73,6 +73,8 @@ class UserCreate(BaseModel):
     #: The city or constituency they are based in.
     base_location: str | None = Field(default=None, max_length=120)
     department_id: int | None = None
+    #: The manager they report to. Ground staff only, and only a MANAGER.
+    manager_id: int | None = None
     #: Email the invitation link to them. Either way the link comes back in the
     #: response, for the admin to copy and share themselves.
     send_email: bool = True
@@ -109,6 +111,7 @@ class UserUpdate(BaseModel):
     base_state: str | None = Field(default=None, max_length=80)
     base_location: str | None = Field(default=None, max_length=120)
     department_id: int | None = None
+    manager_id: int | None = None
 
     @field_validator(*_NOT_NULL, mode="before")
     @classmethod
@@ -165,6 +168,9 @@ class UserRead(BaseModel):
     base_location: str | None = None
     department_id: int | None = None
     department_name: str | None = None
+    #: Who they report to, for ground staff in a team.
+    manager_id: int | None = None
+    manager_name: str | None = None
     status: UserStatus
     status_changed_at: UTCInstant | None = None
     #: Mirrors status == ACTIVE.

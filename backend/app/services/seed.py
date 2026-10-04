@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.core.enums import AuditAction, ProjectStatus, Role
+from app.core.enums import ADMIN_ROLES, AuditAction, ProjectStatus, Role
 from app.core.security import hash_password
 from app.models.project import Project
 from app.models.user import User
@@ -24,11 +24,11 @@ settings = get_settings()
 
 
 def ensure_bootstrap_admin(db: Session) -> User | None:
-    """Create the first system admin if the tenant has no admin at all."""
+    """Create the first super admin if the tenant has no admin at all."""
     existing_admin = db.execute(
         select(User).where(
             User.tenant_id == settings.default_tenant,
-            User.role.in_([Role.SYSTEM_ADMIN, Role.ADMIN]),
+            User.role.in_(ADMIN_ROLES),
         )
     ).scalars().first()
 
@@ -40,7 +40,7 @@ def ensure_bootstrap_admin(db: Session) -> User | None:
         tenant_id=settings.default_tenant,
         email=email,
         full_name=settings.admin_name,
-        role=Role.SYSTEM_ADMIN,
+        role=Role.SUPER_ADMIN,
         password_hash=hash_password(settings.admin_password),
         is_active=True,
     )

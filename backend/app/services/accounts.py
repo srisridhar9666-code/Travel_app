@@ -15,7 +15,9 @@ from sqlalchemy.orm import Session
 
 from app.core import clock
 from app.core.enums import (
+    ACCOUNT_ROLES,
     ACTIVE_TRAVELLER_STATUSES,
+    ROLE_RANK,
     AuditAction,
     RequestType,
     Role,
@@ -39,10 +41,8 @@ BLOCKED_MESSAGES: dict[UserStatus, str] = {
     UserStatus.DELETED: "This account has been removed. Contact your admin.",
 }
 
-ADMIN_TIER_MESSAGE = (
-    "Only a system administrator can change another system administrator's account."
-)
-LAST_ADMIN_MESSAGE = "At least one active system administrator is needed."
+ADMIN_TIER_MESSAGE = "Only someone at the same level or above can change this person's account."
+LAST_ADMIN_MESSAGE = "At least one active system administrator or super admin is needed."
 
 
 def blocked_message(user: User) -> str | None:
@@ -71,18 +71,18 @@ def burn_outstanding_tokens(db: Session, user: User) -> int:
     return burned
 
 
-def assert_may_manage(actor: User, target: User) -> None:
-    """Only a system admin may change another system admin's account.
+def outranks(role: Role, other: Role) -> bool:
+    return ROLE_RANK[role] > ROLE_RANK[other]
 
-    Without this, an ordinary admin could deactivate the system admin, demote
+
+def assert_may_manage(actor: User, target: User) -> None:
+    """Nobody may change the account of someone above them.
+
+    Without this, an ordinary admin could deactivate a system admin, demote
     them, or - worst - issue a reset link for their account, which the reinvite
     endpoint hands back, and sign in as them.
     """
-    if (
-        target.role is Role.SYSTEM_ADMIN
-        and actor.role is not Role.SYSTEM_ADMIN
-        and target.id != actor.id
-    ):
+    if target.id != actor.id and outranks(target.role, actor.role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ADMIN_TIER_MESSAGE)
 
 
@@ -94,23 +94,23 @@ def assert_keeps_a_system_admin(
     new_status: UserStatus | None = None,
 ) -> None:
     """Refuse a change that would leave the organisation without an active
-    system admin - nobody could then manage accounts or read the audit log.
+    system admin or super admin - nobody could then manage the top accounts.
 
     The other guards make this hard to reach (nobody changes their own role or
     status), so this is the backstop, not the rule people meet day to day.
     """
     role = new_role if new_role is not None else target.role
     state = new_status if new_status is not None else target.status
-    if not (target.role is Role.SYSTEM_ADMIN and target.status is UserStatus.ACTIVE):
-        return  # they are not one of the active system admins now
-    if role is Role.SYSTEM_ADMIN and state is UserStatus.ACTIVE:
+    if not (target.role in ACCOUNT_ROLES and target.status is UserStatus.ACTIVE):
+        return  # they are not one of the active top admins now
+    if role in ACCOUNT_ROLES and state is UserStatus.ACTIVE:
         return  # and still will be
 
     others = db.execute(
         select(func.count(User.id)).where(
             User.tenant_id == target.tenant_id,
             User.id != target.id,
-            User.role == Role.SYSTEM_ADMIN,
+            User.role.in_(ACCOUNT_ROLES),
             User.status == UserStatus.ACTIVE,
             User.is_active.is_(True),
         )
@@ -189,6 +189,35 @@ def set_status(
         request=request,
     )
     return changes
+
+
+def release_team(
+    db: Session, *, manager: User, actor: User, request: Request | None = None
+) -> int:
+    """Their team stops reporting to them - when a manager is demoted or no
+    longer active. The people stay, with no manager, for an admin to reassign.
+    Returns how many were released. The caller commits."""
+    members = db.execute(
+        select(User).where(User.tenant_id == manager.tenant_id, User.manager_id == manager.id)
+    ).scalars().all()
+    for member in members:
+        member.manager_id = None
+    if members:
+        audit.record(
+            db,
+            action=AuditAction.UPDATE,
+            entity_type="user",
+            entity_id=manager.id,
+            summary=(
+                f"{len(members)} team member(s) of {manager.full_name} no longer report to them: "
+                + ", ".join(m.full_name for m in members)
+            ),
+            changes={"team": {"from": [m.id for m in members], "to": []}},
+            tenant_id=manager.tenant_id,
+            actor=actor,
+            request=request,
+        )
+    return len(members)
 
 
 def _label(value: UserStatus) -> str:

@@ -186,7 +186,7 @@ def parse(raw: bytes, db: Session, tenant_id: str) -> ImportPreview:
                     new_departments.add(key)
                     row.warnings.append(f"Department “{department}” will be created")
 
-        if row.role in (Role.ADMIN, Role.SYSTEM_ADMIN):
+        if row.role is not Role.GROUND_STAFF:
             row.warnings.append(f"This row grants {row.role} access")
 
         rows.append(row)

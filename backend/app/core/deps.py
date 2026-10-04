@@ -15,7 +15,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.core.enums import Role
+from app.core.enums import ACCOUNT_ROLES, ADMIN_ROLES, Role
 from app.core.security import decode_access_token
 from app.database import get_db
 from app.models.user import User
@@ -106,8 +106,15 @@ def require_roles(*allowed: Role):
     return guard
 
 
-require_admin = require_roles(Role.ADMIN, Role.SYSTEM_ADMIN)
-require_system_admin = require_roles(Role.SYSTEM_ADMIN)
+require_admin = require_roles(*ADMIN_ROLES)
+require_system_admin = require_roles(*ACCOUNT_ROLES)
+require_super_admin = require_roles(Role.SUPER_ADMIN)
+require_manager = require_roles(Role.MANAGER)
+#: Admins, and managers for their own work: campaigns, their team.
+require_admin_or_manager = require_roles(*ADMIN_ROLES, Role.MANAGER)
 
 AdminUser = Annotated[User, Depends(require_admin)]
 SystemAdminUser = Annotated[User, Depends(require_system_admin)]
+SuperAdminUser = Annotated[User, Depends(require_super_admin)]
+ManagerUser = Annotated[User, Depends(require_manager)]
+AdminOrManager = Annotated[User, Depends(require_admin_or_manager)]

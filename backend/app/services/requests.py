@@ -28,13 +28,13 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.core import clock
 from app.core.enums import (
+    ADMIN_ROLES,
     AuditAction,
     NotificationChannel,
     NotificationStatus,
     RequestPriority,
     RequestStatus,
     RequestType,
-    Role,
     RoomSharingChoice,
     TicketStatus,
     TravellerStatus,
@@ -569,7 +569,7 @@ def notify_admins_of_submission(
         db.execute(
             select(User).where(
                 User.tenant_id == tenant_id,
-                User.role.in_((Role.ADMIN, Role.SYSTEM_ADMIN)),
+                User.role.in_(ADMIN_ROLES),
                 User.is_active.is_(True),
                 User.id != actor.id,
             )

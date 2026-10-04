@@ -22,9 +22,9 @@ from sqlalchemy.orm import Session
 
 from app.core import clock
 from app.core.enums import (
+    ADMIN_ROLES,
     NotificationStatus,
     RequestType,
-    Role,
     TravellerStatus,
 )
 from app.models.base import naive_utcnow
@@ -172,7 +172,7 @@ def remind_admins_of_stale_requests(
         db.execute(
             select(User).where(
                 User.tenant_id == tenant_id,
-                User.role.in_([Role.ADMIN, Role.SYSTEM_ADMIN]),
+                User.role.in_(ADMIN_ROLES),
                 User.is_active.is_(True),
             )
         )
