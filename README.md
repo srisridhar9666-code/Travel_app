@@ -187,6 +187,29 @@ They used to run on in-memory SQLite, which was quicker to set up and wrong: the
 defect this project has had was MySQL's `DATETIME` silently truncating the microseconds the
 audit hash chain commits to, and no SQLite test could ever have found it.
 
+### Tidying old data
+
+`scripts/tidy_data.py` looks over the database the API uses (backend/.env) and,
+by default, only reports: people whose details the app now refuses (a phone
+that is not a 10-digit mobile, a shared number, gender not set, the designation
+Manager without Manager access), accounts the old test scripts made up, stale
+drafts and trips that were never decided. Run `alembic upgrade head` first - the
+migrations convert old data themselves, and the script refuses a database that
+is behind.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\tidy_data.py
+.\.venv\Scripts\python.exe scripts\tidy_data.py --retire-test-accounts
+.\.venv\Scripts\python.exe scripts\tidy_data.py --fresh-start --include-activity-log
+```
+
+`--retire-test-accounts` marks the made-up accounts Deleted (restorable from
+Team). `--fresh-start` removes every trip and what hangs off it - travellers,
+edits, tickets and their files, notifications, invoices, team-change requests -
+and keeps people, departments, campaigns, vendors and places; add
+`--include-activity-log` to start the activity log afresh too. Both ask you to
+type DELETE first, and the script never runs with ENVIRONMENT=production.
+
 ### Linting
 
 ```bash
