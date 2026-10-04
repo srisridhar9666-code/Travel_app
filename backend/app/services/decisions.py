@@ -26,10 +26,12 @@ point has to obey them identically:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from fastapi import HTTPException, status as http_status
 from sqlalchemy.orm import Session
 
+from app.core import clock
 from app.core.enums import (
     ALLOWED_TRAVELLER_TRANSITIONS,
     AuditAction,
@@ -66,7 +68,39 @@ class Decision:
     to_status: TravellerStatus
     reason: str | None = None
     booking_reference: str | None = None
+    booking_details: dict | None = None
     conflict_override_reason: str | None = None
+
+
+#: How each booking detail reads in an email, in order.
+_DETAIL_LABELS = (
+    ("carrier", "Airline / operator"),
+    ("service_number", "Flight / train / bus no."),
+    ("depart_at", "Departs"),
+    ("arrive_at", "Arrives"),
+    ("seat", "Seat / berth"),
+    ("hotel_name", "Hotel"),
+    ("hotel_address", "Address"),
+    ("notes", "Notes"),
+)
+
+
+def booking_lines(traveller: RequestTraveller) -> list[str]:
+    """The traveller's booking as lines for an email: reference first."""
+    lines = []
+    if traveller.booking_reference:
+        lines.append(f"  Booking reference   {traveller.booking_reference}")
+    for key, label in _DETAIL_LABELS:
+        value = (traveller.booking_details or {}).get(key)
+        if not value:
+            continue
+        if key in ("depart_at", "arrive_at"):
+            try:
+                value = clock.time_label(datetime.fromisoformat(value))
+            except ValueError:
+                pass
+        lines.append(f"  {label:<20}{value}")
+    return lines
 
 
 def assert_transition(current: TravellerStatus, target: TravellerStatus) -> None:
@@ -174,6 +208,10 @@ def _notify(
             if is_cab
             else "Tickets will follow once they are booked.",
         ]
+    if target is TravellerStatus.BOOKED:
+        booked = booking_lines(traveller)
+        if booked:
+            detail += ["", "Your booking:", *booked]
     if request.project:
         detail += ["", f"Campaign: {request.project.code} - {request.project.name}"]
     if manager is not None:
@@ -305,6 +343,8 @@ def apply(
     traveller.decision_reason = (decision.reason or "").strip() or None
     if target is TravellerStatus.BOOKED:
         traveller.booking_reference = decision.booking_reference.strip()
+        if decision.booking_details:
+            traveller.booking_details = decision.booking_details
 
     audit.record(
         db,

@@ -411,6 +411,23 @@ def download_ticket(ticket_id: int, actor: AdminUser, db: DbSession) -> Response
 # ---------------------------------------------------------------------------
 
 
+def details_from_ticket(ticket: TicketDocument) -> dict | None:
+    """The booking details a confirmed ticket gives, in the shape
+    RequestTraveller.booking_details keeps (see schemas.request.BookingDetails)."""
+    details = {
+        "carrier": ticket.carrier,
+        "service_number": ticket.service_number,
+        "depart_at": ticket.depart_at.isoformat() if ticket.depart_at else None,
+        "arrive_at": ticket.arrive_at.isoformat() if ticket.arrive_at else None,
+        "hotel_name": ticket.hotel_name,
+    }
+    if ticket.check_in or ticket.check_out:
+        stay = " to ".join(d.strftime("%d %b %Y") for d in (ticket.check_in, ticket.check_out) if d)
+        details["notes"] = f"Stay {stay}"
+    details = {k: v for k, v in details.items() if v}
+    return details or None
+
+
 @router.post("/tickets/{ticket_id}/confirm", response_model=TicketRead)
 def confirm_ticket(
     ticket_id: int,
@@ -485,6 +502,9 @@ def confirm_ticket(
         ticket.carrier = payload.carrier.strip()
     if payload.service_number:
         ticket.service_number = payload.service_number.strip()
+    # The traveller's own record of the booking, so My requests can show it
+    # without anyone opening the ticket file.
+    traveller.booking_details = details_from_ticket(ticket) or traveller.booking_details
 
     corrected = (ticket.booking_reference or "") != reference
     audit.record(

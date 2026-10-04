@@ -481,6 +481,7 @@ def _traveller_read(
         decided_at=t.decided_at,
         decision_reason=t.decision_reason,
         booking_reference=t.booking_reference,
+        booking_details=t.booking_details,
         ticket_id=tickets.get(t.id),
         manager_id=manager.id if manager else None,
         manager_name=manager.full_name if manager else None,

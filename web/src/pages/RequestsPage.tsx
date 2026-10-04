@@ -17,6 +17,7 @@ import { useState } from 'react';
 import toast from 'react-hot-toast';
 
 import { CabExtensionNote, CabSent } from '@/components/CabDetails';
+import { BookingSummary } from '@/components/BookingDetails';
 import { CancellationNote } from '@/components/CancellationAsks';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
@@ -455,6 +456,19 @@ export default function RequestsPage() {
                           </span>
                         ))}
                       </div>
+
+                      {/* Not for cabs: the cab sent is shown in its own block. */}
+                      {request.request_type !== 'LOCAL_CAB' &&
+                        request.travellers
+                          .filter((t) => t.status === 'BOOKED' && (t.booking_reference || t.booking_details))
+                          .map((t) => (
+                            <BookingSummary
+                              key={t.id}
+                              reference={t.booking_reference}
+                              details={t.booking_details}
+                              title={t.user_id === me?.id ? 'Your booking' : `${t.full_name}'s booking`}
+                            />
+                          ))}
 
                       {request.cancel_reason && (
                         <p className="mt-2 text-xs text-text-subtle">

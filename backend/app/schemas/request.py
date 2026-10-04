@@ -226,6 +226,7 @@ class TravellerRead(BaseModel):
     decided_at: UTCInstant | None = None
     decision_reason: str | None = None
     booking_reference: str | None = None
+    booking_details: dict | None = None
     #: The uploaded ticket to open from this row (GET /tickets/{id}/file):
     #: the confirmed one, else the newest under review. On the admin queue list only.
     ticket_id: int | None = None
@@ -431,6 +432,40 @@ class ColleagueRead(BaseModel):
 # --- Phase 4: admin decisions ---------------------------------------------
 
 
+class BookingDetails(BaseModel):
+    """What the traveller needs on the day, beside the booking reference. All
+    optional: a train has a coach and berth, a hotel an address, and an admin
+    fills what the ticket gives them."""
+
+    carrier: str | None = Field(default=None, max_length=120)          # airline, railway, bus operator
+    service_number: str | None = Field(default=None, max_length=60)    # 6E-4412, 12723, ...
+    depart_at: datetime | None = None
+    arrive_at: datetime | None = None
+    seat: str | None = Field(default=None, max_length=60)              # seat, coach / berth
+    hotel_name: str | None = Field(default=None, max_length=160)
+    hotel_address: str | None = Field(default=None, max_length=300)
+    notes: str | None = Field(default=None, max_length=300)            # check-in time, terminal, ...
+
+    @model_validator(mode="after")
+    def _tidy(self):
+        for name in ("carrier", "service_number", "seat", "hotel_name", "hotel_address", "notes"):
+            value = getattr(self, name)
+            setattr(self, name, " ".join(value.split()) or None if value else None)
+        for name in ("depart_at", "arrive_at"):
+            value = getattr(self, name)
+            if value is not None and value.tzinfo is not None:
+                # Trip times are India wall-clock time, like start_at.
+                setattr(self, name, value.replace(tzinfo=None))
+        if self.depart_at and self.arrive_at and self.arrive_at < self.depart_at:
+            raise ValueError("Arrival cannot be before departure.")
+        return self
+
+    def stored(self) -> dict | None:
+        """The non-empty fields, as the JSON column keeps them."""
+        data = {k: v for k, v in self.model_dump(mode="json").items() if v not in (None, "")}
+        return data or None
+
+
 class DecisionPayload(BaseModel):
     """One admin decision on one traveller.
 
@@ -451,6 +486,8 @@ class DecisionPayload(BaseModel):
     to_status: TravellerStatus
     reason: str | None = Field(default=None, max_length=500)
     booking_reference: str | None = Field(default=None, max_length=120)
+    #: Only when marking booked: flight/train/bus or hotel details.
+    booking_details: BookingDetails | None = None
     conflict_override_reason: str | None = Field(default=None, max_length=500)
     notify_employee: bool = True
 

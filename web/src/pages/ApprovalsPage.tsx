@@ -32,6 +32,14 @@ import {
   type CabDraft,
 } from '@/components/CabDetails';
 import { ManagerReview } from '@/components/ManagerReview';
+import {
+  BookingFields,
+  EMPTY_BOOKING,
+  bookingBody,
+  bookingDraftValid,
+  draftFromTicket,
+  type BookingDraft,
+} from '@/components/BookingDetails';
 import { CancellationAsks } from '@/components/CancellationAsks';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
@@ -62,6 +70,7 @@ import {
   fetchTicketFile,
   recordCabBooking,
   type CabBookingBody,
+  fetchTickets,
 } from '@/lib/api';
 import { downloadCsv, slug, type CsvCell } from '@/lib/csv';
 import { openFileTab, showFile } from '@/lib/files';
@@ -492,6 +501,17 @@ interface PendingDecision {
   needsOverride: boolean;
 }
 
+/** Saved booking details back into the form's strings. */
+function draftOf(details: NonNullable<RequestTraveller['booking_details']>): Partial<BookingDraft> {
+  const out: Partial<BookingDraft> = {};
+  for (const [key, value] of Object.entries(details)) {
+    if (!value) continue;
+    out[key as keyof BookingDraft] =
+      key === 'depart_at' || key === 'arrive_at' ? String(value).slice(0, 16) : String(value);
+  }
+  return out;
+}
+
 export default function ApprovalsPage() {
   const queryClient = useQueryClient();
 
@@ -509,6 +529,10 @@ export default function ApprovalsPage() {
   const [reason, setReason] = useState('');
   const [notify, setNotify] = useState(true);
   const [reference, setReference] = useState('');
+  // Flight, train, bus or hotel details for the traveller, pre-filled from
+  // the uploaded ticket when there is one.
+  const [booking, setBooking] = useState<BookingDraft>(EMPTY_BOOKING);
+  const [bookingFromTicket, setBookingFromTicket] = useState(false);
   // The car sent, typed in the booking dialog for a cab or in Cab details.
   const [cabDraft, setCabDraft] = useState<CabDraft | null>(null);
   const [cabEditing, setCabEditing] = useState<TravelRequest | null>(null);
@@ -745,7 +769,22 @@ export default function ApprovalsPage() {
     // Booking a cab is where the car is usually known, so it is asked for
     // right there rather than on a second screen.
     setCabDraft(to === 'BOOKED' && isCab(request) ? cabDraftFrom(request) : null);
+    setBooking(traveller.booking_details ? { ...EMPTY_BOOKING, ...draftOf(traveller.booking_details) } : EMPTY_BOOKING);
+    setBookingFromTicket(false);
     setPending({ request, traveller, to, needsOverride: false });
+    if (to === 'BOOKED' && !isCab(request)) {
+      // Whatever the uploaded ticket says, so the admin checks rather than types.
+      queryClient
+        .fetchQuery({ queryKey: ['tickets', request.id], queryFn: () => fetchTickets(request.id) })
+        .then((tickets) => {
+          const found = draftFromTicket(tickets, traveller.id);
+          if (!found) return;
+          setBooking((current) => (bookingBody(current) ? current : found.draft));
+          setReference((current) => current || found.reference);
+          setBookingFromTicket(true);
+        })
+        .catch(() => undefined);
+    }
   };
 
   const confirm = () => {
@@ -762,6 +801,7 @@ export default function ApprovalsPage() {
       // gave no other.
       item.booking_reference =
         reference.trim() || (carReady ? tidyPlate(cabDraft!.vehicle_number) : reference);
+      if (!cabDraft) item.booking_details = bookingBody(booking);
     }
     // An override is recorded separately from the decision it justifies, so it
     // carries the same sentence rather than replacing it.
@@ -1365,7 +1405,8 @@ export default function ApprovalsPage() {
               loading={decide.isPending}
               disabled={
                 reason.trim().length < 3 ||
-                (pending?.to === 'BOOKED' && (!referenceReady || cabHalfTyped))
+                (pending?.to === 'BOOKED' &&
+                  (!referenceReady || cabHalfTyped || (!cabDraft && !bookingDraftValid(booking))))
               }
               onClick={confirm}
             >
@@ -1443,6 +1484,24 @@ export default function ApprovalsPage() {
                 placeholder={cabDraft ? 'VND-20431' : '6E-4412 / PNR QK8T2M'}
               />
             </Field>
+          )}
+
+          {pending?.to === 'BOOKED' && !cabDraft && (
+            <div className="space-y-2 rounded-md border border-border px-3 py-3">
+              <p className="text-xs font-medium">
+                {pending.request.request_type === 'HOTEL' ? 'The stay' : 'The journey'}
+                <span className="ml-1 font-normal text-text-subtle">
+                  {bookingFromTicket
+                    ? '- filled from the uploaded ticket; check it before saving'
+                    : '- what the traveller needs on the day (optional)'}
+                </span>
+              </p>
+              <BookingFields
+                draft={booking}
+                onChange={setBooking}
+                hotel={pending.request.request_type === 'HOTEL'}
+              />
+            </div>
           )}
 
           {/* Required on every decision now, approvals included. */}

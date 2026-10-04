@@ -470,6 +470,8 @@ export interface RequestTraveller {
   decision_reason: string | null;
   /** PNR, ticket number or hotel confirmation. */
   booking_reference: string | null;
+  /** Airline, number, times, seat or hotel - see BookingDetails. */
+  booking_details: BookingDetails | null;
   /** On the admin queue list only: the uploaded ticket to open from this row - the
    *  confirmed one, else the newest still under review. */
   ticket_id?: number | null;
@@ -730,10 +732,25 @@ export interface QueueExport {
   items: TravelRequest[];
 }
 
+/** What a traveller needs on the day, beside the booking reference. Times are
+ *  India wall-clock ("2026-10-14T06:10:00"), like a trip's start. */
+export interface BookingDetails {
+  carrier?: string | null;
+  service_number?: string | null;
+  depart_at?: string | null;
+  arrive_at?: string | null;
+  seat?: string | null;
+  hotel_name?: string | null;
+  hotel_address?: string | null;
+  notes?: string | null;
+}
+
 export interface DecisionBody {
   to_status: TravellerStatus;
   reason?: string | null;
   booking_reference?: string | null;
+  /** Only when marking booked. */
+  booking_details?: BookingDetails | null;
   /** Mandatory when approving someone with a live clash — addendum B6. */
   conflict_override_reason?: string | null;
   /** Suppresses the email only. The in-app notice and the ledger entry are

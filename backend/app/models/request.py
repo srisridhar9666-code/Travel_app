@@ -330,6 +330,11 @@ class RequestTraveller(Base, TimestampMixin):
     #: fills it from the uploaded ticket, still behind a human confirmation
     #: (addendum B3).
     booking_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    #: What the traveller needs to travel: airline or operator, flight/train/bus
+    #: number, departure and arrival, seat, or the hotel's name and address.
+    #: Typed when marking booked, pre-filled from an uploaded ticket. See
+    #: schemas.request.BookingDetails for the keys.
+    booking_details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # --- the manager's recommendation (two-level approval) ------------------
     #: The traveller's manager advises, an admin decides. Kept on the traveller
