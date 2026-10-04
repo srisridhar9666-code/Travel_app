@@ -86,6 +86,13 @@ def _guard_role_assignment(actor: User, target_role: Role | None) -> None:
     Without this, any admin could promote someone - or, through a friend,
     themselves - past the role that governs user management.
     """
+    if target_role is Role.SYSTEM_ADMIN:
+        # Admin and system admin differed only in data retention, which now
+        # sits with the super admin; the role remains only so old rows load.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="System admin is no longer a separate role - choose Admin, or Super admin.",
+        )
     if target_role is not None and accounts.outranks(target_role, actor.role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -530,7 +537,8 @@ def update_user(
     accounts.assert_may_manage(actor, user)
 
     updates = payload.model_dump(exclude_unset=True)
-    _guard_role_assignment(actor, updates.get("role"))
+    if updates.get("role") is not user.role:
+        _guard_role_assignment(actor, updates.get("role"))
 
     # Nobody edits their own role - it would let an admin lock the
     # organisation out of its own admin tier. Nor their own sign-in email from

@@ -42,7 +42,7 @@ BLOCKED_MESSAGES: dict[UserStatus, str] = {
 }
 
 ADMIN_TIER_MESSAGE = "Only someone at the same level or above can change this person's account."
-LAST_ADMIN_MESSAGE = "At least one active system administrator or super admin is needed."
+LAST_ADMIN_MESSAGE = "At least one active super admin is needed."
 
 
 def blocked_message(user: User) -> str | None:

@@ -288,8 +288,11 @@ Roles are ranked, and nobody grants or changes the account of someone above them
 | Ground staff | Raise and track their own travel. Can report to one manager. |
 | Manager | See their team's people, trips and travel history - never costs. Ask an admin to add, edit or remove a member (**My team**). Create and edit campaigns, but not archive or delete them. |
 | Admin | Run the desk: approvals, bookings, costs, Team, Departments, and the activity log. Approve or reject managers' team changes, with a comment the manager is sent. Keep the **Vendors** list and create, edit, submit and delete vendor **Invoices**. |
-| System admin | Everything an admin does, plus email settings and identity-document retention. |
-| Super admin | Everything else, and the only role that can manage super admins. The only role that **approves or rejects invoices** - and so the one admin tier that cannot create or edit invoices or vendors (they read and download both). The migration makes the earliest active system admin of each organisation the first one. |
+| Super admin | Everything an admin sees, plus purging old identity documents, and the only role that can manage super admins. The only role that **approves or rejects invoices** - and so the one admin tier that cannot create or edit invoices or vendors (they read and download both). The migration makes the earliest active system admin of each organisation the first one. |
+
+System admin used to sit between Admin and Super admin, differing from Admin only in
+data retention. It is no longer offered: migration `3c1e9a7b5d20` turns every remaining
+system admin into an admin, and the API refuses to grant it.
 
 Invoices: Admin and System admin create and edit them, only the Super admin approves, and
 Admin, System admin and Super admin can all read, download (CSV, or print to PDF) and see

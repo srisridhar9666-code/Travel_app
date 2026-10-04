@@ -102,7 +102,10 @@ interface EditForm {
 
 const GENDER_REQUIRED = 'Choose Male or Female.';
 /** Lowest first, the order the role pickers list them in. */
-const ROLES_BY_RANK = (Object.keys(ROLE_RANK) as Role[]).sort((a, b) => ROLE_RANK[a] - ROLE_RANK[b]);
+const ROLES_BY_RANK = (Object.keys(ROLE_RANK) as Role[])
+  // System admin is no longer offered: it was the same job as Admin.
+  .filter((role) => role !== 'SYSTEM_ADMIN')
+  .sort((a, b) => ROLE_RANK[a] - ROLE_RANK[b]);
 const MANAGER_HINT = 'Their manager sees their trips (never costs) and can ask for changes to their details.';
 
 /** Designation "Manager" is a job title only; the list of managers is everyone

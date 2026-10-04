@@ -137,7 +137,8 @@ export interface ChainVerification {
 
 export const ROLE_LABELS: Record<Role, string> = {
   SUPER_ADMIN: 'Super admin',
-  SYSTEM_ADMIN: 'System admin',
+  // No longer granted: folded into Admin. Kept so an old account still reads.
+  SYSTEM_ADMIN: 'System admin (old)',
   ADMIN: 'Admin',
   MANAGER: 'Manager',
   GROUND_STAFF: 'Ground staff',
@@ -150,10 +151,9 @@ export const ROLE_DESCRIPTIONS: Record<Role, string> = {
     "Leads a team: sees their trips (never costs), asks an admin to add, edit or remove members, and runs campaigns.",
   ADMIN:
     'Runs the travel desk: approvals, bookings, costs, people, departments and the activity log. Keeps vendors and creates and edits vendor invoices.',
-  SYSTEM_ADMIN:
-    'Everything an admin does, including vendors and invoices, plus email settings and identity-document retention.',
+  SYSTEM_ADMIN: 'No longer used - the same as Admin. Choose Admin or Super admin.',
   SUPER_ADMIN:
-    'The top level: the only one who approves vendor invoices and manages super admins. Reads, but does not create or edit, invoices and vendors.',
+    'The top level: everything an admin sees, plus approving vendor invoices, purging old identity documents and managing other super admins. Reads, but does not create or edit, invoices and vendors.',
 };
 
 /** A manager's ask to change their team, held until an admin decides. */

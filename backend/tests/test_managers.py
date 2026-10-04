@@ -96,14 +96,20 @@ class TestRoleRanks:
     @pytest.mark.parametrize("granter, role, allowed", [
         ("admin", "MANAGER", True),
         ("admin", "ADMIN", True),
-        ("admin", "SYSTEM_ADMIN", False),
-        ("sysadmin", "SYSTEM_ADMIN", True),
+        ("admin", "SUPER_ADMIN", False),
+        ("sysadmin", "SUPER_ADMIN", False),
         ("sysadmin", "SUPER_ADMIN", False),
         ("owner", "SUPER_ADMIN", True),
     ])
     def test_nobody_grants_a_role_above_their_own(self, client, org, granter, role, allowed):
         r = client.post("/users", headers=auth(org[granter]), json=invite_body(role=role))
         assert (r.status_code == 201) is allowed, r.text
+
+    @pytest.mark.parametrize("who", ["admin", "owner"])
+    def test_system_admin_is_no_longer_granted(self, client, org, who):
+        r = client.post("/users", headers=auth(org[who]), json=invite_body(role="SYSTEM_ADMIN"))
+        assert r.status_code == 422
+        assert "no longer a separate role" in r.json()["detail"]
 
     def test_an_admin_cannot_switch_off_the_super_admin(self, client, org):
         r = client.post(f"/users/{org['owner'].id}/status", headers=auth(org["admin"]),
