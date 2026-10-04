@@ -76,6 +76,7 @@ const BLANK: UserPayload = {
   base_state: '',
   base_location: '',
   department_id: null,
+  send_email: true,
 };
 
 interface EditForm {
@@ -132,11 +133,48 @@ interface IssuedLink {
   name: string;
   url: string;
   emailed: boolean;
+  /** The admin chose to share it themselves, so not emailing is no failure. */
+  byHand: boolean;
   detail: string | null;
   kind: 'invite' | 'reset';
 }
 
-function issued(name: string, result: InviteLink, hadPassword: boolean): IssuedLink | null {
+/** "Email the link to them" - the choice on every invite and reset. */
+function EmailLinkChoice({
+  name,
+  checked,
+  onChange,
+}: {
+  name: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5 rounded-md bg-surface-sunken px-3 py-2.5">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 h-3.5 w-3.5 accent-[rgb(var(--primary))]"
+      />
+      <span className="text-xs">
+        <span className="font-medium">Email the link to {name || 'them'}</span>
+        <span className="block text-text-muted">
+          {checked
+            ? 'They get it by email. You also see it next, to copy and share.'
+            : 'No email. You copy the link next and share it yourself - on WhatsApp, SMS or email.'}
+        </span>
+      </span>
+    </label>
+  );
+}
+
+function issued(
+  name: string,
+  result: InviteLink,
+  hadPassword: boolean,
+  byHand = false,
+): IssuedLink | null {
   if (!result.invite_url) return null;
   // The server says which kind it issued; older answers did not, and then
   // having a password already means it was a reset.
@@ -146,6 +184,7 @@ function issued(name: string, result: InviteLink, hadPassword: boolean): IssuedL
     name,
     url: result.invite_url,
     emailed: Boolean(result.email_sent),
+    byHand,
     detail: result.email_detail ?? null,
     kind,
   };
@@ -176,6 +215,7 @@ export default function TeamPage() {
   const [historyUser, setHistoryUser] = useState<UserRow | null>(null);
   const [statusUser, setStatusUser] = useState<UserRow | null>(null);
   const [resetUser, setResetUser] = useState<UserRow | null>(null);
+  const [linkByEmail, setLinkByEmail] = useState(true);
   const [purgeOpen, setPurgeOpen] = useState(false);
   const [editUser, setEditUser] = useState<UserRow | null>(null);
   const [editForm, setEditForm] = useState<EditForm | null>(null);
@@ -224,7 +264,7 @@ export default function TeamPage() {
       setForm(BLANK);
       setFormError(null);
       refresh();
-      setIssuedLink(issued(name, result, false));
+      setIssuedLink(issued(name, result, false, form.send_email === false));
     },
     onError: (err) => setFormError(errorMessage(err, 'Could not create this account.')),
   });
@@ -262,9 +302,10 @@ export default function TeamPage() {
   });
 
   const reinvite = useMutation({
-    mutationFn: (user: UserRow) => reinviteUser(user.id),
-    onSuccess: (result, user) => {
-      const link = issued(user.full_name, result, user.has_password);
+    mutationFn: (vars: { user: UserRow; sendEmail: boolean }) =>
+      reinviteUser(vars.user.id, vars.sendEmail),
+    onSuccess: (result, { user, sendEmail }) => {
+      const link = issued(user.full_name, result, user.has_password, !sendEmail);
       const what = link?.kind === 'reset' ? 'Password reset link' : 'New invitation';
       toast.success(
         result.email_sent
@@ -296,9 +337,10 @@ export default function TeamPage() {
 
   /** An invitation just goes again; a reset link asks first, since it is a
    *  way into someone's account. */
+  /** Both kinds of link ask first, so the admin can choose how it goes out. */
   const sendLink = (user: UserRow) => {
-    if (user.has_password) setResetUser(user);
-    else reinvite.mutate(user);
+    setLinkByEmail(true);
+    setResetUser(user);
   };
 
   const openEdit = (user: UserRow) => {
@@ -554,7 +596,7 @@ export default function TeamPage() {
                               loading={
                                 reinvite.isPending &&
                                 !resetUser &&
-                                reinvite.variables?.id === user.id
+                                reinvite.variables?.user.id === user.id
                               }
                               onClick={() => sendLink(user)}
                             >
@@ -951,6 +993,12 @@ export default function TeamPage() {
             </Field>
           </div>
 
+          <EmailLinkChoice
+            name={form.full_name.trim().split(/\s+/)[0] ?? ''}
+            checked={form.send_email !== false}
+            onChange={(send_email) => setForm({ ...form, send_email })}
+          />
+
           {formError && (
             <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-xs text-danger">
               {formError}
@@ -961,18 +1009,31 @@ export default function TeamPage() {
 
       <ConfirmDialog
         open={Boolean(resetUser)}
-        title={resetUser ? `Reset ${resetUser.full_name}'s password?` : ''}
-        confirmLabel="Send reset link"
+        title={
+          !resetUser
+            ? ''
+            : resetUser.has_password
+              ? `Reset ${resetUser.full_name}'s password?`
+              : `Send ${resetUser.full_name} a new invitation?`
+        }
+        confirmLabel={resetUser?.has_password ? 'Create reset link' : 'Create invitation link'}
         tone="primary"
         loading={reinvite.isPending}
-        onConfirm={() => resetUser && reinvite.mutate(resetUser)}
+        onConfirm={() => resetUser && reinvite.mutate({ user: resetUser, sendEmail: linkByEmail })}
         onClose={() => setResetUser(null)}
       >
         <p>
-          They get a one-time link to choose a new password, valid for 72 hours. Their current
-          password keeps working until they use it. You will also see the link, to share if email
-          is off.
+          {resetUser?.has_password
+            ? 'They get a one-time link to choose a new password, valid for 72 hours. Their current password keeps working until they use it.'
+            : 'A fresh one-time link to set their password, valid for 72 hours. Any earlier link stops working.'}
         </p>
+        <div className="mt-3">
+          <EmailLinkChoice
+            name={resetUser?.full_name ?? ''}
+            checked={linkByEmail}
+            onChange={setLinkByEmail}
+          />
+        </div>
       </ConfirmDialog>
 
       <ConfirmDialog
@@ -1005,7 +1066,9 @@ export default function TeamPage() {
         description={
           issuedLink?.emailed
             ? 'They will get an email with this link. You can also send it yourself.'
-            : 'The email did not go out, so send this link to them yourself.'
+            : issuedLink?.byHand
+              ? 'Copy this link and send it to them yourself - on WhatsApp, SMS or email.'
+              : 'The email did not go out, so send this link to them yourself.'
         }
         footer={
           <>
@@ -1019,7 +1082,7 @@ export default function TeamPage() {
           </>
         }
       >
-        {issuedLink && !issuedLink.emailed && issuedLink.detail && (
+        {issuedLink && !issuedLink.emailed && !issuedLink.byHand && issuedLink.detail && (
           <p className="mb-3 rounded-md bg-warning-soft px-3 py-2 text-xs text-warning">
             Email not sent: {issuedLink.detail}
           </p>

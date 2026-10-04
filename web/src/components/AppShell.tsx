@@ -11,9 +11,11 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Monitor,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
+  Smartphone,
   Users,
   X,
 } from 'lucide-react';
@@ -34,6 +36,7 @@ import {
   saveThemePreference,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { isPhone, setViewMode, viewMode } from '@/lib/viewMode';
 import { useAuth } from '@/store/auth';
 import { useTheme } from '@/store/theme';
 import { ROLE_LABELS, type Role } from '@/types';
@@ -207,6 +210,9 @@ export default function AppShell() {
     .slice(0, 3);
   // Ground staff see one short list, so section headings would only add noise.
   const sectioned = visible.length > 4;
+  // Phones open the desktop layout; this is the way back, and forth.
+  const phone = isPhone();
+  const view = viewMode();
 
   return (
     <div className="min-h-dvh bg-canvas">
@@ -232,20 +238,20 @@ export default function AppShell() {
         // aria-hidden when closed: the same element is the desktop navigation,
         // and hiding it on that breakpoint would remove the nav entirely.
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col bg-sidebar text-white shadow-xl transition-[transform,width] duration-300 ease-out lg:shadow-none',
+          'fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r border-sidebar-fg/10 bg-sidebar text-sidebar-fg shadow-xl transition-[transform,width] duration-300 ease-out lg:shadow-none',
           drawerOpen ? 'translate-x-0' : 'max-lg:-translate-x-full',
           rail ? 'lg:w-[76px]' : 'lg:w-64',
         )}
       >
         <div className={cn('flex h-16 shrink-0 items-center justify-between gap-2 px-4', rail && 'lg:justify-center lg:px-0')}>
           <Link to="/" aria-label="Sriyatra home" className="min-w-0 rounded-lg focus-visible:outline-offset-2">
-            <LogoLockup onDark className={cn(rail && 'lg:hidden')} />
-            {rail && <LogoLockup onDark markOnly className="hidden lg:flex" />}
+            <LogoLockup className={cn(rail && 'lg:hidden')} />
+            {rail && <LogoLockup markOnly className="hidden lg:flex" />}
           </Link>
           <button
             type="button"
             onClick={() => setDrawerOpen(false)}
-            className="rounded-md p-1.5 text-white/70 hover:bg-white/10 hover:text-white lg:hidden"
+            className="rounded-md p-1.5 text-sidebar-fg/70 hover:bg-sidebar-fg/10 hover:text-sidebar-fg lg:hidden"
             aria-label="Close menu"
           >
             <X size={18} />
@@ -268,7 +274,7 @@ export default function AppShell() {
                     aria-expanded={open}
                     aria-controls={listId}
                     className={cn(
-                      'mb-1.5 flex w-full items-center justify-between rounded-md px-3 py-1 text-2xs font-semibold uppercase tracking-[0.12em] text-white/55 transition-colors hover:text-white/85',
+                      'mb-1.5 flex w-full items-center justify-between rounded-md px-3 py-1 text-2xs font-semibold uppercase tracking-[0.12em] text-sidebar-fg/60 transition-colors hover:text-sidebar-fg/85',
                       rail && 'lg:hidden',
                     )}
                   >
@@ -276,7 +282,7 @@ export default function AppShell() {
                     <ChevronDown size={14} className={cn('transition-transform', !open && '-rotate-90')} />
                   </button>
                 )}
-                {rail && index > 0 && <div className="mx-3 mb-3 hidden border-t border-white/10 lg:block" />}
+                {rail && index > 0 && <div className="mx-3 mb-3 hidden border-t border-sidebar-fg/10 lg:block" />}
                 <ul
                   id={listId}
                   // The rail has no headings to reopen a section from, so it
@@ -296,8 +302,8 @@ export default function AppShell() {
                             cn(
                               'relative flex h-10 items-center gap-3 rounded-xl px-3 text-sm transition-colors',
                               isActive
-                                ? 'bg-white/[0.12] font-semibold text-white'
-                                : 'text-white/70 hover:bg-white/[0.06] hover:text-white',
+                                ? 'bg-sidebar-fg/[0.08] font-semibold text-sidebar-fg dark:bg-sidebar-fg/[0.12]'
+                                : 'text-sidebar-fg/70 hover:bg-sidebar-fg/[0.05] hover:text-sidebar-fg',
                               rail && 'lg:justify-center lg:px-0',
                             )
                           }
@@ -313,7 +319,7 @@ export default function AppShell() {
                                 <span
                                   aria-label={`${count} waiting`}
                                   className={cn(
-                                    'ml-auto min-w-[1.375rem] rounded-full bg-white px-1.5 text-center text-2xs font-bold leading-5 text-sidebar tabular-nums',
+                                    'ml-auto min-w-[1.375rem] rounded-full bg-sidebar-fg px-1.5 text-center text-2xs font-bold leading-5 text-sidebar tabular-nums',
                                     rail && 'lg:absolute lg:right-1.5 lg:top-1 lg:ml-0 lg:min-w-[1.125rem] lg:px-1 lg:leading-4',
                                   )}
                                 >
@@ -332,25 +338,41 @@ export default function AppShell() {
           })}
         </nav>
 
-        <div className="shrink-0 border-t border-white/10 p-3">
+        <div className="shrink-0 border-t border-sidebar-fg/10 p-3">
+          {phone && (
+            <button
+              type="button"
+              onClick={() => setViewMode(view === 'desktop' ? 'mobile' : 'desktop')}
+              title={view === 'desktop' ? 'Switch to phone view' : 'Switch to desktop view'}
+              className={cn(
+                'mb-2 flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-medium text-sidebar-fg/70 transition-colors hover:bg-sidebar-fg/[0.05] hover:text-sidebar-fg',
+                rail && 'lg:justify-center lg:px-0',
+              )}
+            >
+              {view === 'desktop' ? <Smartphone size={16} /> : <Monitor size={16} />}
+              <span className={cn(rail && 'lg:sr-only')}>
+                {view === 'desktop' ? 'Switch to phone view' : 'Switch to desktop view'}
+              </span>
+            </button>
+          )}
           <div className={cn('flex items-center gap-1', rail && 'lg:flex-col lg:gap-2')}>
             <NavLink
               to="/profile"
               title="My profile"
               className={({ isActive }) =>
                 cn(
-                  'flex min-w-0 flex-1 items-center gap-3 rounded-xl px-2 py-2 transition-colors hover:bg-white/[0.06]',
-                  isActive && 'bg-white/[0.12]',
+                  'flex min-w-0 flex-1 items-center gap-3 rounded-xl px-2 py-2 transition-colors hover:bg-sidebar-fg/[0.05]',
+                  isActive && 'bg-sidebar-fg/[0.08] dark:bg-sidebar-fg/[0.12]',
                   rail && 'lg:flex-none lg:justify-center lg:p-1',
                 )
               }
             >
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/15 text-xs font-semibold text-white ring-1 ring-white/20">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand-soft text-xs font-semibold text-brand-strong ring-1 ring-sidebar-fg/10">
                 {user ? initials(user.full_name) : '?'}
               </span>
               <span className={cn('min-w-0 flex-1', rail && 'lg:hidden')}>
-                <span className="block truncate text-sm font-medium text-white">{user?.full_name}</span>
-                <span className="block truncate text-xs text-white/60">
+                <span className="block truncate text-sm font-medium text-sidebar-fg">{user?.full_name}</span>
+                <span className="block truncate text-xs text-sidebar-fg/60">
                   {user ? ROLE_LABELS[user.role] : ''}
                 </span>
               </span>
@@ -361,7 +383,7 @@ export default function AppShell() {
               aria-label="Sign out"
               disabled={signOutMutation.isPending}
               onClick={() => signOutMutation.mutate()}
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-white/70 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-60"
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-sidebar-fg/70 transition-colors hover:bg-sidebar-fg/10 hover:text-sidebar-fg disabled:opacity-60"
             >
               {signOutMutation.isPending ? <Spinner className="h-4 w-4" /> : <LogOut size={16} />}
             </button>
@@ -369,15 +391,15 @@ export default function AppShell() {
 
           <div className={cn('mt-2 flex items-center justify-between gap-2 pl-2', rail && 'lg:justify-center lg:pl-0')}>
             <div className={cn('min-w-0 space-y-0.5', rail && 'lg:hidden')}>
-              <CompanyCredit onDark short />
-              <CreatorCredit onDark />
+              <CompanyCredit short />
+              <CreatorCredit />
             </div>
             <button
               type="button"
               onClick={toggleRail}
               aria-label={rail ? 'Expand the sidebar' : 'Collapse the sidebar'}
               title={rail ? 'Expand the sidebar' : 'Collapse the sidebar'}
-              className="hidden h-8 w-8 shrink-0 place-items-center rounded-lg text-white/60 transition-colors hover:bg-white/10 hover:text-white lg:grid"
+              className="hidden h-8 w-8 shrink-0 place-items-center rounded-lg text-sidebar-fg/60 transition-colors hover:bg-sidebar-fg/10 hover:text-sidebar-fg lg:grid"
             >
               {rail ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
             </button>

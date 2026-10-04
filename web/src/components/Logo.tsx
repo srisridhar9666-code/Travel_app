@@ -49,12 +49,9 @@ export function Logo({ variant = 'full', className }: LogoProps) {
  */
 export function LogoLockup({
   className,
-  onDark = false,
   markOnly = false,
 }: {
   className?: string;
-  /** White lettering, for the navy sidebar in either theme. */
-  onDark?: boolean;
   /** Just the icon, for the collapsed sidebar rail. */
   markOnly?: boolean;
 }) {
@@ -63,20 +60,10 @@ export function LogoLockup({
       <Logo variant="mark" className={cn('shrink-0', markOnly ? 'h-10 w-10' : 'h-11 w-11')} />
       {!markOnly && (
         <div className="flex min-w-0 flex-col">
-          <span
-            className={cn(
-              'truncate font-serif text-xl font-bold uppercase leading-6 tracking-[0.04em]',
-              onDark ? 'text-white' : 'text-brand-strong dark:text-text',
-            )}
-          >
+          <span className="truncate font-serif text-xl font-bold uppercase leading-6 tracking-[0.04em] text-brand-strong dark:text-text">
             Sriyatra
           </span>
-          <span
-            className={cn(
-              'truncate text-[0.8125rem] font-medium leading-5 tracking-wide',
-              onDark ? 'text-white/70' : 'text-text-muted',
-            )}
-          >
+          <span className="truncate text-[0.8125rem] font-medium leading-5 tracking-wide text-text-muted">
             Your Travel Desk
           </span>
         </div>
@@ -115,22 +102,14 @@ export function CompanyLogo({ className }: { className?: string }) {
 /** "A product of DesignBoxed", with its mark: the sidebar and form footers. */
 export function CompanyCredit({
   className,
-  onDark = false,
   short = false,
 }: {
   className?: string;
-  onDark?: boolean;
   /** "DesignBoxed" rather than the legal name, where a line is short. */
   short?: boolean;
 }) {
   return (
-    <div
-      className={cn(
-        'flex items-center gap-2 text-2xs',
-        onDark ? 'text-white/60' : 'text-text-subtle',
-        className,
-      )}
-    >
+    <div className={cn('flex items-center gap-2 text-2xs text-text-subtle', className)}>
       <img
         src="/brand/company-mark.png"
         alt=""
@@ -139,9 +118,7 @@ export function CompanyCredit({
       />
       <span>
         A product of{' '}
-        <span className={cn('font-medium', onDark ? 'text-white/80' : 'text-text-muted')}>
-          {short ? 'DesignBoxed' : COMPANY_NAME}
-        </span>
+        <span className="font-medium text-text-muted">{short ? 'DesignBoxed' : COMPANY_NAME}</span>
       </span>
     </div>
   );
@@ -150,13 +127,10 @@ export function CompanyCredit({
 /** Whose work this is, shown under the sidebar and on the sign-in screens. */
 export const CREATED_BY = 'Sridhar';
 
-export function CreatorCredit({ className, onDark = false }: { className?: string; onDark?: boolean }) {
+export function CreatorCredit({ className }: { className?: string }) {
   return (
-    <p className={cn('text-2xs', onDark ? 'text-white/60' : 'text-text-subtle', className)}>
-      Created by{' '}
-      <span className={cn('font-medium', onDark ? 'text-white/80' : 'text-text-muted')}>
-        {CREATED_BY}
-      </span>
+    <p className={cn('text-2xs text-text-subtle', className)}>
+      Created by <span className="font-medium text-text-muted">{CREATED_BY}</span>
     </p>
   );
 }

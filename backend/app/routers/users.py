@@ -253,12 +253,20 @@ def create_user(
 
     invite_url = build_invite_url(raw)
     logger.info("Invite issued for %s", user.email)
+    # The link is also returned to the inviting admin, over an authenticated
+    # request, so they can pass it on themselves - instead of the email, when
+    # they chose that, or when the email did not go.
+    if not payload.send_email:
+        return InviteLinkResponse(
+            detail=f"{user.full_name} invited. Share this link with them.",
+            invite_url=invite_url,
+            expires_at=token.expires_at,
+            email_sent=False,
+            purpose=str(TokenPurpose.INVITE),
+        )
     sent = email_service.send_account_link(
         user.email, user.full_name, invite_url, purpose="invite", valid_hours=INVITE_VALID_HOURS
     )
-
-    # The link is also returned to the inviting admin, over an authenticated
-    # request, so they can pass it on themselves when the email did not go.
     return InviteLinkResponse(
         detail=(
             f"{user.full_name} invited. The link has been emailed to {user.email}."
@@ -590,7 +598,11 @@ def open_trips(user_id: int, actor: AdminUser, db: DbSession) -> OpenTrips:
 
 @router.post("/{user_id}/reinvite", response_model=InviteLinkResponse)
 def reinvite(
-    user_id: int, actor: AdminUser, request: Request, db: DbSession
+    user_id: int,
+    actor: AdminUser,
+    request: Request,
+    db: DbSession,
+    send_email: Annotated[bool, Query(description="Email it as well as returning it")] = True,
 ) -> InviteLinkResponse:
     """Issue a fresh invite link, or a password reset link once they have a
     password. Invalidates any earlier link of the same kind.
@@ -624,6 +636,14 @@ def reinvite(
     db.commit()
 
     url = build_invite_url(raw)
+    if not send_email:
+        return InviteLinkResponse(
+            detail=f"New link generated for {user.full_name}. Share it with them.",
+            invite_url=url,
+            expires_at=token.expires_at,
+            email_sent=False,
+            purpose=str(purpose),
+        )
     sent = email_service.send_account_link(
         user.email,
         user.full_name,

@@ -73,6 +73,9 @@ class UserCreate(BaseModel):
     #: The city or constituency they are based in.
     base_location: str | None = Field(default=None, max_length=120)
     department_id: int | None = None
+    #: Email the invitation link to them. Either way the link comes back in the
+    #: response, for the admin to copy and share themselves.
+    send_email: bool = True
 
 
 #: Columns that cannot be emptied. Without this an explicit null reaches the

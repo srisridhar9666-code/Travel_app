@@ -274,6 +274,8 @@ export interface UserPayload {
   /** The city or constituency. */
   base_location?: string | null;
   department_id?: number | null;
+  /** Create only: email the invitation as well as showing the link. */
+  send_email?: boolean;
 }
 
 /** A partial update. Status is not here: it has its own endpoint. */
@@ -298,8 +300,11 @@ export const changeUserStatus = (id: number, change: StatusChange) =>
 export const fetchUserOpenTrips = (id: number) =>
   api.get<OpenTrips>(`/users/${id}/open-trips`).then((r) => r.data);
 
-export const reinviteUser = (id: number) =>
-  api.post<InviteLink>(`/users/${id}/reinvite`).then((r) => r.data);
+/** The link always comes back to copy; `sendEmail` also emails it to them. */
+export const reinviteUser = (id: number, sendEmail = true) =>
+  api
+    .post<InviteLink>(`/users/${id}/reinvite`, null, { params: { send_email: sendEmail } })
+    .then((r) => r.data);
 
 export const unlockUser = (id: number) =>
   api.post<UserRow>(`/users/${id}/unlock`).then((r) => r.data);
