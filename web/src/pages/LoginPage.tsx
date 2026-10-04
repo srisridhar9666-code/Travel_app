@@ -64,7 +64,7 @@ export default function LoginPage() {
   const shown = error ?? notice;
 
   return (
-    <div className="grid min-h-dvh lg:grid-cols-[1fr_1.1fr]">
+    <div className="grid min-h-dvh lg:grid-cols-[1fr_1.1fr] portrait:min-h-[52rem]">
       {/* Form side */}
       <div className="flex flex-col px-6 py-8 sm:px-12">
         <div className="flex items-center justify-between">

@@ -59,7 +59,7 @@ export default function SetPasswordPage() {
   const isInvite = preview.data?.purpose === 'INVITE';
 
   return (
-    <div className="flex min-h-dvh flex-col bg-canvas px-6 py-8">
+    <div className="flex min-h-dvh flex-col bg-canvas px-6 py-8 portrait:min-h-[52rem]">
       <div className="mx-auto flex w-full max-w-sm items-center justify-between">
         <LogoLockup />
         <ThemeToggle />

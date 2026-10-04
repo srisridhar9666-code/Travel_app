@@ -43,9 +43,10 @@ export function Logo({ variant = 'full', className }: LogoProps) {
 }
 
 /**
- * Icon plus product name, for the sidebar header and the sign-in screens. The
- * name follows the theme the way the full logo's lettering does: navy on
- * light, white on dark, in capitals and a serif like the wordmark.
+ * Icon plus the Sriyatra wordmark, for the sidebar header and the sign-in
+ * screens. The wordmark is cut from the supplied logo rather than typed, so it
+ * is the brand's own lettering (with the pin over the I); like the full logo it
+ * swaps with the theme - navy on light, white on dark.
  */
 export function LogoLockup({
   className,
@@ -55,18 +56,25 @@ export function LogoLockup({
   /** Just the icon, for the collapsed sidebar rail. */
   markOnly?: boolean;
 }) {
+  const wordmark = 'h-11 w-auto max-w-[9.5rem] select-none object-contain object-left';
   return (
-    <div className={cn('flex min-w-0 items-center gap-3', className)}>
+    <div className={cn('flex min-w-0 items-center gap-2.5', className)}>
       <Logo variant="mark" className={cn('shrink-0', markOnly ? 'h-10 w-10' : 'h-11 w-11')} />
       {!markOnly && (
-        <div className="flex min-w-0 flex-col">
-          <span className="truncate font-serif text-xl font-bold uppercase leading-6 tracking-[0.04em] text-brand-strong dark:text-text">
-            Sriyatra
-          </span>
-          <span className="truncate text-[0.8125rem] font-medium leading-5 tracking-wide text-text-muted">
-            Your Travel Desk
-          </span>
-        </div>
+        <>
+          <img
+            src="/brand/wordmark-light.png"
+            alt="Sriyatra - Your Travel Desk"
+            draggable={false}
+            className={cn(wordmark, 'dark:hidden')}
+          />
+          <img
+            src="/brand/wordmark-dark.png"
+            alt="Sriyatra - Your Travel Desk"
+            draggable={false}
+            className={cn(wordmark, 'hidden dark:block')}
+          />
+        </>
       )}
     </div>
   );
