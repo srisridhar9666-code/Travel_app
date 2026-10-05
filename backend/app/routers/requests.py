@@ -39,6 +39,7 @@ from app.core.enums import (
     TravellerStatus,
 )
 from app.models.base import naive_utcnow
+from app.models.project import Project
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
 from app.schemas.request import (
@@ -323,17 +324,35 @@ def _matching(
     if priority is not None:
         filters.append(TravelRequest.priority == priority)
     if search:
-        like = f"%{search.strip()}%"
-        filters.append(
-            or_(
-                TravelRequest.origin.like(like),
-                TravelRequest.destination.like(like),
-                TravelRequest.pickup_city.like(like),
-                TravelRequest.drop_city.like(like),
-                TravelRequest.hotel_city.like(like),
-                TravelRequest.notes.like(like),
-            )
+        needle = search.strip()
+        like = f"%{needle}%"
+        # People: whoever raised it, and everyone travelling on it - by name,
+        # employee code or email. Places, notes and the campaign as before, and
+        # a bare number finds that request.
+        people = select(User.id).where(
+            User.tenant_id == user.tenant_id,
+            or_(User.full_name.like(like), User.employee_code.like(like), User.email.like(like)),
         )
+        on_board = select(RequestTraveller.request_id).where(RequestTraveller.user_id.in_(people))
+        campaigns = select(Project.id).where(
+            Project.tenant_id == user.tenant_id,
+            or_(Project.name.like(like), Project.code.like(like)),
+        )
+        matches = [
+            TravelRequest.requester_id.in_(people),
+            TravelRequest.id.in_(on_board),
+            TravelRequest.origin.like(like),
+            TravelRequest.destination.like(like),
+            TravelRequest.pickup_city.like(like),
+            TravelRequest.drop_city.like(like),
+            TravelRequest.hotel_city.like(like),
+            TravelRequest.notes.like(like),
+            TravelRequest.project_id.in_(campaigns),
+            TravelRequest.other_project_name.like(like),
+        ]
+        if needle.isdigit():
+            matches.append(TravelRequest.id == int(needle))
+        filters.append(or_(*matches))
 
     rows = (
         db.execute(select(TravelRequest).where(*filters).order_by(TravelRequest.id.desc()))

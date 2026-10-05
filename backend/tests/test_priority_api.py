@@ -248,6 +248,31 @@ class TestTheQueue:
             "mine": "false", "status": "PARTIALLY_APPROVED", "priority": "HIGH"})
         assert [r["id"] for r in res.json()["items"]] == [partly.id]
 
+    def test_search_finds_people_campaigns_and_numbers(self, client, db, world):
+        """The queue search matches who raised a request and who is on it, not
+        only where it goes."""
+        project, admin, ravi, meena = world
+        mine = make_row(db, project, ravi)
+        theirs = make_row(db, project, meena)
+        db.commit()
+
+        def found(text):
+            res = client.get("/requests", headers=auth(admin),
+                             params={"mine": "false", "search": text})
+            assert res.status_code == 200, res.text
+            return {r["id"] for r in res.json()["items"]}
+
+        assert found("Meena") == {theirs.id}          # by name
+        assert found("ravi@designboxed") == {mine.id}  # by email
+        assert found("MON-1") == {mine.id, theirs.id}  # by campaign code
+        assert found(str(mine.id)) >= {mine.id}        # by request number
+        assert found("Pune") == {mine.id, theirs.id}   # places still work
+        assert found("Nobody Here") == set()
+        # The tab counts agree with the list.
+        counts = client.get("/requests/queue/counts", headers=auth(admin),
+                            params={"search": "Meena"}).json()
+        assert counts["awaiting"] == 1
+
     def test_tab_counts_follow_the_priority_and_search(self, client, db, world):
         """The tab labels must agree with the filtered list under them."""
         project, admin, ravi, _ = world

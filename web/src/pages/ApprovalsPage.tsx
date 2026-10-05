@@ -545,6 +545,7 @@ export default function ApprovalsPage() {
   // and attached to their email.
   const [bookingTicket, setBookingTicket] = useState<UploadedTicket | null>(null);
   const ticketInput = useRef<HTMLInputElement>(null);
+  const bookingSection = useRef<HTMLDivElement>(null);
   // The car sent, typed in the booking dialog for a cab or in Cab details.
   const [cabDraft, setCabDraft] = useState<CabDraft | null>(null);
   const [cabEditing, setCabEditing] = useState<TravelRequest | null>(null);
@@ -901,6 +902,288 @@ export default function ApprovalsPage() {
           ? `Approve ${pending.traveller.full_name}`
           : `${pending.to === 'REJECTED' ? 'Reject' : 'Cancel'} ${pending.traveller.full_name}`;
 
+  // A booking in progress opens in the traveller's own row, not a dialog, and
+  // is brought into view - on a phone the row can be below the fold.
+  const bookingFor = pending?.to === 'BOOKED' ? pending.traveller.id : undefined;
+  useEffect(() => {
+    if (bookingFor === undefined) return;
+    const frame = requestAnimationFrame(() =>
+      bookingSection.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [bookingFor]);
+
+  // The fields of a decision and its buttons, shared by the dialog (approve,
+  // reject, cancel) and the booking section that opens in a traveller's row.
+  const decisionFields = (
+    <>
+      {pending?.needsOverride && (
+        <div className="mb-4">
+          <ConflictList
+            conflicts={pending.request.conflicts.filter(
+              (conflict) => conflict.user_id === pending.traveller.user_id,
+            )}
+            footnote={null}
+          />
+        </div>
+      )}
+
+      <div className="space-y-4">
+        {/* The admin decides with the manager's view in front of them - or
+            knowing it has not come yet, which never stops them deciding. */}
+        {pending &&
+        pending.to !== 'BOOKED' &&
+        (pending.traveller.manager_recommendation || pending.traveller.manager_name) && (
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium">Manager’s recommendation</p>
+            <ManagerReview traveller={pending.traveller} />
+            {!pending.traveller.manager_recommendation && pending.traveller.status === 'PENDING' && (
+              <p className="text-2xs text-text-subtle">
+                You can decide now - the final decision is yours.
+              </p>
+            )}
+          </div>
+        )}
+
+        {pending?.to === 'BOOKED' && cabDraft && (
+          <div className="space-y-2 rounded-md border border-border px-3 py-3">
+            <p className="text-xs font-medium">The car sent</p>
+            <CabBookingFields
+              draft={cabDraft}
+              onChange={setCabDraft}
+              idPrefix="book-cab"
+              asked={cabAsked(pending.request)}
+            />
+            <p className={cn('text-2xs', cabHalfTyped ? 'text-danger' : 'text-text-subtle')}>
+              {cabHalfTyped
+                ? 'Fill in all four, or clear them and add the car later from Cab details.'
+                : 'Optional now - you can add or change it later from Cab details. The traveller’s booking notice includes it.'}
+            </p>
+          </div>
+        )}
+
+        {pending?.to === 'BOOKED' && !cabDraft && (
+          <div className="rounded-md border border-dashed border-border-strong bg-surface-sunken/50 px-3 py-3">
+            <input
+              ref={ticketInput}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/heic,application/pdf"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file && pending) {
+                  attachTicket.mutate({
+                    requestId: pending.request.id,
+                    travellerId: pending.traveller.id,
+                    file,
+                  });
+                }
+                e.target.value = '';
+              }}
+            />
+            {bookingTicket ? (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <FileText size={15} className="shrink-0 text-text-subtle" />
+                  <span className="min-w-0 truncate text-xs font-medium">
+                    {bookingTicket.file_name ?? 'Ticket'}
+                  </span>
+                  <Badge tone={bookingTicket.status === 'FAILED' ? 'warning' : 'success'}>
+                    {bookingTicket.status === 'FAILED' ? 'Could not read' : 'Read'}
+                  </Badge>
+                  <span className="ml-auto flex gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={viewTicket.isPending}
+                      onClick={() =>
+                        viewTicket.mutate({ ticketId: bookingTicket.id, tab: openFileTab() })
+                      }
+                    >
+                      <Eye size={13} />
+                      View
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={attachTicket.isPending}
+                      onClick={() => ticketInput.current?.click()}
+                    >
+                      <Upload size={13} />
+                      Replace
+                    </Button>
+                  </span>
+                </div>
+                <p className="mt-1.5 text-2xs text-text-subtle">
+                  {bookingTicket.status === 'FAILED'
+                    ? 'This ticket could not be read - type the details below. It is still attached to the email.'
+                    : 'The details below are filled from this ticket - check them. It is attached to the email.'}
+                </p>
+                {bookingTicket.mismatches.length > 0 && (
+                  <div className="mt-2 rounded-md border border-warning/40 bg-warning-soft px-2.5 py-2">
+                    <p className="flex items-center gap-1.5 text-2xs font-semibold text-warning">
+                      <AlertTriangle size={12} />
+                      This ticket does not match the request
+                    </p>
+                    <ul className="mt-0.5 space-y-0.5">
+                      {bookingTicket.mismatches.map((note) => (
+                        <li key={note} className="text-2xs leading-relaxed text-text-muted">
+                          {note}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={attachTicket.isPending}
+                  onClick={() => ticketInput.current?.click()}
+                >
+                  <Upload size={13} />
+                  Upload ticket
+                </Button>
+                <p className="min-w-0 flex-1 text-2xs text-text-subtle">
+                  {attachTicket.isPending
+                    ? 'Reading the ticket - this can take up to 20 seconds…'
+                    : 'PDF or photo. The details below fill in from it, and it is attached to the traveller’s email.'}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {pending?.to === 'BOOKED' && (
+          <Field
+            label={cabDraft ? 'Booking reference' : 'Ticket or booking reference'}
+            htmlFor="reference"
+            required={!cabDraft}
+            hint={
+              cabDraft
+                ? 'The vendor’s booking ID. Leave blank to use the vehicle number.'
+                : 'PNR, ticket number or hotel confirmation.'
+            }
+          >
+            <Input
+              id="reference"
+              value={reference}
+              onChange={(e) => setReference(e.target.value)}
+              placeholder={cabDraft ? 'VND-20431' : '6E-4412 / PNR QK8T2M'}
+            />
+          </Field>
+        )}
+
+        {pending?.to === 'BOOKED' && !cabDraft && (
+          <div className="space-y-2 rounded-md border border-border px-3 py-3">
+            <p className="text-xs font-medium">
+              {pending.request.request_type === 'HOTEL' ? 'The stay' : 'The journey'}
+              <span className="ml-1 font-normal text-text-subtle">
+                {bookingFromTicket
+                  ? '- filled from the uploaded ticket; check it before saving'
+                  : '- what the traveller needs on the day (optional)'}
+              </span>
+            </p>
+            <BookingFields
+              draft={booking}
+              onChange={setBooking}
+              hotel={pending.request.request_type === 'HOTEL'}
+            />
+          </div>
+        )}
+
+        {/* Required on every decision now, approvals included. */}
+        <Field
+          label={
+            pending?.needsOverride
+              ? 'Why approve anyway?'
+              : pending?.to === 'BOOKED'
+                ? 'Note to the traveller'
+                : 'Reason'
+          }
+          htmlFor="decision-reason"
+          required
+          hint="Shown to the traveller and kept in the activity log."
+        >
+          <Input
+            id="decision-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder={
+              pending?.needsOverride
+                ? 'The earlier booking was released'
+                : pending?.to === 'BOOKED'
+                  ? 'Flight confirmed with the travel desk'
+                  : pending?.to === 'APPROVED'
+                    ? 'Needed on site for the client walkthrough'
+                    : 'Covered by a colleague already in that city'
+            }
+          />
+        </Field>
+
+        {/* The record is never optional; only the email is. Someone told in
+            person, or a batch being tidied up retrospectively, should not
+            have an inbox filled on their behalf. */}
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-md bg-surface-sunken px-3 py-2.5">
+          <input
+            type="checkbox"
+            checked={notify}
+            onChange={(e) => setNotify(e.target.checked)}
+            className="mt-0.5 h-3.5 w-3.5 accent-[rgb(var(--primary))]"
+          />
+          <span className="text-xs">
+            <span className="font-medium">Email {pending?.traveller.full_name}</span>
+            <span className="block text-text-muted">
+              {notify
+                ? `${
+                    pending?.to === 'BOOKED'
+                      ? bookingTicket
+                        ? 'They get an email with the booking details and the ticket attached.'
+                        : 'They get an email with the booking details.'
+                      : 'They get an email with this decision and the reason.'
+                  }${
+                    pending?.traveller.manager_name
+                      ? ` ${pending.traveller.manager_name} is copied on it.`
+                      : ''
+                  }`
+                : 'No email. The in-app notice and the activity log are still written.'}
+            </span>
+          </span>
+        </label>
+      </div>
+    </>
+  );
+
+  const decisionActions = (
+    <>
+      <Button variant="secondary" onClick={close}>
+        Cancel
+      </Button>
+      <Button
+        variant={pending?.to === 'REJECTED' ? 'danger' : 'primary'}
+        loading={decide.isPending}
+        disabled={
+          reason.trim().length < 3 ||
+          (pending?.to === 'BOOKED' &&
+            (!referenceReady || cabHalfTyped || (!cabDraft && !bookingDraftValid(booking))))
+        }
+        onClick={confirm}
+      >
+        {pending?.needsOverride
+          ? 'Approve anyway'
+          : pending?.to === 'BOOKED'
+            ? 'Mark booked'
+            : pending?.to === 'APPROVED'
+              ? 'Approve traveller'
+              : pending?.to === 'REJECTED'
+                ? 'Reject traveller'
+                : 'Cancel traveller'}
+      </Button>
+    </>
+  );
+
   return (
     <div className="space-y-6">
       <div>
@@ -1112,7 +1395,7 @@ export default function ApprovalsPage() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search place or notes"
+            placeholder="Search employee, place, campaign or no."
             className="min-w-40 flex-1 sm:max-w-64"
             aria-label="Search the queue"
           />
@@ -1335,7 +1618,7 @@ export default function ApprovalsPage() {
                               </Button>
                             </>
                           )}
-                          {traveller.status === 'APPROVED' && (
+                          {traveller.status === 'APPROVED' && bookingFor !== traveller.id && (
                             <Button
                               size="sm"
                               variant="secondary"
@@ -1346,6 +1629,30 @@ export default function ApprovalsPage() {
                             </Button>
                           )}
                         </div>
+
+                        {/* Booking happens here, in the row - not in a popup. */}
+                        {bookingFor === traveller.id && (
+                          <div
+                            ref={bookingSection}
+                            className="order-last mt-1 basis-full scroll-mt-24 rounded-lg border border-border-strong bg-surface px-3 py-3 shadow-sm sm:px-4"
+                          >
+                            <div className="mb-3 border-b border-border pb-2.5">
+                              <p className="flex items-center gap-1.5 text-sm font-semibold">
+                                <Ticket size={15} />
+                                {dialogTitle}
+                              </p>
+                              <p className="mt-0.5 text-2xs text-text-subtle">
+                                {isCab(request)
+                                  ? 'The traveller is told once this is saved.'
+                                  : 'Upload the ticket - the details fill in from it. The traveller gets them by email with the ticket attached.'}
+                              </p>
+                            </div>
+                            {decisionFields}
+                            <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-border pt-3">
+                              {decisionActions}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1449,281 +1756,20 @@ export default function ApprovalsPage() {
         )}
       </Card>
 
+      {/* Approve, reject and cancel are a sentence each, so a small dialog.
+          Booking is not: it opens in the traveller's own row (see above). */}
       <Modal
-        open={pending !== null}
+        open={pending !== null && pending.to !== 'BOOKED'}
         onClose={close}
         title={dialogTitle}
         description={
           pending?.needsOverride
             ? 'This traveller already has something on these dates. Your reason is recorded in the activity log.'
-            : pending?.to === 'BOOKED'
-              ? isCab(pending.request)
-                ? 'The traveller is told once this is saved.'
-                : 'Upload the ticket - the details fill in from it. The traveller gets them by email with the ticket attached.'
-              : 'The traveller is shown this reason.'
+            : 'The traveller is shown this reason.'
         }
-        footer={
-          <>
-            <Button variant="secondary" onClick={close}>
-              Cancel
-            </Button>
-            <Button
-              variant={pending?.to === 'REJECTED' ? 'danger' : 'primary'}
-              loading={decide.isPending}
-              disabled={
-                reason.trim().length < 3 ||
-                (pending?.to === 'BOOKED' &&
-                  (!referenceReady || cabHalfTyped || (!cabDraft && !bookingDraftValid(booking))))
-              }
-              onClick={confirm}
-            >
-              {pending?.needsOverride
-                ? 'Approve anyway'
-                : pending?.to === 'BOOKED'
-                  ? 'Mark booked'
-                  : pending?.to === 'APPROVED'
-                    ? 'Approve traveller'
-                    : pending?.to === 'REJECTED'
-                      ? 'Reject traveller'
-                      : 'Cancel traveller'}
-            </Button>
-          </>
-        }
+        footer={<>{decisionActions}</>}
       >
-        {pending?.needsOverride && (
-          <div className="mb-4">
-            <ConflictList
-              conflicts={pending.request.conflicts.filter(
-                (conflict) => conflict.user_id === pending.traveller.user_id,
-              )}
-              footnote={null}
-            />
-          </div>
-        )}
-
-        <div className="space-y-4">
-          {/* The admin decides with the manager's view in front of them - or
-              knowing it has not come yet, which never stops them deciding. */}
-          {pending && (pending.traveller.manager_recommendation || pending.traveller.manager_name) && (
-            <div className="space-y-1.5">
-              <p className="text-xs font-medium">Manager’s recommendation</p>
-              <ManagerReview traveller={pending.traveller} />
-              {!pending.traveller.manager_recommendation && pending.traveller.status === 'PENDING' && (
-                <p className="text-2xs text-text-subtle">
-                  You can decide now - the final decision is yours.
-                </p>
-              )}
-            </div>
-          )}
-
-          {pending?.to === 'BOOKED' && cabDraft && (
-            <div className="space-y-2 rounded-md border border-border px-3 py-3">
-              <p className="text-xs font-medium">The car sent</p>
-              <CabBookingFields
-                draft={cabDraft}
-                onChange={setCabDraft}
-                idPrefix="book-cab"
-                asked={cabAsked(pending.request)}
-              />
-              <p className={cn('text-2xs', cabHalfTyped ? 'text-danger' : 'text-text-subtle')}>
-                {cabHalfTyped
-                  ? 'Fill in all four, or clear them and add the car later from Cab details.'
-                  : 'Optional now - you can add or change it later from Cab details. The traveller’s booking notice includes it.'}
-              </p>
-            </div>
-          )}
-
-          {pending?.to === 'BOOKED' && !cabDraft && (
-            <div className="rounded-md border border-dashed border-border-strong bg-surface-sunken/50 px-3 py-3">
-              <input
-                ref={ticketInput}
-                type="file"
-                accept="image/jpeg,image/png,image/webp,image/heic,application/pdf"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file && pending) {
-                    attachTicket.mutate({
-                      requestId: pending.request.id,
-                      travellerId: pending.traveller.id,
-                      file,
-                    });
-                  }
-                  e.target.value = '';
-                }}
-              />
-              {bookingTicket ? (
-                <>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <FileText size={15} className="shrink-0 text-text-subtle" />
-                    <span className="min-w-0 truncate text-xs font-medium">
-                      {bookingTicket.file_name ?? 'Ticket'}
-                    </span>
-                    <Badge tone={bookingTicket.status === 'FAILED' ? 'warning' : 'success'}>
-                      {bookingTicket.status === 'FAILED' ? 'Could not read' : 'Read'}
-                    </Badge>
-                    <span className="ml-auto flex gap-1">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        loading={viewTicket.isPending}
-                        onClick={() =>
-                          viewTicket.mutate({ ticketId: bookingTicket.id, tab: openFileTab() })
-                        }
-                      >
-                        <Eye size={13} />
-                        View
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        loading={attachTicket.isPending}
-                        onClick={() => ticketInput.current?.click()}
-                      >
-                        <Upload size={13} />
-                        Replace
-                      </Button>
-                    </span>
-                  </div>
-                  <p className="mt-1.5 text-2xs text-text-subtle">
-                    {bookingTicket.status === 'FAILED'
-                      ? 'This ticket could not be read - type the details below. It is still attached to the email.'
-                      : 'The details below are filled from this ticket - check them. It is attached to the email.'}
-                  </p>
-                  {bookingTicket.mismatches.length > 0 && (
-                    <div className="mt-2 rounded-md border border-warning/40 bg-warning-soft px-2.5 py-2">
-                      <p className="flex items-center gap-1.5 text-2xs font-semibold text-warning">
-                        <AlertTriangle size={12} />
-                        This ticket does not match the request
-                      </p>
-                      <ul className="mt-0.5 space-y-0.5">
-                        {bookingTicket.mismatches.map((note) => (
-                          <li key={note} className="text-2xs leading-relaxed text-text-muted">
-                            {note}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    loading={attachTicket.isPending}
-                    onClick={() => ticketInput.current?.click()}
-                  >
-                    <Upload size={13} />
-                    Upload ticket
-                  </Button>
-                  <p className="min-w-0 flex-1 text-2xs text-text-subtle">
-                    {attachTicket.isPending
-                      ? 'Reading the ticket - this can take up to 20 seconds…'
-                      : 'PDF or photo. The details below fill in from it, and it is attached to the traveller’s email.'}
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {pending?.to === 'BOOKED' && (
-            <Field
-              label={cabDraft ? 'Booking reference' : 'Ticket or booking reference'}
-              htmlFor="reference"
-              required={!cabDraft}
-              hint={
-                cabDraft
-                  ? 'The vendor’s booking ID. Leave blank to use the vehicle number.'
-                  : 'PNR, ticket number or hotel confirmation.'
-              }
-            >
-              <Input
-                id="reference"
-                value={reference}
-                onChange={(e) => setReference(e.target.value)}
-                placeholder={cabDraft ? 'VND-20431' : '6E-4412 / PNR QK8T2M'}
-              />
-            </Field>
-          )}
-
-          {pending?.to === 'BOOKED' && !cabDraft && (
-            <div className="space-y-2 rounded-md border border-border px-3 py-3">
-              <p className="text-xs font-medium">
-                {pending.request.request_type === 'HOTEL' ? 'The stay' : 'The journey'}
-                <span className="ml-1 font-normal text-text-subtle">
-                  {bookingFromTicket
-                    ? '- filled from the uploaded ticket; check it before saving'
-                    : '- what the traveller needs on the day (optional)'}
-                </span>
-              </p>
-              <BookingFields
-                draft={booking}
-                onChange={setBooking}
-                hotel={pending.request.request_type === 'HOTEL'}
-              />
-            </div>
-          )}
-
-          {/* Required on every decision now, approvals included. */}
-          <Field
-            label={
-              pending?.needsOverride
-                ? 'Why approve anyway?'
-                : pending?.to === 'BOOKED'
-                  ? 'Note to the traveller'
-                  : 'Reason'
-            }
-            htmlFor="decision-reason"
-            required
-            hint="Shown to the traveller and kept in the activity log."
-          >
-            <Input
-              id="decision-reason"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder={
-                pending?.needsOverride
-                  ? 'The earlier booking was released'
-                  : pending?.to === 'BOOKED'
-                    ? 'Flight confirmed with the travel desk'
-                    : pending?.to === 'APPROVED'
-                      ? 'Needed on site for the client walkthrough'
-                      : 'Covered by a colleague already in that city'
-              }
-            />
-          </Field>
-
-          {/* The record is never optional; only the email is. Someone told in
-              person, or a batch being tidied up retrospectively, should not
-              have an inbox filled on their behalf. */}
-          <label className="flex cursor-pointer items-start gap-2.5 rounded-md bg-surface-sunken px-3 py-2.5">
-            <input
-              type="checkbox"
-              checked={notify}
-              onChange={(e) => setNotify(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 accent-[rgb(var(--primary))]"
-            />
-            <span className="text-xs">
-              <span className="font-medium">Email {pending?.traveller.full_name}</span>
-              <span className="block text-text-muted">
-                {notify
-                  ? `${
-                      pending?.to === 'BOOKED'
-                        ? bookingTicket
-                          ? 'They get an email with the booking details and the ticket attached.'
-                          : 'They get an email with the booking details.'
-                        : 'They get an email with this decision and the reason.'
-                    }${
-                      pending?.traveller.manager_name
-                        ? ` ${pending.traveller.manager_name} is copied on it.`
-                        : ''
-                    }`
-                  : 'No email. The in-app notice and the activity log are still written.'}
-              </span>
-            </span>
-          </label>
-        </div>
+        {decisionFields}
       </Modal>
 
       <Modal
