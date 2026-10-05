@@ -8,7 +8,7 @@ test runner, or by a background worker.
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     database_url: str = "mysql+pymysql://root@127.0.0.1:3306/travel_ops?charset=utf8mb4"
+    #: The database server's address when it is not the one in DATABASE_URL.
+    #: Inside a container 127.0.0.1 is the container itself, so docker-compose
+    #: sets this to host.docker.internal and the same backend/.env serves both.
+    database_host: str = ""
 
     #: The zone people read times in. Timestamps are stored and compared in
     #: UTC; this decides how they are shown, and which date "today" is.
@@ -128,6 +132,18 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE), env_file_encoding=env_file_encoding(), extra="ignore"
     )
+
+    @model_validator(mode="after")
+    def _database_host(self) -> "Settings":
+        """Point DATABASE_URL at DATABASE_HOST when one is given - the rest of
+        the URL (user, password, port, database) stays as backend/.env has it."""
+        host = self.database_host.strip()
+        if host:
+            from sqlalchemy.engine import make_url
+
+            url = make_url(self.database_url).set(host=host)
+            self.database_url = url.render_as_string(hide_password=False)
+        return self
 
     @field_validator("smtp_app_password")
     @classmethod

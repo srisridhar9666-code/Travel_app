@@ -319,3 +319,20 @@ def test_password_reset_charges_every_request_not_just_failures():
 
     with pytest.raises(HTTPException):
         ratelimit.enforce(ratelimit.RESET, request, "password reset", subject="a@b.com")
+
+
+def test_database_host_swaps_only_the_host():
+    """docker-compose points the API at the host's MySQL without a second
+    copy of the credentials: only the address in DATABASE_URL changes."""
+    from app.config import Settings
+
+    settings = Settings(
+        database_url="mysql+pymysql://root:p%40ss%23word@127.0.0.1:3306/travel_ops?charset=utf8mb4",
+        database_host="host.docker.internal",
+    )
+    assert settings.database_url == (
+        "mysql+pymysql://root:p%40ss%23word@host.docker.internal:3306/travel_ops?charset=utf8mb4"
+    )
+    unchanged = Settings(database_url="mysql+pymysql://root@127.0.0.1:3306/travel_ops")
+    assert unchanged.database_url == "mysql+pymysql://root@127.0.0.1:3306/travel_ops"
+

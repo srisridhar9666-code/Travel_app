@@ -1,6 +1,6 @@
 # SOW Addendum — Field Logistics & Travel Management System
 
-Companion to `Scope of Work_ Field Logistics & Travel Management System.pdf` (2 pages, 7 sections).
+Companion to the original Scope of Work, `docs/sow/Scope of Work_ Field Logistics & Travel Management System.pdf` (2 pages, 7 sections).
 This document records gaps found during the pre-build review, the decisions taken against them,
 and the items still open. Where this addendum and the PDF disagree, **this document wins**.
 

@@ -10,7 +10,8 @@ admin team. React + FastAPI + MySQL, with Gemini for ticket extraction.
 | Database | MySQL 8 (`travel_ops`, utf8mb4) |
 | AI | `gemini-3.1-pro-preview` via Vertex AI, service account `db-data-team` |
 
-Scope lives in `Scope of Work_ Field Logistics & Travel Management System.pdf`.
+Scope lives in [`docs/sow/`](docs/sow): the original Scope of Work and v2, which matches
+the application as built.
 **Read [`docs/SOW-ADDENDUM.md`](docs/SOW-ADDENDUM.md) alongside it** — it records the gaps
 found in the SOW, the decisions taken, and what is still open. Where the two disagree, the
 addendum wins.
@@ -67,8 +68,10 @@ docker compose up --build
 ```
 
 Then http://localhost:8080. Production build, served by nginx, API proxied at `/api`.
-MySQL is not in the compose file — it uses the one already on your host. No hot reload,
-so this is for checking the deployable shape, not for day-to-day work.
+MySQL is not in the compose file — it uses the one already on your host. The API reads the
+same `backend/.env` as always; compose only points it at `host.docker.internal` instead of
+`127.0.0.1`. No hot reload, so this is for checking the deployable shape, not for
+day-to-day work.
 
 ### From a terminal
 
@@ -122,17 +125,17 @@ cd "D:\Travel Management System\V1\backend"
 uv sync
 ```
 
-> `uv sync` is the one to use — it installs exactly what `uv.lock` pins, including the dev
-> tools. `requirements.txt` and `requirements-dev.txt` also exist for anything that expects
-> the conventional file (`pip install -r requirements.txt`), but they are **generated** from
-> the lockfile, not edited by hand:
+> `uv sync` is the one to use — it installs exactly what `uv.lock` pins, including the
+> test tools. `requirements.txt` holds the same list for anything that expects the
+> conventional file (`pip install -r requirements.txt`). It is **generated** from the
+> lockfile, not edited by hand:
 >
 > ```powershell
-> uv export --format requirements-txt --no-dev --no-hashes --no-emit-project -o requirements.txt
+> uv export --format requirements-txt --no-hashes --no-emit-project -o requirements.txt
 > ```
 >
-> CI regenerates and diffs them, so editing one by hand fails the build rather than drifting
-> quietly.
+> CI regenerates and diffs it, so editing it by hand fails the build rather than drifting
+> quietly. Dependencies are added in `pyproject.toml` (`uv add <package>`).
 
 ```powershell
 cd "D:\Travel Management System\V1\web"
@@ -297,8 +300,7 @@ reassign.
 ### Turning email on
 
 Email is off until `backend/.env` says otherwise. It must be `backend/.env`: the API reads
-that file and only that file, and the `.env` beside `docker-compose.yml` holds database
-credentials for compose and nothing else.
+that file and only that file.
 
 ```dotenv
 EMAIL_ENABLED=true
@@ -341,6 +343,11 @@ V1/
 │   │   ├── routers/           # HTTP endpoints
 │   │   └── services/          # gemini, email, storage, audit
 │   ├── alembic/               # migrations
+│   ├── scripts/               # end-to-end check, data tidy-up, ledger lock-down
+│   ├── tests/
+│   ├── pyproject.toml         # dependencies; uv.lock pins them
+│   ├── requirements.txt       # generated from uv.lock, for pip
+│   ├── .env.example           # every setting, documented - copy to .env
 │   └── .env                   # secrets, git-ignored
 ├── web/
 │   ├── public/brand/          # generated logo set — see docs/SOW-ADDENDUM.md §E
@@ -350,7 +357,11 @@ V1/
 │       ├── components/        # Logo, ThemeToggle, shared UI
 │       ├── lib/               # api client, utils
 │       └── pages/
-├── docs/SOW-ADDENDUM.md
+├── docs/
+│   ├── DEPLOYMENT.md
+│   ├── SOW-ADDENDUM.md
+│   └── sow/                   # Scope of Work: original and v2 (PDF + source)
+├── docker-compose.yml         # API + web as they deploy; reads backend/.env
 └── gemini_credentials.json    # service account, git-ignored
 ```
 

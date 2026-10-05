@@ -71,9 +71,8 @@ jobs:
       # the files differ on every run.
       - name: requirements.txt matches the lockfile
         run: |
-          uv export --format requirements-txt --no-dev --no-hashes --no-emit-project -o requirements.txt
-          uv export --format requirements-txt --no-hashes --no-emit-project -o requirements-dev.txt
-          git diff --exit-code -- requirements.txt requirements-dev.txt
+          uv export --format requirements-txt --no-hashes --no-emit-project -o requirements.txt
+          git diff --exit-code -- requirements.txt
 
   migrations:
     name: Migrations apply cleanly

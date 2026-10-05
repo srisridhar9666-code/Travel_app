@@ -325,8 +325,7 @@ def configuration_problem() -> str | None:
     # with no file at all, so a missing file is only the problem when the
     # settings it would have held are missing too.
     no_file = (
-        f" - and there is no {ENV_FILE}: the API reads backend/.env, not the .env "
-        "beside docker-compose.yml"
+        f" - and there is no {ENV_FILE}: the API reads backend/.env and no other file"
         if not ENV_FILE.exists()
         else ""
     )
