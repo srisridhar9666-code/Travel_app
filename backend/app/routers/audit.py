@@ -28,6 +28,12 @@ from app.services import ledger_guard
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
+#: Sign-ins, sign-outs and failed password checks. They are still written to
+#: the ledger - the tamper check covers every row, and a run of failed sign-ins
+#: is what a security review looks for - but the Activity log is about what
+#: people did, so its list, counts and export leave them out.
+SIGN_IN_ACTIONS = (AuditAction.LOGIN, AuditAction.LOGIN_FAILED, AuditAction.LOGOUT)
+
 
 @router.get("", response_model=AuditListResponse)
 def list_audit(
@@ -42,7 +48,7 @@ def list_audit(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> AuditListResponse:
-    filters = [AuditLog.tenant_id == actor.tenant_id]
+    filters = [AuditLog.tenant_id == actor.tenant_id, AuditLog.action.not_in(SIGN_IN_ACTIONS)]
     if action is not None:
         filters.append(AuditLog.action == action)
     if entity_type:
@@ -185,7 +191,7 @@ def export_csv(
     identity number. The `changes` column can carry personal data, and a file
     leaving the system is exactly when someone later wants to know who took it.
     """
-    filters = [AuditLog.tenant_id == actor.tenant_id]
+    filters = [AuditLog.tenant_id == actor.tenant_id, AuditLog.action.not_in(SIGN_IN_ACTIONS)]
     if action is not None:
         filters.append(AuditLog.action == action)
     if entity_type:
@@ -252,25 +258,21 @@ def export_csv(
 @router.get("/summary")
 def summary(actor: AdminUser, db: DbSession) -> dict:
     """Counts by action and by entity, so the viewer can offer real filters
-    rather than a dropdown of every value the enum happens to define."""
+    rather than a dropdown of every value the enum happens to define. Sign-ins
+    are left out, as they are from the list."""
+    shown = (AuditLog.tenant_id == actor.tenant_id, AuditLog.action.not_in(SIGN_IN_ACTIONS))
     by_action = dict(
         db.execute(
-            select(AuditLog.action, func.count())
-            .where(AuditLog.tenant_id == actor.tenant_id)
-            .group_by(AuditLog.action)
+            select(AuditLog.action, func.count()).where(*shown).group_by(AuditLog.action)
         ).all()
     )
     by_entity = dict(
         db.execute(
-            select(AuditLog.entity_type, func.count())
-            .where(AuditLog.tenant_id == actor.tenant_id)
-            .group_by(AuditLog.entity_type)
+            select(AuditLog.entity_type, func.count()).where(*shown).group_by(AuditLog.entity_type)
         ).all()
     )
     oldest, newest = db.execute(
-        select(func.min(AuditLog.created_at), func.max(AuditLog.created_at)).where(
-            AuditLog.tenant_id == actor.tenant_id
-        )
+        select(func.min(AuditLog.created_at), func.max(AuditLog.created_at)).where(*shown)
     ).one()
 
     return {

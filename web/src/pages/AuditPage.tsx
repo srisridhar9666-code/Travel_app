@@ -34,14 +34,15 @@ import { formatInstant, formatInstantDate, todayInIndia } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import type { AuditRow } from '@/types';
 
+// Sign-ins, sign-outs and failed sign-ins are recorded but not listed here.
 const ACTIONS = [
-  'CREATE', 'UPDATE', 'DELETE', 'LOGIN', 'LOGIN_FAILED', 'LOGOUT',
+  'CREATE', 'UPDATE', 'DELETE',
   'SUBMIT', 'APPROVE', 'REJECT', 'CANCEL', 'BOOK', 'UPLOAD',
   'EXTRACT', 'NOTIFY', 'OVERRIDE_CONFLICT', 'RECOMMEND', 'VIEW_SENSITIVE', 'EXPORT',
 ];
 
 function actionTone(action: string) {
-  if (action === 'LOGIN_FAILED' || action === 'REJECT' || action === 'DELETE') return 'danger';
+  if (action === 'REJECT' || action === 'DELETE') return 'danger';
   if (action === 'APPROVE' || action === 'BOOK' || action === 'CREATE') return 'success';
   if (action === 'OVERRIDE_CONFLICT' || action === 'VIEW_SENSITIVE' || action === 'EXPORT') return 'warning';
   return 'neutral';
@@ -249,8 +250,8 @@ export default function AuditPage() {
           title={`${total} ${total === 1 ? 'entry' : 'entries'}`}
           description={
             summary.data?.oldest
-              ? `Covering ${formatInstantDate(summary.data.oldest)} to today. Times are India time (IST).`
-              : 'Times are India time (IST).'
+              ? `Covering ${formatInstantDate(summary.data.oldest)} to today. Sign-ins are not listed. Times are India time (IST).`
+              : 'Sign-ins are not listed. Times are India time (IST).'
           }
           action={
             <div className="flex gap-2">
