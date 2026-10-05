@@ -31,6 +31,12 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import (
+    CAB_TYPE_LABELS,
+    CabExtensionStatus,
+    CabTrip,
+    CabType,
+    CancellationStatus,
+    ManagerRecommendation,
     NotificationCategory,
     NotificationChannel,
     NotificationStatus,
@@ -81,6 +87,26 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
     )
     submitted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
+    # --- asking to cancel a decided trip --------------------------------------
+    # Once an admin has approved or booked anyone, the requester cannot just
+    # withdraw: a ticket may exist. They ask, and an admin or their manager
+    # approves (the trip is then cancelled) or rejects with a comment.
+    cancellation_status: Mapped[CancellationStatus | None] = mapped_column(
+        _enum(CancellationStatus), nullable=True
+    )
+    cancellation_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cancellation_requested_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_travel_requests_cxl_requested_by"),
+        nullable=True,
+    )
+    cancellation_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    cancellation_decided_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_travel_requests_cxl_decided_by"),
+        nullable=True,
+    )
+    cancellation_decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    cancellation_comment: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     # --- long distance and cab ---------------------------------------------
     mode: Mapped[TravelMode | None] = mapped_column(_enum(TravelMode), nullable=True)
     #: The state each place sits in, captured at pick time. Derivable from the
@@ -100,7 +126,60 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
     pickup_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     drop_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     start_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: For a cab, when it is let go. Approving an extension moves this a day
+    #: later, so the longer booking occupies the calendar like any other trip.
     end_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    # --- cab: what was asked for --------------------------------------------
+    #: Null on flights and hotels. Cabs raised before these existed were filled
+    #: in by the migration as what they were: local, no preference.
+    cab_type: Mapped[CabType | None] = mapped_column(_enum(CabType), nullable=True)
+    cab_trip: Mapped[CabTrip | None] = mapped_column(_enum(CabTrip), nullable=True)
+    #: The requester's estimate, in whole kilometres. Required for outstation,
+    #: optional for local (`LOCAL_CAB_MAX_KM` draws the line).
+    cab_distance_km: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # --- cab: what was sent -------------------------------------------------
+    #: Recorded by an admin once someone on the cab is approved, and changeable
+    #: afterwards - vendors swap cars - each change in the activity log. Held on
+    #: the request, not the traveller: everyone on a cab rides in the same car.
+    booked_cab_type: Mapped[CabType | None] = mapped_column(_enum(CabType), nullable=True)
+    cab_vehicle_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cab_driver_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    cab_driver_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    cab_booked_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_travel_requests_cab_booked_by"),
+        nullable=True,
+    )
+    cab_booked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    # --- cab: one more day --------------------------------------------------
+    #: The latest ask to keep the cab a day longer. Only the latest is held
+    #: here; earlier ones and their decisions are in the activity log, and
+    #: `cab_extended_days` counts the ones approved.
+    cab_extension_status: Mapped[CabExtensionStatus | None] = mapped_column(
+        _enum(CabExtensionStatus), nullable=True
+    )
+    cab_extension_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cab_extension_requested_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "users.id", ondelete="SET NULL", name="fk_travel_requests_cab_ext_requested_by"
+        ),
+        nullable=True,
+    )
+    cab_extension_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    cab_extension_decided_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "users.id", ondelete="SET NULL", name="fk_travel_requests_cab_ext_decided_by"
+        ),
+        nullable=True,
+    )
+    cab_extension_decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: The admin's word on it. Required on a rejection - the traveller is shown it.
+    cab_extension_comment: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cab_extended_days: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
 
     # --- hotel --------------------------------------------------------------
     hotel_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -131,6 +210,16 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
 
     project = relationship("Project", lazy="joined")
     requester = relationship("User", foreign_keys=[requester_id], lazy="joined")
+    # Loaded on first use rather than joined: most requests are not cabs, and a
+    # many-to-one load reads the session's identity map before the database.
+    cab_booked_by = relationship("User", foreign_keys=[cab_booked_by_id])
+    cab_extension_requested_by = relationship(
+        "User", foreign_keys=[cab_extension_requested_by_id]
+    )
+    cab_extension_decided_by = relationship("User", foreign_keys=[cab_extension_decided_by_id])
+    cancellation_requested_by = relationship("User", foreign_keys=[cancellation_requested_by_id])
+    cancellation_decided_by = relationship("User", foreign_keys=[cancellation_decided_by_id])
+    cancelled_by = relationship("User", foreign_keys=[cancelled_by_id])
     travellers: Mapped[list["RequestTraveller"]] = relationship(
         back_populates="request",
         cascade="all, delete-orphan",
@@ -156,6 +245,36 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
 
     def route_label(self, sep: str = " → ") -> str:
         return f"{self.origin_label}{sep}{self.destination_label}"
+
+    @property
+    def cab_asked_label(self) -> str | None:
+        """What the requester asked for: "Ertiga (7 seats), outstation, about
+        250 km". None on anything but a cab."""
+        if self.cab_type is None and self.cab_trip is None:
+            return None
+        car = (
+            "Any cab"
+            if self.cab_type in (None, CabType.NO_PREFERENCE)
+            else CAB_TYPE_LABELS[self.cab_type]
+        )
+        parts = [car]
+        if self.cab_trip is not None:
+            parts.append(self.cab_trip.value.lower())
+        if self.cab_distance_km:
+            parts.append(f"about {self.cab_distance_km} km")
+        return ", ".join(parts)
+
+    @property
+    def cab_sent_label(self) -> str | None:
+        """The car an admin recorded: "Ertiga (7 seats) TS 09 EA 1234, driver
+        Suresh Reddy, +91 98765 43210". None until one is recorded."""
+        if not self.cab_vehicle_number:
+            return None
+        car = CAB_TYPE_LABELS[self.booked_cab_type] if self.booked_cab_type else "Cab"
+        return (
+            f"{car} {self.cab_vehicle_number}, driver {self.cab_driver_name}, "
+            f"{self.cab_driver_phone}"
+        )
 
     @property
     def traveller_statuses(self) -> list[TravellerStatus]:
@@ -211,6 +330,33 @@ class RequestTraveller(Base, TimestampMixin):
     #: fills it from the uploaded ticket, still behind a human confirmation
     #: (addendum B3).
     booking_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    #: What the traveller needs to travel: airline or operator, flight/train/bus
+    #: number, departure and arrival, seat, or the hotel's name and address.
+    #: Typed when marking booked, pre-filled from an uploaded ticket. See
+    #: schemas.request.BookingDetails for the keys.
+    booking_details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # --- the manager's recommendation (two-level approval) ------------------
+    #: The traveller's manager advises, an admin decides. Kept on the traveller
+    #: for the same reason the decision is: on a group request each person may
+    #: report to someone different. Advice only - an admin may decide before it
+    #: arrives - and it can be changed while the traveller is still pending,
+    #: every version kept in the activity log.
+    manager_recommendation: Mapped[ManagerRecommendation | None] = mapped_column(
+        _enum(ManagerRecommendation), nullable=True
+    )
+    #: Required with every recommendation; shown to admins and quoted in the
+    #: decision email the manager is copied on.
+    manager_comment: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    manager_reviewed_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "users.id",
+            ondelete="SET NULL",
+            name="fk_request_travellers_manager_reviewed_by",
+        ),
+        nullable=True,
+    )
+    manager_reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     # --- what it cost (SOW sections 2 and 6, addendum C1) -------------------
     #: This person's share, not the whole request. Cost lives on the traveller
@@ -226,6 +372,14 @@ class RequestTraveller(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     cost_entered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: Who was paid for this person's seat, room or cab - the travel agent, the
+    #: cab operator, the hotel. Recorded with the cost, and what a vendor's
+    #: invoice is reconciled against. Admin-only to read, like the cost.
+    vendor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vendors.id", ondelete="SET NULL", name="fk_request_travellers_vendor"),
+        nullable=True,
+        index=True,
+    )
 
     # --- co-stay (addendum B7, open question C2) ----------------------------
     room_sharing: Mapped[RoomSharingChoice] = mapped_column(
@@ -247,6 +401,27 @@ class RequestTraveller(Base, TimestampMixin):
     share_with = relationship("User", foreign_keys=[share_with_user_id], lazy="joined")
     decided_by = relationship("User", foreign_keys=[decided_by_id], lazy="joined")
     cost_entered_by = relationship("User", foreign_keys=[cost_entered_by_id], lazy="joined")
+    manager_reviewed_by = relationship(
+        "User", foreign_keys=[manager_reviewed_by_id], lazy="joined"
+    )
+    # Loaded on first use: vendors are few, so after the first one the
+    # session's identity map answers without a query.
+    vendor = relationship("Vendor")
+
+    @property
+    def awaits_manager(self) -> bool:
+        """Still pending, with a manager who has not said anything yet.
+
+        Never a reason the admin has to wait - they are the final authority -
+        only a fact the queue shows so a decision taken without the manager's
+        view is taken knowingly.
+        """
+        return (
+            self.status is TravellerStatus.PENDING
+            and self.manager_recommendation is None
+            and self.user is not None
+            and self.user.active_manager is not None
+        )
 
 
 class RequestRevision(Base):
@@ -335,7 +510,15 @@ class Notification(Base):
     #: Resolved when the row is written, not when it is sent, so the ledger
     #: records where it was meant to go even if the account changes later.
     to_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: Who else the email was copied to, comma separated - a traveller's manager
+    #: on a decision. Resolved when the row is written, like `to_address`.
+    cc_addresses: Mapped[str | None] = mapped_column(String(500), nullable=True)
     subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: A file sent with the email - the traveller's ticket - kept as its storage
+    #: path and read when the message goes, so a retry sends it too.
+    attachment_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    attachment_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attachment_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     #: Why it did not go. Truncated: an SMTP refusal can be paragraphs long.

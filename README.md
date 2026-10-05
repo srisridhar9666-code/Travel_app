@@ -1,6 +1,6 @@
-# Field Logistics & Travel Management System
+# Sriyatra — Your Travel Desk
 
-Travel, cab and accommodation requests for ~100 ground staff, fulfilled by a ~10 person
+Field logistics and travel management: travel, cab and accommodation requests for ~100 ground staff, fulfilled by a ~10 person
 admin team. React + FastAPI + MySQL, with Gemini for ticket extraction.
 
 | Layer | Stack |
@@ -10,7 +10,8 @@ admin team. React + FastAPI + MySQL, with Gemini for ticket extraction.
 | Database | MySQL 8 (`travel_ops`, utf8mb4) |
 | AI | `gemini-3.1-pro-preview` via Vertex AI, service account `db-data-team` |
 
-Scope lives in `Scope of Work_ Field Logistics & Travel Management System.pdf`.
+Scope lives in [`docs/sow/`](docs/sow): the original Scope of Work and v2, which matches
+the application as built.
 **Read [`docs/SOW-ADDENDUM.md`](docs/SOW-ADDENDUM.md) alongside it** — it records the gaps
 found in the SOW, the decisions taken, and what is still open. Where the two disagree, the
 addendum wins.
@@ -34,7 +35,9 @@ MySQL must be running on `127.0.0.1:3306` before either server starts.
 Open the `V1` folder itself as the workspace — not its parent, or the paths in
 `.vscode/` will not resolve. Then:
 
-**Ctrl+Shift+B** starts the API and the web app together.
+**Ctrl+Shift+B** starts the API and the web app together. Starting the API applies any new
+database migrations first, so a pull that adds columns cannot leave the database behind the
+code; if a migration fails, the API does not start and that terminal shows why.
 
 Everything else is under **Ctrl+Shift+P → Tasks: Run Task**:
 
@@ -65,8 +68,10 @@ docker compose up --build
 ```
 
 Then http://localhost:8080. Production build, served by nginx, API proxied at `/api`.
-MySQL is not in the compose file — it uses the one already on your host. No hot reload,
-so this is for checking the deployable shape, not for day-to-day work.
+MySQL is not in the compose file — it uses the one already on your host. The API reads the
+same `backend/.env` as always; compose only points it at `host.docker.internal` instead of
+`127.0.0.1`. No hot reload, so this is for checking the deployable shape, not for
+day-to-day work.
 
 ### From a terminal
 
@@ -80,12 +85,17 @@ Two terminals, from the repository root.
 
 ```powershell
 cd "D:\Travel Management System\V1\backend"
+.\.venv\Scripts\python.exe -m alembic upgrade head
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
 ```
 
+The first line applies any migrations a pull brought in, and does nothing when there are
+none. Skip it and the API starts against a database missing the new columns: every page
+fails to load, and admins see a banner saying the database has not been migrated.
+
 > `--reload` is deliberately omitted: on Windows the watcher has been seen to wedge, leaving
 > an orphaned worker holding port 8000 under a parent PID that no longer exists. Restart the
-> API by hand after backend edits **and after every pull** - Vite picks up new frontend code on
+> API by hand (both lines above) after backend edits **and after every pull** - Vite picks up new frontend code on
 > its own, the API does not, and an old API behind a new page answers "Not Found" and "Method
 > Not Allowed" to whatever it has not heard of. Admins see a red banner when that happens. To
 > free a stuck port:
@@ -115,17 +125,17 @@ cd "D:\Travel Management System\V1\backend"
 uv sync
 ```
 
-> `uv sync` is the one to use — it installs exactly what `uv.lock` pins, including the dev
-> tools. `requirements.txt` and `requirements-dev.txt` also exist for anything that expects
-> the conventional file (`pip install -r requirements.txt`), but they are **generated** from
-> the lockfile, not edited by hand:
+> `uv sync` is the one to use — it installs exactly what `uv.lock` pins, including the
+> test tools. `requirements.txt` holds the same list for anything that expects the
+> conventional file (`pip install -r requirements.txt`). It is **generated** from the
+> lockfile, not edited by hand:
 >
 > ```powershell
-> uv export --format requirements-txt --no-dev --no-hashes --no-emit-project -o requirements.txt
+> uv export --format requirements-txt --no-hashes --no-emit-project -o requirements.txt
 > ```
 >
-> CI regenerates and diffs them, so editing one by hand fails the build rather than drifting
-> quietly.
+> CI regenerates and diffs it, so editing it by hand fails the build rather than drifting
+> quietly. Dependencies are added in `pyproject.toml` (`uv add <package>`).
 
 ```powershell
 cd "D:\Travel Management System\V1\web"
@@ -180,39 +190,28 @@ They used to run on in-memory SQLite, which was quicker to set up and wrong: the
 defect this project has had was MySQL's `DATETIME` silently truncating the microseconds the
 audit hash chain commits to, and no SQLite test could ever have found it.
 
-The smoke suites go over real HTTP against a running server, and create throwaway accounts —
-so start the API first and point them at a dev database:
+### Tidying old data
+
+`scripts/tidy_data.py` looks over the database the API uses (backend/.env) and,
+by default, only reports: people whose details the app now refuses (a phone
+that is not a 10-digit mobile, a shared number, gender not set, the designation
+Manager without Manager access), accounts the old test scripts made up, stale
+drafts and trips that were never decided. Run `alembic upgrade head` first - the
+migrations convert old data themselves, and the script refuses a database that
+is behind.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\smoke_phase1.py
+.\.venv\Scripts\python.exe scripts\tidy_data.py
+.\.venv\Scripts\python.exe scripts\tidy_data.py --retire-test-accounts
+.\.venv\Scripts\python.exe scripts\tidy_data.py --fresh-start --include-activity-log
 ```
 
-There is one per phase, `smoke_phase1.py` through `smoke_phase8.py`, plus
-`scripts\test_end_to_end.py` which walks a request from raised to booked.
-
-```bash
-cd backend && ./.venv/Scripts/python.exe scripts/smoke_phase3.py
-```
-
-```bash
-cd backend && ./.venv/Scripts/python.exe scripts/smoke_phase4.py
-```
-
-```bash
-cd backend && ./.venv/Scripts/python.exe scripts/smoke_phase5.py
-```
-
-```bash
-cd backend && ./.venv/Scripts/python.exe scripts/smoke_phase6.py
-```
-
-```bash
-cd backend && ./.venv/Scripts/python.exe scripts/smoke_phase7.py
-```
-
-```bash
-cd backend && ./.venv/Scripts/python.exe scripts/smoke_phase8.py
-```
+`--retire-test-accounts` marks the made-up accounts Deleted (restorable from
+Team). `--fresh-start` removes every trip and what hangs off it - travellers,
+edits, tickets and their files, notifications, invoices, team-change requests -
+and keeps people, departments, campaigns, vendors and places; add
+`--include-activity-log` to start the activity log afresh too. Both ask you to
+type DELETE first, and the script never runs with ENVIRONMENT=production.
 
 ### Linting
 
@@ -228,9 +227,8 @@ finds that in milliseconds.
 
 ### The whole system, end to end
 
-The eight phase smokes each prove their own slice against whatever the dev
-database already holds. This one proves what none of them can - that the product
-**deploys from nothing**, that one continuous journey crosses every phase
+The unit tests each prove their own slice against fixtures they set up. This
+script proves what none of them can - that the product **deploys from nothing**, that one continuous journey crosses every phase
 boundary, that the screens agree with each other, and that the permission matrix
 holds for every role against every guarded endpoint.
 
@@ -251,19 +249,23 @@ cd backend && DATABASE_URL='mysql+pymysql://root:PASSWORD@127.0.0.1:3306/travel_
 cd backend && ./.venv/Scripts/python.exe scripts/test_end_to_end.py
 ```
 
-Roughly 130 checks following one field team from onboarding to a cost report. It
-found two real defects the phase tests could not, because each of those sets up
+Roughly 130 checks following one field team from onboarding to a cost report -
+including asking to cancel an approved trip and the admin-only access grid. It
+found two real defects the unit tests could not, because each of those sets up
 its own fixtures and this one makes every step consume what the last produced.
 
-Phase 5's smoke calls the real extraction model, so it costs a few seconds and a
-few tokens per run. It reads the sample tickets in `backend/scripts/fixtures/`,
-regenerated with `scripts/make_ticket_fixture.py`.
+It calls the real extraction model when `gemini_credentials.json` is present, so
+it costs a few seconds and a few tokens per run; without it, that one check fails
+and the rest still run. It reads the sample tickets in `backend/scripts/fixtures/`,
+regenerated with `scripts/make_ticket_fixture.py`. Run it against its own
+database as shown - it creates throwaway accounts, which do not belong in the
+database you use day to day.
 
 ---
 
 ## Signing in
 
-On first run the API creates one system administrator from `ADMIN_EMAIL` / `ADMIN_PASSWORD`
+On first run the API creates one super admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD`
 in `.env` and logs a warning. **Change that password immediately** — it is sitting in a
 config file. The bootstrap is idempotent and never touches an existing account, so
 restarting cannot silently reset it.
@@ -272,11 +274,33 @@ Everyone else is created from **Team**, which issues a single-use invite link. T
 emailed when email is turned on (below), and the dialog always shows it too, along with why
 it was not emailed if it was not. Links are valid for 72 hours and can be used once.
 
+### Who can do what
+
+Roles are ranked, and nobody grants or changes the account of someone above them:
+
+| Role | Can |
+| --- | --- |
+| Ground staff | Raise and track their own travel. Can report to one manager. |
+| Manager | See their team's people, trips and travel history - never costs. Ask an admin to add, edit or remove a member (**My team**). Create and edit campaigns, but not archive or delete them. |
+| Admin | Run the desk: approvals, bookings, costs, Team, Departments, and the activity log. Approve or reject managers' team changes, with a comment the manager is sent. Keep the **Vendors** list and create, edit, submit and delete vendor **Invoices**. |
+| Super admin | Everything an admin sees, plus purging old identity documents, and the only role that can manage super admins. The only role that **approves or rejects invoices** - and so the one admin tier that cannot create or edit invoices or vendors (they read and download both). The migration makes the earliest active system admin of each organisation the first one. |
+
+System admin used to sit between Admin and Super admin, differing from Admin only in
+data retention. It is no longer offered: migration `3c1e9a7b5d20` turns every remaining
+system admin into an admin, and the API refuses to grant it.
+
+Invoices: Admin and System admin create and edit them, only the Super admin approves, and
+Admin, System admin and Super admin can all read, download (CSV, or print to PDF) and see
+every step in the activity log.
+
+Teams are one level deep: only ground staff report to a manager, picked as **Reports to**
+on Team. A manager who is demoted or switched off releases their team for an admin to
+reassign.
+
 ### Turning email on
 
 Email is off until `backend/.env` says otherwise. It must be `backend/.env`: the API reads
-that file and only that file, and the `.env` beside `docker-compose.yml` holds database
-credentials for compose and nothing else.
+that file and only that file.
 
 ```dotenv
 EMAIL_ENABLED=true
@@ -319,6 +343,11 @@ V1/
 │   │   ├── routers/           # HTTP endpoints
 │   │   └── services/          # gemini, email, storage, audit
 │   ├── alembic/               # migrations
+│   ├── scripts/               # end-to-end check, data tidy-up, ledger lock-down
+│   ├── tests/
+│   ├── pyproject.toml         # dependencies; uv.lock pins them
+│   ├── requirements.txt       # generated from uv.lock, for pip
+│   ├── .env.example           # every setting, documented - copy to .env
 │   └── .env                   # secrets, git-ignored
 ├── web/
 │   ├── public/brand/          # generated logo set — see docs/SOW-ADDENDUM.md §E
@@ -328,7 +357,11 @@ V1/
 │       ├── components/        # Logo, ThemeToggle, shared UI
 │       ├── lib/               # api client, utils
 │       └── pages/
-├── docs/SOW-ADDENDUM.md
+├── docs/
+│   ├── DEPLOYMENT.md
+│   ├── SOW-ADDENDUM.md
+│   └── sow/                   # Scope of Work: original and v2 (PDF + source)
+├── docker-compose.yml         # API + web as they deploy; reads backend/.env
 └── gemini_credentials.json    # service account, git-ignored
 ```
 
@@ -345,11 +378,11 @@ directly.
 traveller leaves `PENDING`. Every edit before that writes a revision row with a field-level
 diff.
 
-**Brand red is not the UI's red.** `#FE0024` scores 4.0:1 on white, under the AA bar for
-body text, and this product's main verbs are Approve and Reject. So red belongs to
-destructive actions, the interactive primary is ink, and brand red is reserved for the logo
-and active indicators. Brand-coloured *text* uses `--brand-strong`, which is AA-safe in
-both themes.
+**Brand blue is the logo's, and red means destructive.** The accent comes from the Sriyatra
+logo (`web/public/brand`, made from the supplied artwork): the S's blue (`#0088F0`) for fills,
+the logo and active indicators, and the wordmark navy for brand-coloured *text*
+(`--brand-strong`, AA-safe in both themes). This product's main verbs are Approve and Reject,
+so red belongs to destructive actions alone, and the interactive primary is ink.
 
 **Light tokens are declared under both `:root` and `[data-theme='light']`** so a nested
 light island really does go light while the rest of the app stays dark.
@@ -535,6 +568,20 @@ invoices differs by trips that never happened.
 **A missing cost is reported as missing, never as zero.** `uncosted` rides on every analytics
 response, and the screen says out loud that the figures understate the truth until it is
 zero. A campaign with a blank fare must not look cheaper than one that was booked properly.
+
+**An invoice's money is never typed.** Each line is a booked traveller's recorded cost and
+the total is the sum of the lines (`app/services/invoices.py`); a client sending
+`total_amount` gets a 422. Only `BOOKED` trips can be billed, for the same reason only they
+count as spend. Lines follow the travellers' costs until a super admin approves, and are
+frozen from then on: the cost endpoints refuse (409, naming the invoice) to change the cost
+or vendor of a traveller on an approved invoice. A traveller is on one invoice line at most,
+held by the unique index `uq_invoice_lines_traveller`.
+
+**Nobody approves their own bill.** Admins and system admins prepare invoices
+(`deps.InvoiceEditor`); only a super admin decides them, and never one whose name is on the
+invoice's create, edit or submit rows in the log - which covers an admin promoted after
+preparing one. Invoice numbers (`INV-<year>-<n>`) are never reused, even after a draft is
+deleted, because the log still names the old one.
 
 **Cost is admin-only to read as well as to write.** Ground staff seeing what a colleague's
 flight cost is a personnel problem nobody asked for, and nothing in section 6 needs it.

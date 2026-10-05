@@ -9,19 +9,6 @@ from app.core.enums import ProjectStatus
 from app.schemas.common import UTCInstant
 
 
-def _code(value: str | None) -> str | None:
-    """Blank means "make one for me"; anything typed is stored in one canonical
-    form, because codes get typed, spoken and pasted."""
-    if value is None or not value.strip():
-        return None
-    code = "-".join(value.strip().upper().split())
-    if len(code) < 2:
-        raise ValueError(
-            "A code needs at least 2 characters, or leave it blank and one is made for you."
-        )
-    return code
-
-
 def _dates_in_order(start: date | None, end: date | None) -> None:
     if start and end and end < start:
         raise ValueError("End date cannot be before the start date.")
@@ -29,9 +16,6 @@ def _dates_in_order(start: date | None, end: date | None) -> None:
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=2, max_length=160)
-    #: Optional. Left blank, the server makes one from the name's initials and
-    #: the start year (see services/projects.py).
-    code: str | None = Field(default=None, max_length=40)
     description: str | None = None
     client_name: str | None = Field(default=None, max_length=160)
     #: Both optional; a campaign can cover a whole state. `location` is no
@@ -47,11 +31,6 @@ class ProjectCreate(BaseModel):
     def _tidy(cls, value: str) -> str:
         return " ".join(value.split())
 
-    @field_validator("code")
-    @classmethod
-    def _normalise_code(cls, value: str | None) -> str | None:
-        return _code(value)
-
     @model_validator(mode="after")
     def _dates_make_sense(self):
         _dates_in_order(self.start_date, self.end_date)
@@ -60,8 +39,6 @@ class ProjectCreate(BaseModel):
 
 class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=160)
-    #: Sending a blank or null code regenerates it from the current name.
-    code: str | None = Field(default=None, max_length=40)
     description: str | None = None
     client_name: str | None = Field(default=None, max_length=160)
     state: str | None = Field(default=None, max_length=80)
@@ -78,11 +55,6 @@ class ProjectUpdate(BaseModel):
         if value is None:
             raise ValueError("A campaign needs a name.")
         return " ".join(value.split())
-
-    @field_validator("code")
-    @classmethod
-    def _normalise_code(cls, value: str | None) -> str | None:
-        return _code(value)
 
     @field_validator("status")
     @classmethod

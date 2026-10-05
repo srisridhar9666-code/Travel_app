@@ -21,20 +21,22 @@ import {
 } from '@/types';
 
 /**
- * The filters every report page shares: dates, campaign, employee,
+ * The filters every report page shares: dates, campaign, department, employee,
  * destination state and city, and type.
  *
  * They live in the URL with the same keys the travel log reads (range, since,
- * until, campaign, user, state, city, type), so a filtered view can be
- * bookmarked or sent to a colleague, and a link from one report to another
+ * until, campaign, department, user, state, city, type), so a filtered view can
+ * be bookmarked or sent to a colleague, and a link from one report to another
  * opens on the same slice.
  */
 
 type Changes = Record<string, string | undefined>;
 
-export interface ReportFilterState {
+interface ReportFilterState {
   range: DateRange;
   projectId?: number;
+  /** 0 is "no department", so test against undefined, not truthiness. */
+  departmentId?: number;
   userId?: number;
   state: string;
   city: string;
@@ -61,6 +63,7 @@ export function useReportFilters(defaultPreset: RangePreset): ReportFilterState 
       ? rangeFor('custom', { since: params.get('since') ?? '', until: params.get('until') ?? '' })
       : rangeFor(preset);
   const projectId = Number(params.get('campaign')) || undefined;
+  const departmentId = departmentParam(params.get('department'));
   const userId = Number(params.get('user')) || undefined;
   const state = params.get('state') ?? '';
   const city = params.get('city') ?? '';
@@ -83,6 +86,7 @@ export function useReportFilters(defaultPreset: RangePreset): ReportFilterState 
       since: range.preset === 'custom' ? range.since : undefined,
       until: range.preset === 'custom' ? range.until : undefined,
       campaign: projectId ? String(projectId) : undefined,
+      department: departmentId !== undefined ? String(departmentId) : undefined,
       user: userId ? String(userId) : undefined,
       state: state || undefined,
       city: city || undefined,
@@ -96,6 +100,7 @@ export function useReportFilters(defaultPreset: RangePreset): ReportFilterState 
   return {
     range,
     projectId,
+    departmentId,
     userId,
     state,
     city,
@@ -104,12 +109,15 @@ export function useReportFilters(defaultPreset: RangePreset): ReportFilterState 
       since: range.since || undefined,
       until: range.until || undefined,
       project_id: projectId,
+      department_id: departmentId,
       user_id: userId,
       state: state || undefined,
       city: city || undefined,
       request_type: requestType,
     },
-    sliced: Boolean(projectId || userId || state || city || requestType),
+    sliced: Boolean(
+      projectId || departmentId !== undefined || userId || state || city || requestType,
+    ),
     update,
     setRange: (next) =>
       update({
@@ -118,21 +126,80 @@ export function useReportFilters(defaultPreset: RangePreset): ReportFilterState 
         until: next.preset === 'custom' ? next.until : undefined,
       }),
     clear: () =>
-      update({ campaign: undefined, user: undefined, state: undefined, city: undefined, type: undefined }),
+      update({
+        campaign: undefined,
+        department: undefined,
+        user: undefined,
+        state: undefined,
+        city: undefined,
+        type: undefined,
+      }),
     link,
   };
 }
 
 /** "Ravi Kumar (E104)", with "· Left" when they are no longer active, so an
  *  admin can tell a former colleague's history from a current one's. */
-export function personLabel(person: FilterOptions['people'][number]): string {
+function personLabel(person: FilterOptions['people'][number]): string {
   const name = person.employee_code ? `${person.full_name} (${person.employee_code})` : person.full_name;
   return person.status && person.status !== 'ACTIVE' ? `${name} · ${USER_STATUS_LABELS[person.status]}` : name;
 }
 
-/** The employee picker's label-to-id map, and the label for the chosen id. */
-export function peopleChoices(options: FilterOptions | undefined, userId: number | undefined) {
-  const byLabel = new Map((options?.people ?? []).map((p) => [personLabel(p), p.id]));
+/** The department in the URL: an id, 0 for "no department", or none. */
+export function departmentParam(value: string | null): number | undefined {
+  if (value === null || value.trim() === '') return undefined;
+  const id = Number(value);
+  return Number.isInteger(id) && id >= 0 ? id : undefined;
+}
+
+/** What a department choice does to the employee: someone outside it goes. */
+export function departmentChange(
+  options: FilterOptions | undefined,
+  userId: number | undefined,
+  next: string,
+): Changes {
+  const id = departmentParam(next);
+  const person = (options?.people ?? []).find((p) => p.id === userId);
+  const keeps = !userId || id === undefined || (person && (person.department_id ?? 0) === id);
+  return { department: next || undefined, user: keeps && userId ? String(userId) : undefined };
+}
+
+/** "All departments", each department, then the people in none. */
+export function DepartmentSelect({
+  id,
+  options,
+  value,
+  onChange,
+}: {
+  id: string;
+  options: FilterOptions | undefined;
+  value: number | undefined;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <Select id={id} value={value === undefined ? '' : String(value)} onChange={(e) => onChange(e.target.value)}>
+      <option value="">All departments</option>
+      {(options?.departments ?? []).map((d) => (
+        <option key={d.id} value={d.id}>
+          {d.name}
+        </option>
+      ))}
+      <option value="0">No department</option>
+    </Select>
+  );
+}
+
+/** The employee picker's label-to-id map, and the label for the chosen id.
+ *  With a department chosen, only its people are offered. */
+export function peopleChoices(
+  options: FilterOptions | undefined,
+  userId: number | undefined,
+  departmentId?: number,
+) {
+  const offered = (options?.people ?? []).filter(
+    (p) => departmentId === undefined || (p.department_id ?? 0) === departmentId || p.id === userId,
+  );
+  const byLabel = new Map(offered.map((p) => [personLabel(p), p.id]));
   const chosen = (options?.people ?? []).find((p) => p.id === userId);
   return { byLabel, label: chosen ? personLabel(chosen) : '', name: chosen?.full_name ?? '' };
 }
@@ -211,12 +278,12 @@ export function ReportFilterBar({
   footerAction?: ReactNode;
 }) {
   const f = filters;
-  const people = peopleChoices(options, f.userId);
+  const people = peopleChoices(options, f.userId, f.departmentId);
   const ids = (name: string) => `${idPrefix}-${name}`;
 
   return (
     <Card className="p-4 sm:p-5">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Field label="When" htmlFor={ids('range')} className="sm:col-span-2 lg:col-span-1">
           <DateRangePicker id={ids('range')} value={f.range} onChange={f.setRange} presets={presets} />
         </Field>
@@ -233,6 +300,14 @@ export function ReportFilterBar({
               </option>
             ))}
           </Select>
+        </Field>
+        <Field label="Department" htmlFor={ids('department')}>
+          <DepartmentSelect
+            id={ids('department')}
+            options={options}
+            value={f.departmentId}
+            onChange={(next) => f.update(departmentChange(options, f.userId, next))}
+          />
         </Field>
         <Field label="Employee" htmlFor={ids('person')}>
           <Combobox

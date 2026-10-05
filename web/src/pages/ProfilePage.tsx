@@ -18,6 +18,7 @@ import {
 } from '@/lib/api';
 import { passwordIssues } from '@/lib/password';
 import { formatInstant } from '@/lib/time';
+import { MOBILE_HINT, mobileDigits } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
 import {
   DESIGNATION_LABELS,
@@ -26,6 +27,7 @@ import {
   SELECTABLE_GENDERS,
   type Designation,
   type UserProfile,
+  isAdminRole,
 } from '@/types';
 
 function ErrorBox({ message }: { message: string | null }) {
@@ -91,7 +93,7 @@ export default function ProfilePage() {
 
 function Profile({ user }: { user: UserProfile }) {
   const queryClient = useQueryClient();
-  const isAdmin = user.role === 'ADMIN' || user.role === 'SYSTEM_ADMIN';
+  const isAdmin = isAdminRole(user.role);
 
   /** Keep the shell, and the cached copy the shell refreshes from, in step. */
   const adopt = (updated: UserProfile) => {
@@ -238,14 +240,15 @@ function Profile({ user }: { user: UserProfile }) {
                 onChange={(e) => edit({ full_name: e.target.value })}
               />
             </Field>
-            <Field label="Phone" htmlFor="profile_phone" hint="10 to 15 digits.">
+            <Field label="Phone" htmlFor="profile_phone" hint={MOBILE_HINT}>
               <Input
                 id="profile_phone"
                 type="tel"
                 autoComplete="tel"
                 value={details.phone}
-                onChange={(e) => edit({ phone: e.target.value })}
-                placeholder="+91 98765 43210"
+                onChange={(e) => edit({ phone: mobileDigits(e.target.value) })}
+                placeholder="9876543210"
+                inputMode="numeric"
               />
             </Field>
 
@@ -322,7 +325,7 @@ function Profile({ user }: { user: UserProfile }) {
                 <div className="rounded-md bg-surface-sunken px-3 py-3">
                   <ReadOnly label="App access">{ROLE_LABELS[user.role]}</ReadOnly>
                   <p className="mt-2 text-xs text-text-subtle">
-                    Nobody changes their own app access. Another system administrator can, from Team.
+                    Nobody changes their own app access. Someone at your level or above can, from Team.
                   </p>
                 </div>
               </>
@@ -337,6 +340,9 @@ function Profile({ user }: { user: UserProfile }) {
                   <ReadOnly label="Gender">{GENDER_LABELS[user.gender]}</ReadOnly>
                   <ReadOnly label="Department">{user.department_name}</ReadOnly>
                   <ReadOnly label="Base">{base}</ReadOnly>
+                  {user.manager_name && (
+                    <ReadOnly label="Reports to">{user.manager_name}</ReadOnly>
+                  )}
                 </dl>
                 <p className="mt-3 text-xs text-text-subtle">Managed by your administrator.</p>
               </div>

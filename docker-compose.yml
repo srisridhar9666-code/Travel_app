@@ -21,14 +21,11 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # Overrides whatever backend/.env says, because inside a container
-      # 127.0.0.1 is the container itself, not your machine.
-      #
-      # The credentials come from a .env beside this file, which compose reads
-      # automatically and git ignores. They are NOT written here: a database
-      # password in a committed file is a password you have published.
-      # Percent-encode it - @ becomes %40, # becomes %23.
-      DATABASE_URL: "mysql+pymysql://${DB_USER:?set DB_USER in .env}:${DB_PASSWORD:?set DB_PASSWORD in .env}@host.docker.internal:3306/${DB_NAME:-travel_ops}?charset=utf8mb4"
+      # Everything else - the database user, password and name included - comes
+      # from backend/.env above. Only the address changes: inside a container
+      # 127.0.0.1 is the container itself, not your machine, so the API is told
+      # to reach your MySQL at host.docker.internal instead.
+      DATABASE_HOST: "host.docker.internal"
       # The browser talks to nginx on 8080; the API only ever sees same-origin
       # proxied requests, so this is what CORS must allow.
       BACKEND_CORS_ORIGINS: "http://localhost:8080"

@@ -248,6 +248,31 @@ class TestTheQueue:
             "mine": "false", "status": "PARTIALLY_APPROVED", "priority": "HIGH"})
         assert [r["id"] for r in res.json()["items"]] == [partly.id]
 
+    def test_search_finds_people_campaigns_and_numbers(self, client, db, world):
+        """The queue search matches who raised a request and who is on it, not
+        only where it goes."""
+        project, admin, ravi, meena = world
+        mine = make_row(db, project, ravi)
+        theirs = make_row(db, project, meena)
+        db.commit()
+
+        def found(text):
+            res = client.get("/requests", headers=auth(admin),
+                             params={"mine": "false", "search": text})
+            assert res.status_code == 200, res.text
+            return {r["id"] for r in res.json()["items"]}
+
+        assert found("Meena") == {theirs.id}          # by name
+        assert found("ravi@designboxed") == {mine.id}  # by email
+        assert found("MON-1") == {mine.id, theirs.id}  # by campaign code
+        assert found(str(mine.id)) >= {mine.id}        # by request number
+        assert found("Pune") == {mine.id, theirs.id}   # places still work
+        assert found("Nobody Here") == set()
+        # The tab counts agree with the list.
+        counts = client.get("/requests/queue/counts", headers=auth(admin),
+                            params={"search": "Meena"}).json()
+        assert counts["awaiting"] == 1
+
     def test_tab_counts_follow_the_priority_and_search(self, client, db, world):
         """The tab labels must agree with the filtered list under them."""
         project, admin, ravi, _ = world
@@ -274,6 +299,11 @@ class TestTheQueue:
         assert (low["awaiting"], low["booked"]) == (1, 2)
         assert counts(search="Pune")["booked"] == 3
         assert counts(search="Nowhere-at-all")["booked"] == 0
+
+        # A type narrows the counts too, for the Flight / Cab / Hotel switcher.
+        assert counts(type="HOTEL")["booked"] == 3
+        assert counts(type="LOCAL_CAB")["booked"] == 0
+        assert counts(type="HOTEL", priority="LOW")["awaiting"] == 1
 
         # And each tab's count is the number of rows its list returns.
         for tab, key in (("SUBMITTED", "awaiting"), ("BOOKED", "booked")):
@@ -310,6 +340,24 @@ class TestTicketOnTheRow:
 
         mine = client.get("/requests", headers=auth(ravi)).json()["items"]
         assert all(r["travellers"][0]["ticket_id"] is None for r in mine)
+
+    def test_confirming_a_ticket_books_the_traveller(self, client, db, world):
+        """"Confirm and book" on a read ticket. It used to answer 400 "needs a
+        reason" every time, because it sent the decision without one."""
+        project, admin, ravi, _ = world
+        row = make_row(db, project, ravi, traveller_status=TravellerStatus.APPROVED)
+        ticket = self.ticket(db, row, TicketStatus.EXTRACTED)
+        db.commit()
+
+        res = client.post(f"/tickets/{ticket.id}/confirm", headers=auth(admin),
+                          json={"booking_reference": "QK8T2M", "notify": False})
+        assert res.status_code == 200, res.text
+        assert res.json()["status"] == "CONFIRMED"
+        traveller = db.get(RequestTraveller, row.travellers[0].id)
+        db.refresh(traveller)
+        assert traveller.status is TravellerStatus.BOOKED
+        assert traveller.booking_reference == "QK8T2M"
+        assert traveller.decision_reason == "Booked from the uploaded ticket"
 
     def test_a_ticket_under_review_is_shown_when_none_is_confirmed(self, client, db, world):
         project, admin, ravi, _ = world

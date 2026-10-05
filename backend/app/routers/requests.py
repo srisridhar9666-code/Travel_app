@@ -17,16 +17,21 @@ Two things shape this module:
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.core.deps import AdminUser, CurrentUser, DbSession
+from app.core import clock
+from app.core.deps import AdminOrManager, AdminUser, CurrentUser, DbSession, ManagerUser
 from app.core.enums import (
-    PRIORITY_RANK,
+    ACTIVE_TRAVELLER_STATUSES,
     AuditAction,
+    CabExtensionStatus,
+    CancellationStatus,
+    PRIORITY_RANK,
     RequestPriority,
     RequestStatus,
     RequestType,
@@ -34,25 +39,41 @@ from app.core.enums import (
     TravellerStatus,
 )
 from app.models.base import naive_utcnow
+from app.models.project import Project
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
 from app.schemas.request import (
     BatchDecisionPayload,
+    CabBookingPayload,
+    CabExtensionAsk,
+    CabExtensionDecision,
     CancelPayload,
+    CancellationDecision,
+    CoStayMatchRead,
     ColleagueRead,
-    DecisionPayload,
     ConflictCheckRequest,
     ConflictCheckResponse,
+    DecisionPayload,
     QueueCounts,
     QueueExport,
+    RecommendationPayload,
     RequestCreate,
     RequestEdit,
     RequestListResponse,
     RequestRead,
     RevisionRead,
+    RoomAllotPayload,
     RoomSharingChoicePayload,
 )
-from app.services import audit, costay, decisions, notifications
+from app.services import (
+    audit,
+    cabs,
+    cancellations,
+    costay,
+    decisions,
+    notifications,
+    recommendations,
+)
 from app.services import requests as svc
 
 router = APIRouter(prefix="/requests", tags=["requests"])
@@ -60,6 +81,21 @@ router = APIRouter(prefix="/requests", tags=["requests"])
 #: Request statuses that still need an admin: the awaiting and partly approved
 #: tabs. Their high-priority rows are what the queue banner counts.
 WAITING = frozenset({RequestStatus.SUBMITTED, RequestStatus.PARTIALLY_APPROVED})
+
+#: The two-level approval filter. "waiting": someone still waiting on an admin
+#: has a manager who has not recommended yet. "reviewed": a manager has given
+#: their view. For a manager both mean their own team only.
+Review = Literal["waiting", "reviewed"]
+
+#: Cabs whose travellers asked to keep them one more day and are still waiting
+#: on an admin. They sit on whichever tab their travellers' status puts them,
+#: so the queue lists them on their own as well.
+Extension = Literal["pending"]
+Cancellation = Literal["pending"]
+
+
+def _extension_pending(row: TravelRequest) -> bool:
+    return row.cab_extension_status is CabExtensionStatus.PENDING and not row.is_cancelled
 
 
 def _load(db: Session, request_id: int, user: User) -> TravelRequest:
@@ -76,9 +112,22 @@ def _load(db: Session, request_id: int, user: User) -> TravelRequest:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found.")
 
     on_it = row.requester_id == user.id or any(t.user_id == user.id for t in row.travellers)
-    if not on_it and not user.is_admin:
+    if not on_it and not user.is_admin and not _leads_someone_on(row, user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found.")
     return row
+
+
+def _leads_someone_on(row: TravelRequest, user: User) -> bool:
+    """Whether a manager's team member raised this request or travels on it."""
+    if not user.is_manager:
+        return False
+    people = [row.requester, *(t.user for t in row.travellers)]
+    return any(p is not None and p.manager_id == user.id for p in people)
+
+
+def _team_and_self(user: User):
+    """The ids a manager answers for: their own and their team members'."""
+    return select(User.id).where(or_(User.id == user.id, User.manager_id == user.id))
 
 
 def _assert_owner(row: TravelRequest, user: User) -> None:
@@ -130,6 +179,93 @@ def check(payload: ConflictCheckRequest, user: CurrentUser, db: DbSession) -> Co
     )
 
 
+@router.get("/room-matches", response_model=list[CoStayMatchRead])
+def room_matches(
+    user: CurrentUser,
+    db: DbSession,
+    city: Annotated[str, Query(min_length=1, max_length=120)],
+    check_in: Annotated[date | None, Query()] = None,
+    check_out: Annotated[date | None, Query()] = None,
+    request_id: Annotated[int | None, Query()] = None,
+) -> list[CoStayMatchRead]:
+    """Colleagues of the caller's gender staying in this city, for the hotel form.
+
+    Answers as soon as a city is picked: with dates, those whose stay overlaps
+    (most nights in common first); without, everyone with a stay there still to
+    come, so the dates can be lined up. Same rules as the offer on a saved
+    request - the gender policy filters before anything is returned.
+    """
+    matches = costay.find_matches(
+        db,
+        tenant_id=user.tenant_id,
+        for_user=user,
+        city=city,
+        check_in=check_in,
+        check_out=check_out,
+        exclude_request_id=request_id,
+        upcoming_from=None if check_in else clock.local_today(),
+    )
+    return [CoStayMatchRead(**vars(m)) for m in matches]
+
+
+def _choose_room(
+    db: Session,
+    *,
+    row: TravelRequest,
+    user: User,
+    choice: RoomSharingChoice,
+    share_with_user_id: int | None,
+) -> None:
+    """Record the requester's room choice from the form on their own traveller
+    row. Sharing is checked against the live offer, so only a colleague who
+    could actually be offered is accepted; it stays an ask until an admin
+    confirms it."""
+    mine = next((t for t in row.travellers if t.user_id == user.id), None)
+    if mine is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A room choice is for your own stay - you are not on this one.",
+        )
+    if choice is RoomSharingChoice.SHARE_EXISTING:
+        offered = {
+            m.user_id
+            for m in costay.find_matches(
+                db,
+                tenant_id=user.tenant_id,
+                for_user=user,
+                city=row.hotel_city or "",
+                check_in=row.check_in,
+                check_out=row.check_out,
+                exclude_request_id=row.id,
+            )
+        }
+        if share_with_user_id not in offered:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="That colleague is not staying there on those nights, so a shared room cannot be asked for.",
+            )
+    mine.room_sharing = choice
+    mine.share_with_user_id = share_with_user_id
+
+
+def _tell_share_colleague(db: Session, row: TravelRequest, user: User) -> None:
+    """Once the request is visible, tell the colleague an ask to share was made."""
+    mine = next((t for t in row.travellers if t.user_id == user.id), None)
+    if (
+        mine is not None
+        and mine.room_sharing is RoomSharingChoice.SHARE_EXISTING
+        and mine.share_with_user_id
+        and mine.share_confirmed_at is None
+    ):
+        costay.notify_share_request(
+            db,
+            tenant_id=user.tenant_id,
+            colleague_id=mine.share_with_user_id,
+            requester=user,
+            request=row,
+        )
+
+
 def _matching(
     db: Session,
     user: User,
@@ -141,6 +277,9 @@ def _matching(
     search: str | None,
     priority: RequestPriority | None,
     sort: str,
+    review: Review | None = None,
+    extension: Extension | None = None,
+    cancellation: Cancellation | None = None,
 ) -> list[TravelRequest]:
     """Every request the caller may see that matches the filters, in order.
 
@@ -149,11 +288,18 @@ def _matching(
     """
     filters = [TravelRequest.tenant_id == user.tenant_id]
 
-    restrict_to_self = mine or not user.is_admin
-    if restrict_to_self:
+    if mine or not (user.is_admin or user.is_manager):
         on_request = select(RequestTraveller.request_id).where(RequestTraveller.user_id == user.id)
         filters.append(
             or_(TravelRequest.requester_id == user.id, TravelRequest.id.in_(on_request))
+        )
+    elif not user.is_admin:
+        # A manager's wider view is their team's trips - never the whole
+        # organisation's.
+        people = _team_and_self(user)
+        on_request = select(RequestTraveller.request_id).where(RequestTraveller.user_id.in_(people))
+        filters.append(
+            or_(TravelRequest.requester_id.in_(people), TravelRequest.id.in_(on_request))
         )
 
     # Someone else's draft does not exist as far as this list is concerned.
@@ -163,22 +309,50 @@ def _matching(
 
     if request_type is not None:
         filters.append(TravelRequest.request_type == request_type)
+    if cancellation == "pending":
+        filters += [
+            TravelRequest.cancellation_status == CancellationStatus.PENDING,
+            TravelRequest.is_cancelled.is_(False),
+        ]
+    if extension == "pending":
+        filters += [
+            TravelRequest.cab_extension_status == CabExtensionStatus.PENDING,
+            TravelRequest.is_cancelled.is_(False),
+        ]
     if project_id is not None:
         filters.append(TravelRequest.project_id == project_id)
     if priority is not None:
         filters.append(TravelRequest.priority == priority)
     if search:
-        like = f"%{search.strip()}%"
-        filters.append(
-            or_(
-                TravelRequest.origin.like(like),
-                TravelRequest.destination.like(like),
-                TravelRequest.pickup_city.like(like),
-                TravelRequest.drop_city.like(like),
-                TravelRequest.hotel_city.like(like),
-                TravelRequest.notes.like(like),
-            )
+        needle = search.strip()
+        like = f"%{needle}%"
+        # People: whoever raised it, and everyone travelling on it - by name,
+        # employee code or email. Places, notes and the campaign as before, and
+        # a bare number finds that request.
+        people = select(User.id).where(
+            User.tenant_id == user.tenant_id,
+            or_(User.full_name.like(like), User.employee_code.like(like), User.email.like(like)),
         )
+        on_board = select(RequestTraveller.request_id).where(RequestTraveller.user_id.in_(people))
+        campaigns = select(Project.id).where(
+            Project.tenant_id == user.tenant_id,
+            or_(Project.name.like(like), Project.code.like(like)),
+        )
+        matches = [
+            TravelRequest.requester_id.in_(people),
+            TravelRequest.id.in_(on_board),
+            TravelRequest.origin.like(like),
+            TravelRequest.destination.like(like),
+            TravelRequest.pickup_city.like(like),
+            TravelRequest.drop_city.like(like),
+            TravelRequest.hotel_city.like(like),
+            TravelRequest.notes.like(like),
+            TravelRequest.project_id.in_(campaigns),
+            TravelRequest.other_project_name.like(like),
+        ]
+        if needle.isdigit():
+            matches.append(TravelRequest.id == int(needle))
+        filters.append(or_(*matches))
 
     rows = (
         db.execute(select(TravelRequest).where(*filters).order_by(TravelRequest.id.desc()))
@@ -194,6 +368,16 @@ def _matching(
     # the same function, not a second copy of the rule.
     if request_status is not None:
         rows = [r for r in rows if svc.status_of(r) is request_status]
+
+    # The same reasoning applies to the manager's review: it is a fact about
+    # traveller rows and who they report to now, so it is read off the rows.
+    if review == "waiting":
+        rows = [
+            r for r in rows
+            if svc.status_of(r) in WAITING and recommendations.waits_on(r, user)
+        ]
+    elif review == "reviewed":
+        rows = [r for r in rows if recommendations.reviewed_by(r, user)]
 
     # The rows are already in memory, so "high first" is a stable re-sort of a
     # newest-first list rather than a second query.
@@ -213,13 +397,26 @@ def list_requests(
     search: Annotated[str | None, Query(max_length=120)] = None,
     priority: Annotated[RequestPriority | None, Query()] = None,
     sort: Annotated[Literal["newest", "priority"], Query()] = "newest",
+    review: Annotated[Review | None, Query(description="Two-level approval filter")] = None,
+    extension: Annotated[
+        Extension | None, Query(description="Cabs waiting on a one-more-day decision")
+    ] = None,
+    cancellation: Annotated[
+        Cancellation | None, Query(description="Decided trips whose requester asked to cancel")
+    ] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> RequestListResponse:
     """The caller's requests, newest first (or high priority first).
 
     Ground staff always see only what they are on, whatever `mine` says. Admins
-    can widen to the whole tenant - minus everyone else's drafts.
+    can widen to the whole tenant and managers to their team - minus everyone
+    else's drafts. Costs are left out for everyone but admins.
+
+    `review=waiting` is a manager's "needs my recommendation" list (and, for
+    an admin, every request still waiting on a manager); `review=reviewed` is
+    what a manager has already given their view on. `extension=pending` is
+    every cab still waiting for an admin to say whether it is kept a day longer.
     """
     rows = _matching(
         db,
@@ -231,6 +428,9 @@ def list_requests(
         search=search,
         priority=priority,
         sort=sort,
+        review=review,
+        extension=extension,
+        cancellation=cancellation,
     )
 
     total = len(rows)
@@ -243,7 +443,12 @@ def list_requests(
     return RequestListResponse(
         items=[
             svc.to_read(
-                db, r, tenant_id=user.tenant_id, with_conflicts=True, with_tickets=user.is_admin
+                db,
+                r,
+                tenant_id=user.tenant_id,
+                reader=user,
+                with_conflicts=True,
+                with_tickets=user.is_admin,
             )
             for r in window
         ],
@@ -300,6 +505,11 @@ def create_request(
     ]
     db.add(row)
     db.flush()
+    if payload.room_sharing is not None:
+        _choose_room(
+            db, row=row, user=user, choice=payload.room_sharing,
+            share_with_user_id=payload.share_with_user_id,
+        )
 
     if payload.is_draft:
         audit.record(
@@ -316,6 +526,7 @@ def create_request(
         queued = svc.record_submission(
             db, request=row, actor=user, tenant_id=user.tenant_id, http_request=http_request
         )
+        _tell_share_colleague(db, row, user)
         background.add_task(notifications.deliver_queued, queued)
 
     db.commit()
@@ -325,17 +536,19 @@ def create_request(
 
 @router.get("/queue/counts", response_model=QueueCounts)
 def queue_counts(
-    actor: AdminUser,
+    actor: AdminOrManager,
     db: DbSession,
+    request_type: Annotated[RequestType | None, Query(alias="type")] = None,
     search: Annotated[str | None, Query(max_length=120)] = None,
     priority: Annotated[RequestPriority | None, Query()] = None,
+    review: Annotated[Review | None, Query()] = None,
 ) -> QueueCounts:
     """Headline numbers for the admin queue tabs.
 
     Counted over the whole tenant rather than the current page, because the tab
-    labels have to be true regardless of which page is open. With a search or a
-    priority, only the requests matching it count, by the same rule the tab's
-    list applies - so "Booked 2" under "High priority" means two high-priority
+    labels have to be true regardless of which page is open. With a type, a
+    search or a priority, only the requests matching it count, by the same rule
+    the tab's list applies - so "Booked 2" under "High priority" means two high-priority
     bookings, not every booking. Drafts are excluded: they are not in the queue
     and their owners have not asked for them to be.
     """
@@ -346,11 +559,12 @@ def queue_counts(
             actor,
             mine=False,
             request_status=None,
-            request_type=None,
+            request_type=request_type,
             project_id=None,
             search=search,
             priority=priority,
             sort="newest",
+            review=review,
         )
         if not row.is_draft
     ]
@@ -358,12 +572,21 @@ def queue_counts(
     tally = {s: 0 for s in RequestStatus}
     conflicted = 0
     edited = 0
+    on_manager = 0
+    extensions = 0
+    cancel_asks = 0
     urgent = {s: 0 for s in WAITING}
     for row in rows:
         row_status = svc.status_of(row)
         tally[row_status] += 1
+        if _extension_pending(row):
+            extensions += 1
+        if cancellations.is_pending(row) and cancellations.may_decide(row, actor):
+            cancel_asks += 1
         if row.priority is RequestPriority.HIGH and row_status in WAITING:
             urgent[row_status] += 1
+        if row_status in WAITING and recommendations.waits_on(row, actor):
+            on_manager += 1
         if svc.edit_count(db, row.id) > 0:
             edited += 1
         # Only requests still awaiting a decision are worth flagging as clashing:
@@ -386,6 +609,9 @@ def queue_counts(
         high_priority=sum(urgent.values()),
         high_priority_awaiting=urgent[RequestStatus.SUBMITTED],
         high_priority_partial=urgent[RequestStatus.PARTIALLY_APPROVED],
+        awaiting_manager=on_manager,
+        cab_extensions=extensions,
+        cancellations=cancel_asks,
     )
 
 
@@ -398,6 +624,7 @@ def export_queue(
     project_id: Annotated[int | None, Query()] = None,
     search: Annotated[str | None, Query(max_length=120)] = None,
     priority: Annotated[RequestPriority | None, Query()] = None,
+    review: Annotated[Review | None, Query()] = None,
 ) -> QueueExport:
     """Every request in one queue tab, for the admin's CSV.
 
@@ -415,6 +642,7 @@ def export_queue(
         search=search,
         priority=priority,
         sort="priority",
+        review=review,
     )
     total = len(rows)
     rows = rows[: svc.MAX_EXPORT_ROWS]
@@ -503,6 +731,7 @@ def edit_request(
     )
 
     was_draft = row.is_draft
+    was_on = {t.user_id for t in row.travellers}
     before = svc.snapshot(row)
     svc.canonicalise_places(db, user.tenant_id, payload)
     svc.apply_body(row, payload)
@@ -528,16 +757,29 @@ def edit_request(
             summary=f"Edited {svc.describe_changes(changes)}",
             changes=changes,
         )
+        # A manager's view was of the trip as it was. Clear it and ask again,
+        # so an admin never reads "recommended" against dates nobody saw.
+        cleared = svc.clear_recommendations(row)
         audit.record(
             db,
             action=AuditAction.UPDATE,
             entity_type="travel_request",
             entity_id=row.id,
-            summary=f"{user.full_name} edited request #{row.id} ({svc.describe_changes(changes)})",
+            summary=(
+                f"{user.full_name} edited request {row.id} ({svc.describe_changes(changes)})"
+                + ("; the manager's recommendation was cleared" if cleared else "")
+            ),
             changes=changes,
             tenant_id=user.tenant_id,
             actor=user,
             request=http_request,
+        )
+        background.add_task(
+            notifications.deliver_queued,
+            svc.ask_managers_after_edit(
+                db, request=row, actor=user, tenant_id=user.tenant_id,
+                cleared=cleared, was_on=was_on,
+            ),
         )
 
     db.commit()
@@ -564,6 +806,7 @@ def submit_request(
     queued = svc.record_submission(
         db, request=row, actor=user, tenant_id=user.tenant_id, http_request=http_request
     )
+    _tell_share_colleague(db, row, user)
     background.add_task(notifications.deliver_queued, queued)
     db.commit()
     db.refresh(row)
@@ -577,12 +820,13 @@ def cancel_request(
     user: CurrentUser,
     http_request: Request,
     db: DbSession,
+    background: BackgroundTasks,
 ) -> RequestRead:
     """Withdraw a request, with a reason (addendum B4).
 
-    The requester or an admin may cancel, and a locked request can still be
-    cancelled - that is the escape hatch the edit window leaves open, since
-    cancel-and-reraise is how a booked plan changes in V1.
+    The requester or an admin may cancel. An admin's cancel is immediate. A
+    requester's is too until an admin has approved or booked someone on it;
+    after that it becomes an ask an admin or their manager approves.
     """
     row = _load(db, request_id, user)
     if row.requester_id != user.id and not user.is_admin:
@@ -592,27 +836,55 @@ def cancel_request(
     if row.is_cancelled:
         return svc.to_read(db, row, tenant_id=user.tenant_id, viewer=user)
 
-    row.is_cancelled = True
-    row.cancel_reason = payload.reason
-    row.cancelled_by_id = user.id
-    for traveller in row.travellers:
-        if traveller.status is not TravellerStatus.REJECTED:
-            traveller.status = TravellerStatus.CANCELLED
+    # Once someone on it is approved or booked, a ticket may exist: the
+    # requester asks, and an admin or their manager decides.
+    if cancellations.needs_approval(row, user):
+        queued = cancellations.ask(
+            db, request=row, asker=user, reason=payload.reason, http_request=http_request
+        )
+        db.commit()
+        background.add_task(notifications.deliver_queued, queued)
+        db.refresh(row)
+        return _read_and_release(db, row, user)
 
-    audit.record(
-        db,
-        action=AuditAction.CANCEL,
-        entity_type="travel_request",
-        entity_id=row.id,
-        summary=f"{user.full_name} cancelled request #{row.id}",
-        reason=payload.reason,
-        tenant_id=user.tenant_id,
-        actor=user,
-        request=http_request,
+    was_asked = cancellations.is_pending(row)
+    cancellations.cancel(
+        db, request=row, actor=user, reason=payload.reason, http_request=http_request
     )
+    if was_asked:
+        # An admin cancelling outright answers any ask that was waiting.
+        row.cancellation_status = CancellationStatus.APPROVED
+        row.cancellation_decided_by_id = user.id
+        row.cancellation_decided_at = naive_utcnow()
     db.commit()
     db.refresh(row)
     return svc.to_read(db, row, tenant_id=user.tenant_id, viewer=user)
+
+
+@router.post("/{request_id}/cancellation/decide", response_model=RequestRead)
+def decide_cancellation(
+    request_id: int,
+    payload: CancellationDecision,
+    actor: AdminOrManager,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """Approve the ask to cancel (the trip is cancelled) or reject it with a
+    comment. For an admin, or the requester's manager."""
+    row = _load(db, request_id, actor)
+    queued = cancellations.decide(
+        db,
+        request=row,
+        decider=actor,
+        approve=payload.approve,
+        comment=payload.comment,
+        http_request=http_request,
+    )
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, actor)
 
 
 @router.get("/{request_id}/revisions", response_model=list[RevisionRead])
@@ -689,7 +961,7 @@ def set_room_sharing(
         entity_id=traveller.id,
         summary=(
             f"{user.full_name} set room sharing to {payload.choice} "
-            f"for {traveller.user.full_name} on request #{row.id}"
+            f"for {traveller.user.full_name} on request {row.id}"
         ),
         changes={"room_sharing": {"from": before, "to": str(payload.choice)}},
         tenant_id=user.tenant_id,
@@ -746,6 +1018,150 @@ def confirm_share(
     db.commit()
     db.refresh(row)
     return svc.to_read(db, row, tenant_id=actor.tenant_id, viewer=actor)
+
+
+@router.post("/{request_id}/travellers/{traveller_id}/room", response_model=RequestRead)
+def allot_room(
+    request_id: int,
+    traveller_id: int,
+    payload: RoomAllotPayload,
+    actor: AdminUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """An admin decides where a hotel traveller sleeps.
+
+    With a colleague: the two are put in one room - each traveller row points at
+    the other and is confirmed - provided they may share (same stated gender)
+    and the colleague really is staying in that city on overlapping nights.
+    Both are told. With `null`: a room of their own, undoing any pairing on
+    both sides.
+    """
+    row = _load(db, request_id, actor)
+    if row.request_type is not RequestType.HOTEL or row.is_cancelled or row.is_draft:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Rooms are allotted on a submitted hotel request that is not cancelled.",
+        )
+    traveller = _traveller_or_404(row, traveller_id)
+    if traveller.status not in ACTIVE_TRAVELLER_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{traveller.user.full_name} is no longer on this stay.",
+        )
+    before = {
+        "room_sharing": str(traveller.room_sharing),
+        "share_with": traveller.share_with.full_name if traveller.share_with else None,
+    }
+
+    def release(person: RequestTraveller) -> None:
+        """Undo the other half of a pairing this traveller was in."""
+        partner_id = person.share_with_user_id
+        if not partner_id:
+            return
+        for other in db.execute(
+            select(RequestTraveller)
+            .join(TravelRequest, TravelRequest.id == RequestTraveller.request_id)
+            .where(
+                TravelRequest.tenant_id == actor.tenant_id,
+                RequestTraveller.user_id == partner_id,
+                RequestTraveller.share_with_user_id == person.user_id,
+            )
+        ).scalars():
+            costay.clear_share(other)
+            other.room_sharing = RoomSharingChoice.SEPARATE_ROOM
+
+    queued: list[int] = []
+    if payload.share_with_user_id is None:
+        release(traveller)
+        costay.clear_share(traveller)
+        traveller.room_sharing = RoomSharingChoice.SEPARATE_ROOM
+        summary = f"{actor.full_name} gave {traveller.user.full_name} a room of their own on request {row.id}"
+    else:
+        colleague = db.get(User, payload.share_with_user_id)
+        if colleague is None or colleague.tenant_id != actor.tenant_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="That colleague was not found.")
+        if not costay.may_share_room(traveller.user.gender, colleague.gender):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="These two travellers cannot share a room - shared rooms are for the same gender only.",
+            )
+        match = next(
+            (
+                m
+                for m in costay.find_matches(
+                    db,
+                    tenant_id=actor.tenant_id,
+                    for_user=traveller.user,
+                    city=row.hotel_city or "",
+                    check_in=row.check_in,
+                    check_out=row.check_out,
+                    exclude_request_id=row.id,
+                )
+                if m.user_id == colleague.id
+            ),
+            None,
+        )
+        if match is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{colleague.full_name} is not staying in {row.hotel_city} on any of these nights.",
+            )
+        other = costay.live_stay(db, user_id=colleague.id, request_id=match.request_id)
+        if other is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{colleague.full_name}'s stay is no longer live.",
+            )
+        if (
+            other.room_sharing is RoomSharingChoice.SHARE_EXISTING
+            and other.share_confirmed_at is not None
+            and other.share_with_user_id not in (None, traveller.user_id)
+        ):
+            busy = db.get(User, other.share_with_user_id)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{colleague.full_name} already shares a room with {busy.full_name if busy else 'someone else'}.",
+            )
+        if traveller.share_with_user_id not in (None, colleague.id):
+            release(traveller)
+        costay.pair(traveller, other, confirmed_by=actor)
+        db.flush()
+        for person, partner in ((traveller, colleague), (other, traveller.user)):
+            stay = row if person is traveller else db.get(TravelRequest, match.request_id)
+            queued += svc.queued_emails(
+                costay.notify_shared_room(
+                    db, tenant_id=actor.tenant_id, traveller=person, partner=partner,
+                    request=stay, admin=actor,
+                )
+            )
+        summary = (
+            f"{actor.full_name} put {traveller.user.full_name} and {colleague.full_name} "
+            f"in one room in {row.hotel_city} (requests {row.id} and {match.request_id})"
+        )
+
+    audit.record(
+        db,
+        action=AuditAction.UPDATE,
+        entity_type="request_traveller",
+        entity_id=traveller.id,
+        summary=summary,
+        changes={
+            "room_sharing": {"from": before["room_sharing"], "to": str(traveller.room_sharing)},
+            "share_with": {
+                "from": before["share_with"],
+                "to": traveller.share_with.full_name if traveller.share_with else None,
+            },
+        },
+        tenant_id=actor.tenant_id,
+        actor=actor,
+        request=http_request,
+    )
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, actor)
 
 
 # ---------------------------------------------------------------------------
@@ -807,7 +1223,9 @@ def decide_traveller(
             to_status=payload.to_status,
             reason=payload.reason,
             booking_reference=payload.booking_reference,
+            booking_details=payload.booking_details.stored() if payload.booking_details else None,
             conflict_override_reason=payload.conflict_override_reason,
+            ticket_id=payload.ticket_id,
         ),
         http_request=http_request,
         notify=payload.notify_employee,
@@ -856,7 +1274,9 @@ def decide_batch(
                 to_status=item.to_status,
                 reason=item.reason,
                 booking_reference=item.booking_reference,
+                booking_details=item.booking_details.stored() if item.booking_details else None,
                 conflict_override_reason=item.conflict_override_reason,
+                ticket_id=item.ticket_id,
             ),
             http_request=http_request,
             notify=item.notify_employee,
@@ -865,3 +1285,122 @@ def decide_batch(
     db.commit()
     db.refresh(row)
     return svc.to_read(db, row, tenant_id=actor.tenant_id, viewer=actor, with_conflicts=True)
+
+
+# ---------------------------------------------------------------------------
+# The manager's recommendation: the first of the two levels.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{request_id}/recommendation", response_model=RequestRead)
+def recommend(
+    request_id: int,
+    payload: RecommendationPayload,
+    manager: ManagerUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """A manager recommends their team members' trip, or does not, with a comment.
+
+    Covers their own people on the request who are still pending - or the ones
+    named in `traveller_ids`. They may change their mind until an admin
+    decides; every version is logged. The admins are told, comment included,
+    and the admin's decision stays final either way.
+    """
+    row = _load(db, request_id, manager)
+    queued = recommendations.record(
+        db,
+        request=row,
+        manager=manager,
+        recommendation=payload.recommendation,
+        comment=payload.comment,
+        traveller_ids=payload.traveller_ids,
+        http_request=http_request,
+    )
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, manager)
+
+
+# ---------------------------------------------------------------------------
+# Cabs: the car that was sent, and one more day.
+# ---------------------------------------------------------------------------
+
+
+@router.put("/{request_id}/cab-booking", response_model=RequestRead)
+def record_cab(
+    request_id: int,
+    payload: CabBookingPayload,
+    actor: AdminUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """Record the car sent for a cab - size, number plate, driver - or change it.
+
+    Allowed once someone on the cab is approved or booked, and as often as the
+    vendor swaps cars; each change is logged with what it replaced, and
+    everyone riding is told, their manager copied. Nobody's status moves:
+    booking a traveller is still a decision with a booking reference.
+    """
+    row = _load(db, request_id, actor)
+    queued = cabs.record_booking(
+        db, request=row, admin=actor, payload=payload, http_request=http_request
+    )
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, actor)
+
+
+@router.post("/{request_id}/cab-extension", response_model=RequestRead)
+def ask_cab_extension(
+    request_id: int,
+    payload: CabExtensionAsk,
+    user: CurrentUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """Ask to keep a decided cab one more day, with a reason.
+
+    For the requester or anyone riding in it, once an admin has acted - before
+    that the requester simply edits the end time. One ask at a time; an admin
+    approves or rejects it.
+    """
+    row = _load(db, request_id, user)
+    queued = cabs.ask_extension(
+        db, request=row, asker=user, reason=payload.reason, http_request=http_request
+    )
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, user)
+
+
+@router.post("/{request_id}/cab-extension/decide", response_model=RequestRead)
+def decide_cab_extension(
+    request_id: int,
+    payload: CabExtensionDecision,
+    actor: AdminUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """Approve one more day - the cab's end time moves a day later - or reject
+    it with a comment. The travellers are told, their managers copied."""
+    row = _load(db, request_id, actor)
+    queued = cabs.decide_extension(
+        db,
+        request=row,
+        admin=actor,
+        approve=payload.approve,
+        comment=payload.comment,
+        http_request=http_request,
+    )
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, actor)

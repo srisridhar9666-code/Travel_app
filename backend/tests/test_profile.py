@@ -88,12 +88,12 @@ class TestNameAndPhone:
         r = client.patch("/auth/me", headers=auth(ravi),
                          json={"full_name": "  Ravi   K ", "phone": "+91 98765 43210"})
         assert r.status_code == 200
-        assert (r.json()["full_name"], r.json()["phone"]) == ("Ravi K", "+91 98765 43210")
+        assert (r.json()["full_name"], r.json()["phone"]) == ("Ravi K", "9876543210")
 
         [row] = audit_rows(db, ravi, AuditAction.UPDATE)
         assert row.actor_user_id == ravi.id
         assert row.changes["full_name"] == {"from": "Ravi Kumar", "to": "Ravi K"}
-        assert row.changes["phone"] == {"from": None, "to": "+91 98765 43210"}
+        assert row.changes["phone"] == {"from": None, "to": "9876543210"}
 
     @pytest.mark.parametrize("body", [
         {"role": "SYSTEM_ADMIN"}, {"is_active": False}, {"status": "ACTIVE"},
@@ -107,12 +107,31 @@ class TestNameAndPhone:
         assert ravi.full_name == "Ravi Kumar" and ravi.role is Role.GROUND_STAFF
 
     @pytest.mark.parametrize("phone, ok", [
-        ("abc", False), ("12345", False), ("+91 98765 43210", True), ("(040) 2345-6789", True),
+        ("abc", False), ("12345", False), ("+91 98765 43210", True), ("98765 43210", True),
+        ("098765 43210", True), ("(040) 2345-6789", False), ("5876543210", False),
+        ("98765432101", False),
     ])
     def test_phone_rules(self, client, people, phone, ok):
         _, _, ravi = people
         r = client.patch("/auth/me", headers=auth(ravi), json={"phone": phone})
         assert (r.status_code == 200) is ok
+
+    def test_it_is_stored_as_ten_digits(self, client, people):
+        _, _, ravi = people
+        r = client.patch("/auth/me", headers=auth(ravi), json={"phone": "+91-98765-43210"})
+        assert r.json()["phone"] == "9876543210"
+
+    def test_no_two_employees_share_a_number(self, client, db, people):
+        _, admin, ravi = people
+        admin.phone = "9876543210"
+        db.commit()
+        r = client.patch("/auth/me", headers=auth(ravi), json={"phone": "98765 43210"})
+        assert r.status_code == 409
+        # Someone editing their own profile is not told whose number it is.
+        assert admin.full_name not in r.json()["detail"]
+        # Keeping your own number is not a clash.
+        assert client.patch("/auth/me", headers=auth(admin),
+                            json={"phone": "9876543210"}).status_code == 200
 
     def test_a_blank_phone_clears_it(self, client, db, people):
         _, _, ravi = people

@@ -24,12 +24,13 @@ def report_filters(
     until: Annotated[date | None, Query()] = None,
     user_id: Annotated[int | None, Query()] = None,
     project_id: Annotated[int | None, Query()] = None,
+    department_id: Annotated[int | None, Query(ge=0)] = None,
     request_type: Annotated[RequestType | None, Query()] = None,
     state: Annotated[str | None, Query(max_length=80)] = None,
     city: Annotated[str | None, Query(max_length=120)] = None,
 ) -> insights.Filters:
-    """The slice every report page offers: dates, person, campaign, type and
-    destination. Shared so the dashboard, the log and the cost page cannot
+    """The slice every report page offers: dates, person, campaign, department
+    (0 for people with none), type and destination. Shared so the dashboard, the log and the cost page cannot
     drift into three meanings of "Maharashtra" or "this month".
 
     A missing date is open on that side; reversed dates are swapped.
@@ -39,6 +40,7 @@ def report_filters(
         until=until,
         user_id=user_id,
         project_id=project_id,
+        department_id=department_id,
         request_type=request_type,
         state=(state or "").strip() or None,
         city=(city or "").strip() or None,
@@ -81,5 +83,6 @@ def dashboard(actor: AdminUser, db: DbSession, filters: ReportFilters) -> dict:
 
 @router.get("/analytics/filter-options")
 def filter_options(actor: AdminUser, db: DbSession) -> dict:
-    """Campaigns, people, destination states and cities, for the report filters."""
+    """Campaigns, departments, people, destination states and cities, for the
+    report filters."""
     return insights.filter_options(db, actor.tenant_id)

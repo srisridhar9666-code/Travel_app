@@ -31,9 +31,15 @@ class TravellerCost(BaseModel):
 
 
 class CostEntry(BaseModel):
-    """Explicit amounts, one per traveller. The manual-override path of C1."""
+    """Explicit amounts, one per traveller. The manual-override path of C1.
+
+    `vendor_id` is who was paid - the travel agent, cab operator or hotel -
+    for everyone in `amounts`. Left out, each keeps the vendor they had; sent
+    as null, it is cleared. It must be an active vendor.
+    """
 
     amounts: list[TravellerCost] = Field(min_length=1)
+    vendor_id: int | None = None
 
 
 class CostSplit(BaseModel):
@@ -46,6 +52,8 @@ class CostSplit(BaseModel):
     total_amount: Decimal = Field(gt=0, le=Decimal("10000000"))
     traveller_ids: list[int] = Field(min_length=1)
     note: str | None = Field(default=None, max_length=200)
+    #: Who was paid, as on `CostEntry`. Ignored by the preview.
+    vendor_id: int | None = None
 
     @field_validator("total_amount")
     @classmethod

@@ -1,4 +1,22 @@
-export type Role = 'SYSTEM_ADMIN' | 'ADMIN' | 'GROUND_STAFF';
+export type Role = 'SUPER_ADMIN' | 'SYSTEM_ADMIN' | 'ADMIN' | 'MANAGER' | 'GROUND_STAFF';
+
+/** Highest first. Nobody grants or manages a role above their own. */
+export const ROLE_RANK: Record<Role, number> = {
+  GROUND_STAFF: 0,
+  MANAGER: 1,
+  ADMIN: 2,
+  SYSTEM_ADMIN: 3,
+  SUPER_ADMIN: 4,
+};
+
+/** Every role that runs the travel desk: approvals, bookings, costs, Team. */
+export const ADMIN_ROLES: Role[] = ['ADMIN', 'SYSTEM_ADMIN', 'SUPER_ADMIN'];
+/** The roles that look after accounts and settings. */
+export const ACCOUNT_ROLES: Role[] = ['SYSTEM_ADMIN', 'SUPER_ADMIN'];
+
+export function isAdminRole(role: Role | undefined | null): boolean {
+  return role != null && ADMIN_ROLES.includes(role);
+}
 export type Designation = 'EXECUTIVE' | 'TEAM_LEAD' | 'MANAGER';
 /** OTHER and UNDISCLOSED only appear on people saved before gender had to be
  *  chosen; new input is Male or Female (SELECTABLE_GENDERS). */
@@ -21,6 +39,9 @@ export interface UserProfile {
   base_location: string | null;
   department_id: number | null;
   department_name: string | null;
+  /** Who they report to - ground staff in a manager's team. */
+  manager_id?: number | null;
+  manager_name?: string | null;
   theme_preference: ThemePreference;
   status: UserStatus;
   is_active: boolean;
@@ -50,6 +71,9 @@ export interface UserRow {
   base_location: string | null;
   department_id: number | null;
   department_name: string | null;
+  /** Who they report to - ground staff in a manager's team. */
+  manager_id: number | null;
+  manager_name: string | null;
   status: UserStatus;
   status_changed_at: string | null;
   /** Mirrors status === 'ACTIVE'. */
@@ -112,10 +136,57 @@ export interface ChainVerification {
 }
 
 export const ROLE_LABELS: Record<Role, string> = {
-  SYSTEM_ADMIN: 'System admin',
+  SUPER_ADMIN: 'Super admin',
+  // No longer granted: folded into Admin. Kept so an old account still reads.
+  SYSTEM_ADMIN: 'System admin (old)',
   ADMIN: 'Admin',
+  MANAGER: 'Manager',
   GROUND_STAFF: 'Ground staff',
 };
+
+/** What each role can do, in a line - shown under the role pickers. */
+export const ROLE_DESCRIPTIONS: Record<Role, string> = {
+  GROUND_STAFF: 'Raises and tracks their own travel. Can report to a manager.',
+  MANAGER:
+    "Leads a team: sees their trips (never costs), asks an admin to add, edit or remove members, and runs campaigns.",
+  ADMIN:
+    'Runs the travel desk: approvals, bookings, costs, people, departments and the activity log. Keeps vendors and creates and edits vendor invoices.',
+  SYSTEM_ADMIN: 'No longer used - the same as Admin. Choose Admin or Super admin.',
+  SUPER_ADMIN:
+    'The top level: everything an admin sees, plus approving vendor invoices, purging old identity documents and managing other super admins. Reads, but does not create or edit, invoices and vendors.',
+};
+
+/** A manager's ask to change their team, held until an admin decides. */
+export type TeamChangeKind = 'ADD' | 'EDIT' | 'REMOVE';
+export type TeamChangeStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+
+export interface TeamChange {
+  id: number;
+  kind: TeamChangeKind;
+  status: TeamChangeStatus;
+  requested_by_id: number;
+  requested_by_name: string | null;
+  target_user_id: number | null;
+  target_name: string | null;
+  /** ADD: the new person's details. EDIT: { field: { from, to } }.
+   *  REMOVE: { status, exited_on, reason }. */
+  payload: Record<string, unknown>;
+  note: string | null;
+  decided_by_name: string | null;
+  decided_at: string | null;
+  decision_comment: string | null;
+  created_at: string;
+}
+
+export interface TeamChangeList {
+  items: TeamChange[];
+  pending: number;
+}
+
+export interface TeamDecision {
+  change: TeamChange;
+  invite: InviteLink | null;
+}
 
 export const DESIGNATION_LABELS: Record<Designation, string> = {
   EXECUTIVE: 'Executive',
@@ -328,6 +399,51 @@ export type RoomSharingChoice =
 
 export type ConflictKind = 'OVERLAPPING_TRAVEL' | 'OVERLAPPING_STAY' | 'DUPLICATE_REQUEST';
 
+/** The car a cab asks for, and the one an admin records as sent. Named by
+ *  size on the server; the labels carry the model staff know. */
+export type CabType = 'NO_PREFERENCE' | 'SEDAN' | 'SUV';
+
+export const CAB_TYPE_LABELS: Record<CabType, string> = {
+  NO_PREFERENCE: 'No preference',
+  SEDAN: 'Dzire (4 seats)',
+  SUV: 'Ertiga (7 seats)',
+};
+
+/** The choice cards on the request form: the model, then its seats. */
+export const CAB_TYPE_CHOICES: { value: CabType; title: string; detail: string }[] = [
+  { value: 'NO_PREFERENCE', title: 'No preference', detail: 'Any car the vendor has' },
+  { value: 'SEDAN', title: 'Dzire', detail: '4 seats' },
+  { value: 'SUV', title: 'Ertiga', detail: '7 seats' },
+];
+
+/** The cars an admin can record as sent - never "no preference". */
+export const BOOKED_CAB_TYPES: CabType[] = ['SEDAN', 'SUV'];
+
+export type CabTrip = 'LOCAL' | 'OUTSTATION';
+
+/** Mirrors LOCAL_CAB_MAX_KM on the server, which holds the rule and checks
+ *  every save; this only words the form. */
+export const LOCAL_CAB_MAX_KM = 80;
+
+export const CAB_TRIP_LABELS: Record<CabTrip, string> = {
+  LOCAL: 'Local',
+  OUTSTATION: 'Outstation',
+};
+
+export type CabExtensionStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+/** A manager's advice on a team member's trip. The admin decides. */
+export type ManagerRecommendation = 'RECOMMENDED' | 'NOT_RECOMMENDED';
+
+export const RECOMMENDATION_LABELS: Record<ManagerRecommendation, string> = {
+  RECOMMENDED: 'Recommended',
+  NOT_RECOMMENDED: 'Not recommended',
+};
+
+/** The two-level approval list filter: still waiting on a manager, or
+ *  already given their view. For a manager, their own team only. */
+export type ReviewFilter = 'waiting' | 'reviewed';
+
 export interface RequestTraveller {
   id: number;
   user_id: number;
@@ -348,9 +464,27 @@ export interface RequestTraveller {
   decision_reason: string | null;
   /** PNR, ticket number or hotel confirmation. */
   booking_reference: string | null;
+  /** Airline, number, times, seat or hotel - see BookingDetails. */
+  booking_details: BookingDetails | null;
   /** On the admin queue list only: the uploaded ticket to open from this row - the
    *  confirmed one, else the newest still under review. */
   ticket_id?: number | null;
+  /** The traveller's confirmed ticket can be downloaded from My requests. */
+  ticket_ready?: boolean;
+  /** Admins only, on a hotel stay: colleagues of the same gender staying in the
+   *  same city on overlapping nights - who could be put in one room. */
+  room_matches?: CoStayMatch[];
+
+  /** Two-level approval. Who this traveller reports to, if that manager is
+   *  active - shown to anyone who can see the request. */
+  manager_id: number | null;
+  manager_name: string | null;
+  /** What the manager said. Only an admin, or this traveller's own manager,
+   *  is sent it; everyone else - the traveller included - gets null. */
+  manager_recommendation: ManagerRecommendation | null;
+  manager_comment: string | null;
+  manager_reviewed_at: string | null;
+  manager_reviewed_by_name: string | null;
 
   /** This person's share of the cost. Admin-only — null for ground staff
    *  however they reach the request. Amounts are strings; see the note on
@@ -359,6 +493,13 @@ export interface RequestTraveller {
   cost_currency: string | null;
   cost_note: string | null;
   cost_entered_by_name: string | null;
+  /** Who was paid for this person's trip, and the invoice it is billed on.
+   *  Admin-only like cost. A cost on an approved invoice is locked. */
+  vendor_id?: number | null;
+  vendor_name?: string | null;
+  invoice_id?: number | null;
+  invoice_number?: string | null;
+  invoice_status?: InvoiceStatus | null;
 }
 
 export interface RequestConflict {
@@ -428,6 +569,45 @@ export interface TravelRequest {
   hotel_city: string | null;
   check_in: string | null;
   check_out: string | null;
+
+  /** A cab's size, local or outstation, and outstation's rough distance.
+   *  Null on flights and hotels. */
+  cab_type: CabType | null;
+  cab_trip: CabTrip | null;
+  cab_distance_km: number | null;
+  /** The car an admin recorded as sent. Null until they have. */
+  booked_cab_type: CabType | null;
+  cab_vehicle_number: string | null;
+  cab_driver_name: string | null;
+  cab_driver_phone: string | null;
+  cab_booked_by_name: string | null;
+  cab_booked_at: string | null;
+  /** The latest ask to keep the cab one more day, and its answer. */
+  cab_extension_status: CabExtensionStatus | null;
+  cab_extension_reason: string | null;
+  cab_extension_requested_by_name: string | null;
+  cab_extension_requested_at: string | null;
+  cab_extension_decided_by_name: string | null;
+  cab_extension_decided_at: string | null;
+  cab_extension_comment: string | null;
+  /** Extra days approved so far; end_at already includes them. */
+  cab_extended_days: number;
+  /** An ask to cancel a trip already approved or booked, and its answer. */
+  cancellation_status: 'PENDING' | 'APPROVED' | 'REJECTED' | null;
+  cancellation_reason: string | null;
+  cancellation_requested_by_name: string | null;
+  cancellation_requested_at: string | null;
+  cancellation_decided_by_name: string | null;
+  cancellation_decided_at: string | null;
+  cancellation_comment: string | null;
+  /** The reader's Cancel becomes an ask (someone on it is approved or booked). */
+  cancel_needs_approval: boolean;
+  /** The reader may approve or reject the pending ask. */
+  can_decide_cancellation: boolean;
+  cancelled_by_name: string | null;
+  /** Whether the person reading may ask for one more day now - the server's
+   *  rule, so the button only shows when the ask would be accepted. */
+  can_extend_cab: boolean;
 
   /** Why the trip is happening. Mandatory on anything raised from now on;
    *  null on requests that predate the field. */
@@ -532,6 +712,14 @@ export interface QueueCounts {
   high_priority: number;
   high_priority_awaiting: number;
   high_priority_partial: number;
+  /** Still waiting on an admin, with someone whose manager has not
+   *  recommended yet. For a manager: their own team only. */
+  awaiting_manager: number;
+  /** Cabs whose travellers asked to keep them one more day, still waiting on
+   *  an admin. */
+  cab_extensions: number;
+  /** Decided trips whose requester asked to cancel, waiting on an answer. */
+  cancellations: number;
 }
 
 /** Every request in one admin queue tab, read as the admin (so with cost), for
@@ -543,10 +731,28 @@ export interface QueueExport {
   items: TravelRequest[];
 }
 
-export interface DecisionBody {
+/** What a traveller needs on the day, beside the booking reference. Times are
+ *  India wall-clock ("2026-10-14T06:10:00"), like a trip's start. */
+export interface BookingDetails {
+  carrier?: string | null;
+  service_number?: string | null;
+  depart_at?: string | null;
+  arrive_at?: string | null;
+  seat?: string | null;
+  hotel_name?: string | null;
+  hotel_address?: string | null;
+  notes?: string | null;
+}
+
+interface DecisionBody {
   to_status: TravellerStatus;
   reason?: string | null;
   booking_reference?: string | null;
+  /** Only when marking booked. */
+  booking_details?: BookingDetails | null;
+  /** Only when marking booked: the uploaded ticket the booking is from. It is
+   *  confirmed with the booking and attached to the traveller's email. */
+  ticket_id?: number | null;
   /** Mandatory when approving someone with a live clash — addendum B6. */
   conflict_override_reason?: string | null;
   /** Suppresses the email only. The in-app notice and the ledger entry are
@@ -625,6 +831,9 @@ export interface LedgerRow {
   channel: NotificationChannel;
   status: NotificationStatus;
   to_address: string | null;
+  /** Who the email was copied to, comma separated - a traveller's manager on
+   *  a decision. */
+  cc_addresses: string | null;
   subject: string | null;
   attempts: number;
   sent_at: string | null;
@@ -717,7 +926,8 @@ export const CATEGORY_HINTS: Record<NotificationCategory, string> = {
   BOOKINGS: 'Your ticket reference once an admin has confirmed it.',
   ROOM_SHARING: 'When a colleague asks to share your room.',
   REMINDERS: 'A nudge shortly before a trip you are booked on.',
-  NEW_REQUESTS: 'Admins only: an email each time someone raises a request.',
+  NEW_REQUESTS:
+    'An email when a request needs your answer: a new one to decide, a manager’s recommendation, or your team’s request to recommend.',
 };
 
 /** The .env file the API reads. Key names only - never values. */
@@ -963,6 +1173,8 @@ export interface InsightFilters {
   until?: string;
   user_id?: number;
   project_id?: number;
+  /** The traveller's department as it is now; 0 is "no department". */
+  department_id?: number;
   request_type?: RequestType;
   state?: string;
   city?: string;
@@ -1074,19 +1286,199 @@ export interface Insights {
     nights: number;
     spent: string;
   }[];
+  /** Every department that travelled in this slice, busiest first, with
+   *  "No department" (id 0) last. Trips are travelled movements. */
+  by_department: {
+    department_id: number;
+    name: string;
+    count: number;
+    people: number;
+    nights: number;
+    pending: number;
+    spent: string;
+  }[];
 }
 
 export interface FilterOptions {
   projects: { id: number; code: string; name: string; status: ProjectStatus }[];
+  departments: { id: number; name: string }[];
   people: {
     id: number;
     full_name: string;
     employee_code: string | null;
     is_active: boolean;
     status: UserStatus;
+    department_id: number | null;
   }[];
   /** Destination states in use. */
   states: string[];
   /** Destination cities in use, with the state each is in. */
   cities: { state: string | null; city: string }[];
+}
+
+// --- vendors and invoices (vendor reconciliation) ---------------------------
+
+export type VendorKind = 'TRAVEL_AGENT' | 'CAB' | 'HOTEL' | 'OTHER';
+
+export const VENDOR_KINDS: VendorKind[] = ['TRAVEL_AGENT', 'CAB', 'HOTEL', 'OTHER'];
+
+export const VENDOR_KIND_LABELS: Record<VendorKind, string> = {
+  TRAVEL_AGENT: 'Travel agent',
+  CAB: 'Cab operator',
+  HOTEL: 'Hotel',
+  OTHER: 'Other',
+};
+
+/** Someone the organisation pays for travel. Switched off, never deleted. */
+export interface Vendor {
+  id: number;
+  name: string;
+  kind: VendorKind;
+  contact_name: string | null;
+  phone: string | null;
+  email: string | null;
+  gstin: string | null;
+  notes: string | null;
+  is_active: boolean;
+  created_at: string;
+  /** Trips whose cost was paid to them, and invoices raised against them. */
+  traveller_count: number;
+  invoice_count: number;
+}
+
+export interface VendorPayload {
+  name: string;
+  kind: VendorKind;
+  contact_name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  gstin?: string | null;
+  notes?: string | null;
+}
+
+export type InvoiceStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
+
+export const INVOICE_STATUSES: InvoiceStatus[] = ['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED'];
+
+export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
+  DRAFT: 'Draft',
+  SUBMITTED: 'Waiting for approval',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
+};
+
+export const INVOICE_STATUS_TONES: Record<InvoiceStatus, 'neutral' | 'warning' | 'success' | 'danger'> = {
+  DRAFT: 'neutral',
+  SUBMITTED: 'warning',
+  APPROVED: 'success',
+  REJECTED: 'danger',
+};
+
+/** Who prepares invoices and keeps the vendor list. Not the super admin: they
+ *  approve invoices, and whoever approves a bill must not have written it. */
+export const INVOICE_EDITOR_ROLES: Role[] = ['ADMIN', 'SYSTEM_ADMIN'];
+
+export const isInvoiceEditor = (role: Role | null | undefined): boolean =>
+  !!role && INVOICE_EDITOR_ROLES.includes(role);
+
+export interface InvoiceSummary {
+  id: number;
+  number: string;
+  vendor_id: number;
+  vendor_name: string;
+  vendor_kind: VendorKind;
+  period_start: string;
+  period_end: string;
+  status: InvoiceStatus;
+  currency: string;
+  /** Always the sum of the lines, worked out by the server. */
+  total_amount: string;
+  line_count: number;
+  vendor_invoice_ref: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  submitted_at: string | null;
+  decided_at: string | null;
+}
+
+export interface InvoiceLine {
+  id: number;
+  traveller_id: number;
+  request_id: number;
+  traveller_name: string;
+  employee_code: string | null;
+  request_type: RequestType | null;
+  travel_date: string | null;
+  /** As billed: name, trip and campaign, kept with the line. */
+  description: string;
+  project_code: string | null;
+  booking_reference: string | null;
+  amount: string;
+  /** Why it cannot be billed as it stands - cancelled, cost removed, paid to
+   *  someone else. Submitting and approving wait until it is dealt with. */
+  problem: string | null;
+}
+
+export interface InvoiceEvent {
+  action: string;
+  actor_name: string | null;
+  at: string;
+  summary: string;
+  comment: string | null;
+}
+
+export interface Invoice extends InvoiceSummary {
+  vendor_gstin: string | null;
+  vendor_contact_name: string | null;
+  vendor_phone: string | null;
+  vendor_email: string | null;
+  notes: string | null;
+  updated_by_name: string | null;
+  updated_at: string;
+  submitted_by_name: string | null;
+  decided_by_name: string | null;
+  decision_comment: string | null;
+  lines: InvoiceLine[];
+  history: InvoiceEvent[];
+  /** What the viewer may do now - the same rules the server enforces. */
+  can_edit: boolean;
+  can_submit: boolean;
+  can_delete: boolean;
+  can_decide: boolean;
+}
+
+export interface InvoiceList {
+  items: InvoiceSummary[];
+  /** Per status, whatever the status filter: the tabs' counts. */
+  counts: Record<InvoiceStatus, number>;
+  total: number;
+}
+
+/** A booked trip an invoice could carry. */
+export interface EligibleRow {
+  traveller_id: number;
+  request_id: number;
+  traveller_name: string;
+  employee_code: string | null;
+  request_type: RequestType;
+  travel_date: string | null;
+  trip: string;
+  project_code: string;
+  project_name: string;
+  booking_reference: string | null;
+  amount: string;
+  /** Null when nobody recorded who was paid; saving it records this vendor. */
+  vendor_id: number | null;
+  on_this_invoice: boolean;
+  /** Only on a line already on the invoice: why it can no longer be kept. */
+  problem: string | null;
+}
+
+export interface InvoicePayload {
+  vendor_id: number;
+  period_start: string;
+  period_end: string;
+  traveller_ids: number[];
+  vendor_invoice_ref?: string | null;
+  notes?: string | null;
 }

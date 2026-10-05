@@ -11,7 +11,7 @@ from datetime import date, datetime
 from sqlalchemy import Boolean, Date, Enum as SAEnum, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
-from app.core.enums import Designation, Gender, Role, UserStatus
+from app.core.enums import ADMIN_ROLES, Designation, Gender, Role, UserStatus
 from app.database import Base
 from app.models.base import TenantMixin, TimestampMixin, UTCDateTime
 
@@ -72,6 +72,14 @@ class User(Base, TenantMixin, TimestampMixin):
     )
     department = relationship("Department", lazy="joined")
 
+    #: The manager a team member reports to. One level: only ground staff
+    #: report to someone, and only to a MANAGER (checked by the routers).
+    manager_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_users_manager_id"),
+        nullable=True,
+        index=True,
+    )
+
     # --- preferences --------------------------------------------------------
     # Persisted server-side so the theme follows the user across devices,
     # rather than living only in one browser's localStorage.
@@ -108,7 +116,8 @@ class User(Base, TenantMixin, TimestampMixin):
     created_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    created_by = relationship("User", remote_side=[id], lazy="noload")
+    created_by = relationship("User", remote_side=[id], lazy="noload", foreign_keys=[created_by_id])
+    manager = relationship("User", remote_side=[id], lazy="select", foreign_keys=[manager_id])
 
     @validates("status")
     def _mirror_status(self, _key: str, value: UserStatus | str) -> UserStatus:
@@ -125,8 +134,27 @@ class User(Base, TenantMixin, TimestampMixin):
         return bool(self.password_hash)
 
     @property
+    def manager_name(self) -> str | None:
+        return self.manager.full_name if self.manager is not None else None
+
+    @property
+    def active_manager(self) -> "User | None":
+        """The manager who answers for this person's trips right now.
+
+        None when their manager's account is switched off: nobody is left to
+        recommend, so a request must not look as if it is waiting on them, and
+        nobody should be copied on mail they can no longer act on.
+        """
+        manager = self.manager
+        return manager if manager is not None and manager.is_active else None
+
+    @property
     def is_admin(self) -> bool:
-        return self.role in (Role.ADMIN, Role.SYSTEM_ADMIN)
+        return self.role in ADMIN_ROLES
+
+    @property
+    def is_manager(self) -> bool:
+        return self.role is Role.MANAGER
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<User {self.id} {self.email} {self.role}>"

@@ -198,7 +198,7 @@ class TestWhoMayChangeWhom:
     def test_an_admin_cannot_touch_a_system_admin(self, client, db, people):
         boss, admin, _ = people
         headers = auth(admin)
-        expected = "Only a system administrator can change another system administrator's account."
+        expected = accounts.ADMIN_TIER_MESSAGE
 
         r = set_status(client, admin, boss, "DEACTIVATED")
         assert (r.status_code, r.json()["detail"]) == (403, expected)

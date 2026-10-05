@@ -22,9 +22,9 @@ from sqlalchemy.orm import Session
 
 from app.core import clock
 from app.core.enums import (
+    ADMIN_ROLES,
     NotificationStatus,
     RequestType,
-    Role,
     TravellerStatus,
 )
 from app.models.base import naive_utcnow
@@ -89,12 +89,15 @@ def remind_travellers(db: Session, tenant_id: str, *, today: date | None = None)
             else request.route_label(" to ")
         )
         when = (
-            request.start_at.strftime("%d %b, %H:%M")
+            clock.time_label(request.start_at, "%d %b")
             if request.start_at
             else starts.strftime("%d %b")
         )
         reference = traveller.booking_reference or "see your confirmation"
         greeting = person.full_name.split()[0] if person.full_name else "there"
+        # The morning of a cab, the plate and the driver's phone are what is
+        # actually looked for, so they ride along when an admin recorded them.
+        car = request.cab_sent_label if request.request_type is RequestType.LOCAL_CAB else None
 
         written = notifications.notify(
             db,
@@ -102,7 +105,8 @@ def remind_travellers(db: Session, tenant_id: str, *, today: date | None = None)
             user=person,
             kind="TRAVEL_REMINDER",
             title=f"Coming up: {where}",
-            body=f"Your trip to {where} starts {when}. Reference {reference}.",
+            body=f"Your trip to {where} starts {when}. Reference {reference}."
+            + (f" Cab: {car}." if car else ""),
             request_id=request.id,
             email_subject=f"Reminder - {where} on {starts.strftime('%d %b')}",
             email_body="\n".join(
@@ -114,6 +118,7 @@ def remind_travellers(db: Session, tenant_id: str, *, today: date | None = None)
                     f"  Trip         {where}",
                     f"  Starts       {when}",
                     f"  Reference    {reference}",
+                    *([f"  Cab          {car}"] if car else []),
                     "",
                     "Carry photo ID that matches the name on the booking.",
                 ]
@@ -172,7 +177,7 @@ def remind_admins_of_stale_requests(
         db.execute(
             select(User).where(
                 User.tenant_id == tenant_id,
-                User.role.in_([Role.ADMIN, Role.SYSTEM_ADMIN]),
+                User.role.in_(ADMIN_ROLES),
                 User.is_active.is_(True),
             )
         )
@@ -197,16 +202,16 @@ def remind_admins_of_stale_requests(
                 kind="REQUEST_STALE",
                 title=f"Undecided for {age} days: {where}",
                 body=(
-                    f"Request #{request.id} ({where}) has {pending} traveller(s) "
+                    f"Request {request.id} ({where}) has {pending} traveller(s) "
                     f"still awaiting a decision after {age} days."
                 ),
                 request_id=request.id,
-                email_subject=f"Request #{request.id} is still undecided",
+                email_subject=f"Request {request.id} is still undecided",
                 email_body="\n".join(
                     [
                         f"Hello {admin.full_name.split()[0] if admin.full_name else 'there'},",
                         "",
-                        f"Request #{request.id} ({where}), raised by "
+                        f"Request {request.id} ({where}), raised by "
                         f"{request.requester.full_name if request.requester else 'a colleague'}, "
                         f"has {pending} traveller(s) still awaiting a decision "
                         f"after {age} days.",

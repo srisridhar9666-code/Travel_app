@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.deps import AdminUser, CurrentUser, DbSession
+from app.core.deps import AdminOrManager, AdminUser, CurrentUser, DbSession
 from app.core.enums import AuditAction, ProjectStatus
 from app.models.project import Project
 from app.schemas.project import (
@@ -26,13 +26,13 @@ from app.schemas.project import (
     ProjectUpdate,
 )
 from app.services import audit, locations
-from app.services.projects import generate_code, is_fallback, request_counts
-from app.services.seed import OTHER_PROJECT_CODE, ensure_other_project
+from app.services.projects import is_fallback, next_code, request_counts
+from app.services.seed import ensure_other_project
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
-#: How many times create tries an automatic code that lost a race to another
-#: admin creating a same-named campaign in the same moment.
+#: How many times create tries the next campaign ID after losing it to another
+#: campaign created in the same moment.
 _CODE_ATTEMPTS = 3
 
 #: Live campaigns first, put-away ones last - not alphabetical on the enum.
@@ -79,26 +79,13 @@ def _get_or_404(db: DbSession, project_id: int, tenant_id: str) -> Project:
     return project
 
 
-def _refuse_typed_code(
-    db: DbSession, tenant_id: str, code: str, exclude_id: int | None = None
-) -> None:
-    """409 when a typed code is already taken, or is the built-in campaign's."""
-    if code.upper() == OTHER_PROJECT_CODE:
+def _admins_archive(actor, new_status: ProjectStatus | None) -> None:
+    """Managers create and edit campaigns; putting one away is an admin's call,
+    as archiving, restoring and deleting are."""
+    if new_status is ProjectStatus.ARCHIVED and not actor.is_admin:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"{OTHER_PROJECT_CODE} is kept for the built-in Other campaign. "
-                "Type another code, or leave it blank."
-            ),
-        )
-    query = select(Project).where(Project.tenant_id == tenant_id, Project.code == code)
-    if exclude_id is not None:
-        query = query.where(Project.id != exclude_id)
-    clash = db.execute(query).scalar_one_or_none()
-    if clash is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Code {code} is already used by “{clash.name}”.",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an admin can archive a campaign.",
         )
 
 
@@ -127,7 +114,7 @@ def list_projects(
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> ProjectListResponse:
     """Every signed-in user can read the campaign list - ground staff need it to
-    tag a request. Only admins can change it."""
+    tag a request. Admins and managers can change it."""
     # The "Other" campaign is normally created at startup, but that step can
     # fail on a server that started before its migration ran. Making sure of
     # it here means the request form's "Other" option cannot silently vanish.
@@ -149,7 +136,7 @@ def list_projects(
         )
     if project_status is not None:
         filters.append(Project.status == project_status)
-    if not user.is_admin:
+    if not (user.is_admin or user.is_manager):
         # Ground staff never see archived campaigns, even by asking for them;
         # an archived campaign is one they must not be raising requests against.
         filters.append(Project.status != ProjectStatus.ARCHIVED)
@@ -178,13 +165,12 @@ def list_projects(
 
 @router.post("", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
 def create_project(
-    payload: ProjectCreate, actor: AdminUser, request: Request, db: DbSession
+    payload: ProjectCreate, actor: AdminOrManager, request: Request, db: DbSession
 ) -> ProjectRead:
-    if payload.code is not None:
-        _refuse_typed_code(db, actor.tenant_id, payload.code)
+    _admins_archive(actor, payload.status)
     # Spelling cleaned the way request places are, so "hyd" is Hyderabad.
     state, city = locations.canonical(db, actor.tenant_id, payload.state, payload.city)
-    fields = payload.model_dump(exclude={"code", "state", "city"})
+    fields = payload.model_dump(exclude={"state", "city"})
 
     project: Project | None = None
     lost: set[str] = set()  # codes another request committed first
@@ -192,10 +178,7 @@ def create_project(
         candidate = Project(
             tenant_id=actor.tenant_id,
             created_by_id=actor.id,
-            code=payload.code
-            or generate_code(
-                db, actor.tenant_id, payload.name, payload.start_date, also_taken=lost
-            ),
+            code=next_code(db, actor.tenant_id, also_taken=lost),
             state=state,
             city=city,
             **fields,
@@ -206,11 +189,6 @@ def create_project(
                 db.add(candidate)
                 db.flush()
         except IntegrityError:
-            if payload.code is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Code {payload.code} is already used by another campaign.",
-                ) from None
             lost.add(candidate.code)
             continue
         project = candidate
@@ -218,7 +196,7 @@ def create_project(
     if project is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Could not make a unique code for this campaign. Type one in and try again.",
+            detail="Could not give this campaign an ID. Please try again.",
         )
 
     audit.record(
@@ -246,7 +224,7 @@ def create_project(
 @router.get("/{project_id}", response_model=ProjectRead)
 def get_project(project_id: int, user: CurrentUser, db: DbSession) -> ProjectRead:
     project = _get_or_404(db, project_id, user.tenant_id)
-    if not user.is_admin and project.status is ProjectStatus.ARCHIVED:
+    if not (user.is_admin or user.is_manager) and project.status is ProjectStatus.ARCHIVED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
     return _to_read(project, _count(db, project))
 
@@ -255,34 +233,19 @@ def get_project(project_id: int, user: CurrentUser, db: DbSession) -> ProjectRea
 def update_project(
     project_id: int,
     payload: ProjectUpdate,
-    actor: AdminUser,
+    actor: AdminOrManager,
     request: Request,
     db: DbSession,
 ) -> ProjectRead:
     project = _get_or_404(db, project_id, actor.tenant_id)
     updates = payload.model_dump(exclude_unset=True)
+    _admins_archive(actor, updates.get("status"))
 
     if is_fallback(project):
         # The request form and seed find it by its code, and offer it only
         # while it is Active. Its name and description are free to change.
-        if "code" in updates and updates["code"] != project.code:
-            raise _fallback_locked("given another code")
         if updates.get("status", ProjectStatus.ACTIVE) is not ProjectStatus.ACTIVE:
             raise _fallback_locked("paused, completed or archived")
-
-    if "code" in updates:
-        if updates["code"] is None:
-            # Blank means "make one for me", on edit as on create. Excluding
-            # itself means an unchanged automatic code comes back the same.
-            updates["code"] = generate_code(
-                db,
-                actor.tenant_id,
-                updates.get("name") or project.name,
-                updates.get("start_date", project.start_date),
-                exclude_id=project.id,
-            )
-        elif updates["code"] != project.code:
-            _refuse_typed_code(db, actor.tenant_id, updates["code"], exclude_id=project.id)
 
     if "state" in updates or "city" in updates:
         updates["state"], updates["city"] = locations.canonical(
@@ -327,15 +290,7 @@ def update_project(
             actor=actor,
             request=request,
         )
-    try:
-        db.commit()
-    except IntegrityError:
-        # Another admin took the same code in the same moment.
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="That code was just taken by another campaign. Try again.",
-        ) from None
+    db.commit()
     db.refresh(project)
     return _to_read(project, _count(db, project))
 

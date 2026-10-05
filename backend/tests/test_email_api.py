@@ -149,3 +149,38 @@ class TestTestSend:
             for n in range(ratelimit.EMAIL_TEST.limit + 1)
         ]
         assert codes[-1] == 429
+
+
+class TestInviteLinkChoice:
+    """The admin chooses whether an invite or reset link is emailed; either
+    way the link comes back to copy and share by hand."""
+
+    def test_an_invite_can_skip_the_email(self, client, people, configured, outbox):
+        admin, _ = people
+        r = client.post("/users", headers=auth(admin), json={
+            "email": "anita@designboxed.com", "full_name": "Anita Desai",
+            "gender": "FEMALE", "send_email": False,
+        })
+        assert r.status_code == 201, r.text
+        assert r.json()["invite_url"] and r.json()["email_sent"] is False
+        assert outbox.messages == []
+
+    def test_an_invite_is_emailed_by_default(self, client, people, configured, outbox):
+        admin, _ = people
+        r = client.post("/users", headers=auth(admin), json={
+            "email": "anita@designboxed.com", "full_name": "Anita Desai", "gender": "FEMALE",
+        })
+        assert r.json()["email_sent"] is True and r.json()["invite_url"]
+        assert [m["to"] for m in outbox.messages] == ["anita@designboxed.com"]
+
+    def test_a_reset_link_can_skip_the_email(self, client, people, configured, outbox):
+        admin, ravi = people
+        r = client.post(f"/users/{ravi.id}/reinvite", headers=auth(admin),
+                        params={"send_email": "false"})
+        assert r.status_code == 200, r.text
+        assert r.json()["invite_url"] and r.json()["email_sent"] is False
+        assert outbox.messages == []
+
+        r = client.post(f"/users/{ravi.id}/reinvite", headers=auth(admin))
+        assert r.json()["email_sent"] is True
+        assert [m["to"] for m in outbox.messages] == [ravi.email]

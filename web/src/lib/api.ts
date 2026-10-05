@@ -1,6 +1,8 @@
 import axios, { AxiosError } from 'axios';
 
 import type {
+  CabTrip,
+  CabType,
   AppNotification,
   AnalyticsBundle,
   AuditRow,
@@ -10,6 +12,7 @@ import type {
   CoStayMatch,
   CostPreview,
   Department,
+  EligibleRow,
   EmailStatus,
   EmailTestResult,
   FilterOptions,
@@ -20,10 +23,15 @@ import type {
   IdProof,
   ImportPreview,
   ImportResult,
+  Invoice,
+  InvoiceList,
+  InvoicePayload,
+  InvoiceStatus,
   InviteLink,
   JobResult,
   LedgerRow,
   LoginResponse,
+  ManagerRecommendation,
   NotificationPreferences,
   NotificationLedger,
   OpenTrips,
@@ -38,9 +46,14 @@ import type {
   RequestRevision,
   RequestType,
   RetentionStatus,
+  ReviewFilter,
   TravelHistory,
   SchedulerStatus,
   RoomSharingChoice,
+  TeamChange,
+  TeamChangeList,
+  TeamChangeStatus,
+  TeamDecision,
   ThemePreference,
   Ticket,
   TokenPreview,
@@ -48,6 +61,8 @@ import type {
   TravelRequest,
   UserProfile,
   UserRow,
+  Vendor,
+  VendorPayload,
   UserStatus,
 } from '@/types';
 
@@ -57,7 +72,7 @@ import type {
  * shell compares it with what /health reports, to tell an admin when the API
  * process is older than this page.
  */
-export const API_VERSION = '0.9.0';
+export const API_VERSION = '0.16.0';
 
 /** Negative when `a` is older than `b`, by dotted number. */
 export function compareVersions(a: string, b: string): number {
@@ -72,7 +87,7 @@ export function compareVersions(a: string, b: string): number {
 
 /** What a request to a route the server does not have is told instead of
  *  FastAPI's bare "Not Found" or "Method Not Allowed". */
-export const STALE_API_MESSAGE =
+const STALE_API_MESSAGE =
   'The server does not know this action yet - it is running older code than this page. ' +
   'Restart the API (after running its migrations), then try again.';
 
@@ -80,7 +95,7 @@ export const STALE_API_MESSAGE =
  * Single axios instance for the whole app. In dev, Vite proxies `/api` to the
  * FastAPI process, so the browser only ever sees one origin.
  */
-export const api = axios.create({
+const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api',
   timeout: 30_000,
 });
@@ -197,7 +212,7 @@ export function errorMessage(error: unknown, fallback = 'Something went wrong.')
 
 // --- health ---------------------------------------------------------------
 
-export interface HealthResponse {
+interface HealthResponse {
   status: string;
   app: string;
   /** Absent on servers from before the version handshake. */
@@ -247,13 +262,15 @@ export const forgotPassword = (email: string) =>
 
 // --- users ----------------------------------------------------------------
 
-export interface UserQuery {
+interface UserQuery {
   search?: string;
   role?: string;
   is_active?: boolean;
   /** Without it, everyone except deleted accounts. */
   status?: UserStatus;
   department_id?: number;
+  /** Only the people who report to this manager. */
+  manager_id?: number;
   page?: number;
   page_size?: number;
 }
@@ -274,6 +291,10 @@ export interface UserPayload {
   /** The city or constituency. */
   base_location?: string | null;
   department_id?: number | null;
+  /** Ground staff only: the manager they report to. */
+  manager_id?: number | null;
+  /** Create only: email the invitation as well as showing the link. */
+  send_email?: boolean;
 }
 
 /** A partial update. Status is not here: it has its own endpoint. */
@@ -285,7 +306,7 @@ export const createUser = (payload: UserPayload) =>
 export const updateUser = (id: number, payload: UserUpdatePayload) =>
   api.patch<UserRow>(`/users/${id}`, payload).then((r) => r.data);
 
-export interface StatusChange {
+interface StatusChange {
   status: UserStatus;
   /** Left (or Deleted) only; defaults to today on the server. */
   exited_on?: string | null;
@@ -298,8 +319,66 @@ export const changeUserStatus = (id: number, change: StatusChange) =>
 export const fetchUserOpenTrips = (id: number) =>
   api.get<OpenTrips>(`/users/${id}/open-trips`).then((r) => r.data);
 
-export const reinviteUser = (id: number) =>
-  api.post<InviteLink>(`/users/${id}/reinvite`).then((r) => r.data);
+/** The link always comes back to copy; `sendEmail` also emails it to them. */
+export const reinviteUser = (id: number, sendEmail = true) =>
+  api
+    .post<InviteLink>(`/users/${id}/reinvite`, null, { params: { send_email: sendEmail } })
+    .then((r) => r.data);
+
+// --- a manager's team ---------------------------------------------------------
+
+/** The people who report to the signed-in manager. */
+export const fetchMyTeam = () => api.get<UserRow[]>('/team/members').then((r) => r.data);
+
+export interface TeamAddPayload {
+  email: string;
+  full_name: string;
+  gender: string;
+  designation?: string | null;
+  phone?: string | null;
+  employee_code?: string | null;
+  base_state?: string | null;
+  base_location?: string | null;
+  note?: string | null;
+}
+
+type TeamEditPayload = Partial<Omit<TeamAddPayload, 'email' | 'gender'>>;
+
+interface TeamRemovePayload {
+  status: 'LEFT' | 'DEACTIVATED';
+  exited_on?: string | null;
+  reason: string;
+  note?: string | null;
+}
+
+export const askToAddMember = (payload: TeamAddPayload) =>
+  api.post<TeamChange>('/team/changes/add', payload).then((r) => r.data);
+
+export const askToEditMember = (userId: number, payload: TeamEditPayload) =>
+  api.post<TeamChange>(`/team/changes/edit/${userId}`, payload).then((r) => r.data);
+
+export const askToRemoveMember = (userId: number, payload: TeamRemovePayload) =>
+  api.post<TeamChange>(`/team/changes/remove/${userId}`, payload).then((r) => r.data);
+
+export const withdrawTeamChange = (id: number) =>
+  api.post<TeamChange>(`/team/changes/${id}/cancel`).then((r) => r.data);
+
+/** A manager's own asks, or every ask for an admin. */
+export const fetchTeamChanges = (status?: TeamChangeStatus) =>
+  api
+    .get<TeamChangeList>('/team/changes', { params: status ? { status } : {} })
+    .then((r) => r.data);
+
+export const approveTeamChange = (id: number, comment: string, sendEmail = true) =>
+  api
+    .post<TeamDecision>(`/team/changes/${id}/approve`, {
+      comment: comment.trim() || null,
+      send_email: sendEmail,
+    })
+    .then((r) => r.data);
+
+export const rejectTeamChange = (id: number, comment: string) =>
+  api.post<TeamDecision>(`/team/changes/${id}/reject`, { comment }).then((r) => r.data);
 
 export const unlockUser = (id: number) =>
   api.post<UserRow>(`/users/${id}/unlock`).then((r) => r.data);
@@ -313,9 +392,15 @@ export const fetchDepartments = () =>
 export const createDepartment = (name: string) =>
   api.post<Department>('/departments', { name }).then((r) => r.data);
 
+export const renameDepartment = (id: number, name: string) =>
+  api.patch<Department>(`/departments/${id}`, { name }).then((r) => r.data);
+
+/** Refused (409) while anyone is still in it. */
+export const deleteDepartment = (id: number) => api.delete(`/departments/${id}`);
+
 // --- audit ----------------------------------------------------------------
 
-export interface AuditQuery {
+interface AuditQuery {
   action?: string;
   entity_type?: string;
   actor_user_id?: number;
@@ -331,18 +416,16 @@ export const verifyAuditChain = () =>
 
 // --- projects -------------------------------------------------------------
 
-export interface ProjectQuery {
+interface ProjectQuery {
   search?: string;
   status?: string;
   page?: number;
   page_size?: number;
 }
 
+/** No code: every campaign's ID is generated by the server. */
 export interface ProjectPayload {
   name: string;
-  /** Blank or null: the server makes one from the name's initials and the
-   *  start year. */
-  code?: string | null;
   description?: string | null;
   client_name?: string | null;
   state?: string | null;
@@ -437,7 +520,7 @@ export function commitImport(file: File) {
 
 // --- requests -------------------------------------------------------------
 
-export interface RequestQuery {
+interface RequestQuery {
   mine?: boolean;
   status?: string;
   type?: string;
@@ -446,6 +529,12 @@ export interface RequestQuery {
   priority?: RequestPriority;
   /** 'priority' puts high first, then medium, then low; newest first within each. */
   sort?: 'newest' | 'priority';
+  /** Two-level approval: still waiting on a manager, or already reviewed. */
+  review?: ReviewFilter;
+  /** Cabs waiting on an admin's answer to "one more day". */
+  extension?: 'pending';
+  /** Decided trips whose requester asked to cancel, still waiting. */
+  cancellation?: 'pending';
   page?: number;
   page_size?: number;
 }
@@ -471,6 +560,10 @@ export interface RequestPayload {
   hotel_city?: string | null;
   check_in?: string | null;
   check_out?: string | null;
+  /** A cab's size and distance; the server clears them for anything else. */
+  cab_type?: CabType | null;
+  cab_trip?: CabTrip | null;
+  cab_distance_km?: number | null;
   travel_reason?: string;
   /** Only with the fallback "Other" campaign: the name the requester typed. */
   other_project_name?: string | null;
@@ -478,6 +571,10 @@ export interface RequestPayload {
   priority?: RequestPriority;
   notes?: string | null;
   is_draft?: boolean;
+  /** A new hotel request only: the requester's own room. Left out, the admin
+   *  decides; a shared room is an ask until an admin confirms it. */
+  room_sharing?: RoomSharingChoice | null;
+  share_with_user_id?: number | null;
 }
 
 export const fetchRequests = (params: RequestQuery) =>
@@ -508,6 +605,24 @@ export const checkRequest = (payload: RequestPayload & { request_id?: number }) 
     .post<{ conflicts: RequestConflict[]; costay_matches: CoStayMatch[] }>('/requests/check', payload)
     .then((r) => r.data);
 
+/** Colleagues of the caller's gender staying in a city, from the moment the city
+ *  is picked: with dates, the stays that overlap; without, every stay to come. */
+export const fetchRoomMatches = (params: {
+  city: string;
+  check_in?: string;
+  check_out?: string;
+  request_id?: number;
+}) => api.get<CoStayMatch[]>('/requests/room-matches', { params }).then((r) => r.data);
+
+/** An admin puts a hotel traveller in one room with a colleague, or - with
+ *  null - in a room of their own. Both sides of a pairing are updated. */
+export const allotRoom = (requestId: number, travellerId: number, shareWithUserId: number | null) =>
+  api
+    .post<TravelRequest>(`/requests/${requestId}/travellers/${travellerId}/room`, {
+      share_with_user_id: shareWithUserId,
+    })
+    .then((r) => r.data);
+
 export const setRoomSharing = (
   id: number,
   body: { traveller_id: number; choice: RoomSharingChoice; share_with_user_id?: number | null },
@@ -527,15 +642,24 @@ export const fetchColleagues = () =>
 
 /** Without filters, the whole queue; with them, only what matches - for tab
  *  labels that agree with the filtered list under them. */
-export const fetchQueueCounts = (filters: { search?: string; priority?: RequestPriority } = {}) =>
+export const fetchQueueCounts = (
+  filters: {
+    type?: RequestType;
+    search?: string;
+    priority?: RequestPriority;
+    review?: ReviewFilter;
+  } = {},
+) =>
   api.get<QueueCounts>('/requests/queue/counts', { params: filters }).then((r) => r.data);
 
 /** Every request in one queue tab, not just a page, for the CSV export. Given
  *  longer than the default timeout: a big tab is read row by row as the admin. */
 export const exportQueue = (params: {
   status: string;
+  type?: RequestType;
   search?: string;
   priority?: RequestPriority;
+  review?: ReviewFilter;
 }) =>
   api
     .get<QueueExport>('/requests/queue/export', { params, timeout: 120_000 })
@@ -545,6 +669,68 @@ export const exportQueue = (params: {
  *  the whole set back, so the queue never shows a half-applied decision. */
 export const decideBatch = (requestId: number, decisions: BatchDecisionItem[]) =>
   api.post<TravelRequest>(`/requests/${requestId}/decide`, { decisions }).then((r) => r.data);
+
+/** A manager's team requests: still waiting for their recommendation, or
+ *  already reviewed. One shared query key, so the sidebar badge and the Team
+ *  approvals page agree. */
+export const fetchTeamReviews = (review: ReviewFilter) =>
+  fetchRequests({ mine: false, review, sort: 'priority', page_size: 100 });
+
+interface RecommendationBody {
+  recommendation: ManagerRecommendation;
+  comment: string;
+  /** Traveller rows on the request. Left out: every one of the manager's
+   *  team on it who is still pending. */
+  traveller_ids?: number[];
+}
+
+/** The first of the two levels: the manager's view, with a comment. Advice -
+ *  the admin makes the final decision. */
+export const recommendRequest = (requestId: number, body: RecommendationBody) =>
+  api.post<TravelRequest>(`/requests/${requestId}/recommendation`, body).then((r) => r.data);
+
+// --- cabs: the car sent, and one more day ---------------------------------
+
+export interface CabBookingBody {
+  booked_cab_type: CabType;
+  vehicle_number: string;
+  driver_name: string;
+  driver_phone: string;
+  /** Off when the same dialog is about to mark the traveller booked: the
+   *  booking notice then carries the car, so one message goes, not two. */
+  notify?: boolean;
+  /** The cab operator paid, for everyone riding. Left out, each keeps theirs. */
+  vendor_id?: number;
+}
+
+/** Record or change the car sent for a cab. Admins only; logged, and everyone
+ *  riding is told unless `notify` is false. */
+export const recordCabBooking = (requestId: number, body: CabBookingBody) =>
+  api.put<TravelRequest>(`/requests/${requestId}/cab-booking`, body).then((r) => r.data);
+
+/** Ask to keep a decided cab one more day - the requester or a traveller on it. */
+export const askCabExtension = (requestId: number, reason: string) =>
+  api
+    .post<TravelRequest>(`/requests/${requestId}/cab-extension`, { reason })
+    .then((r) => r.data);
+
+/** An admin's answer to "one more day". A rejection needs a comment. */
+/** Approve an ask to cancel (the trip is cancelled) or reject it with a comment. */
+export const decideCancellation = (
+  requestId: number,
+  body: { approve: boolean; comment?: string | null },
+) =>
+  api
+    .post<TravelRequest>(`/requests/${requestId}/cancellation/decide`, body)
+    .then((r) => r.data);
+
+export const decideCabExtension = (
+  requestId: number,
+  body: { approve: boolean; comment?: string | null },
+) =>
+  api
+    .post<TravelRequest>(`/requests/${requestId}/cab-extension/decide`, body)
+    .then((r) => r.data);
 
 // --- tickets and extraction -----------------------------------------------
 
@@ -568,11 +754,6 @@ export const reextractTicket = (ticketId: number) =>
   api.post<Ticket>(`/tickets/${ticketId}/extract`, null, { timeout: 120_000 }).then((r) => r.data);
 
 /** The only path to BOOKED. Nothing reaches a traveller before this. */
-export const confirmTicket = (
-  ticketId: number,
-  body: { booking_reference: string; carrier?: string | null; service_number?: string | null; notify?: boolean },
-) => api.post<Ticket>(`/tickets/${ticketId}/confirm`, body).then((r) => r.data);
-
 export const discardTicket = (ticketId: number) =>
   api.post<Ticket>(`/tickets/${ticketId}/discard`).then((r) => r.data);
 
@@ -580,6 +761,13 @@ export const discardTicket = (ticketId: number) =>
  *  the document carries a PNR and a passenger name. */
 export const fetchTicketFile = (ticketId: number) =>
   api.get(`/tickets/${ticketId}/file`, { responseType: 'blob' }).then((r) => r.data as Blob);
+
+/** A traveller's own confirmed ticket, for them (or the person who asked for
+ *  the trip) to keep. */
+export const fetchMyTicket = (requestId: number, travellerId: number) =>
+  api
+    .get(`/requests/${requestId}/travellers/${travellerId}/ticket`, { responseType: 'blob' })
+    .then((r) => r.data as Blob);
 
 // --- the notification ledger ----------------------------------------------
 
@@ -642,10 +830,19 @@ export const runReminderJobs = () =>
 export const fetchAnalytics = (params: InsightFilters = {}) =>
   api.get<AnalyticsBundle>('/analytics', { params: repeatParams({ ...params }) }).then((r) => r.data);
 
+/** `vendorId`: who was paid, for everyone in `amounts`. Left out, each keeps
+ *  the vendor they had. */
 export const setCosts = (
   requestId: number,
   amounts: { traveller_id: number; amount: string | null; note?: string | null }[],
-) => api.post<TravelRequest>(`/requests/${requestId}/costs`, { amounts }).then((r) => r.data);
+  vendorId?: number,
+) =>
+  api
+    .post<TravelRequest>(`/requests/${requestId}/costs`, {
+      amounts,
+      ...(vendorId !== undefined ? { vendor_id: vendorId } : {}),
+    })
+    .then((r) => r.data);
 
 /** What an even split comes to, before saving. Shown so the odd paisa on the
  *  first row does not look like a bug the first time someone divides by three. */
@@ -656,12 +853,87 @@ export const previewSplit = (
 
 export const splitCost = (
   requestId: number,
-  body: { total_amount: string; traveller_ids: number[]; note?: string | null },
+  body: { total_amount: string; traveller_ids: number[]; note?: string | null; vendor_id?: number },
 ) => api.post<TravelRequest>(`/requests/${requestId}/costs/split`, body).then((r) => r.data);
+
+// --- vendors and invoices ---------------------------------------------------
+
+export const fetchVendors = (active?: boolean) =>
+  api
+    .get<Vendor[]>('/vendors', { params: active === undefined ? {} : { active } })
+    .then((r) => r.data);
+
+export const createVendor = (payload: VendorPayload) =>
+  api.post<Vendor>('/vendors', payload).then((r) => r.data);
+
+export const updateVendor = (id: number, payload: Partial<VendorPayload>) =>
+  api.patch<Vendor>(`/vendors/${id}`, payload).then((r) => r.data);
+
+/** Switched off, a vendor is no longer offered for new costs; its invoices
+ *  can still be finished. */
+export const setVendorActive = (id: number, active: boolean) =>
+  api.post<Vendor>(`/vendors/${id}/${active ? 'activate' : 'deactivate'}`).then((r) => r.data);
+
+export const fetchInvoices = (params: { status?: InvoiceStatus; vendor_id?: number; limit?: number } = {}) =>
+  api.get<InvoiceList>('/invoices', { params }).then((r) => r.data);
+
+export const fetchInvoice = (id: number) =>
+  api.get<Invoice>(`/invoices/${id}`).then((r) => r.data);
+
+/** Booked trips with a cost, paid to the vendor, in the period, on no other
+ *  invoice. With `invoice_id`, that invoice's own lines are included and marked. */
+export const fetchEligible = (params: {
+  vendor_id: number;
+  start: string;
+  end: string;
+  invoice_id?: number;
+  include_unassigned?: boolean;
+}) => api.get<EligibleRow[]>('/invoices/eligible', { params }).then((r) => r.data);
+
+/** Why the period's trips are not listed for this vendor, counted by reason. */
+export interface WhyNotListed {
+  trips_in_period: number;
+  not_booked_yet: number;
+  booked_without_cost: number;
+  other_vendor: number;
+  no_vendor_recorded: number;
+  already_invoiced: number;
+}
+
+export const fetchWhyNotListed = (params: { vendor_id: number; start: string; end: string }) =>
+  api.get<WhyNotListed>('/invoices/eligible/why', { params }).then((r) => r.data);
+
+export const createInvoice = (payload: InvoicePayload) =>
+  api.post<Invoice>('/invoices', payload).then((r) => r.data);
+
+export const updateInvoice = (id: number, payload: Partial<InvoicePayload>) =>
+  api.patch<Invoice>(`/invoices/${id}`, payload).then((r) => r.data);
+
+export const submitInvoice = (id: number) =>
+  api.post<Invoice>(`/invoices/${id}/submit`).then((r) => r.data);
+
+/** `expected_total` is the total on screen: if a cost moved it since, the
+ *  server refuses and the page shows the new figures instead. */
+export const approveInvoice = (id: number, body: { comment?: string | null; expected_total?: string }) =>
+  api.post<Invoice>(`/invoices/${id}/approve`, body).then((r) => r.data);
+
+export const rejectInvoice = (id: number, comment: string) =>
+  api.post<Invoice>(`/invoices/${id}/reject`, { comment }).then((r) => r.data);
+
+export const deleteInvoice = (id: number) => api.delete(`/invoices/${id}`).then(() => undefined);
+
+/** Fetched as a blob so the bearer token is attached; the download is logged. */
+export const downloadInvoiceCsv = (id: number) =>
+  api.get(`/invoices/${id}/export.csv`, { responseType: 'blob' }).then((r) => r.data as Blob);
+
+/** The print view tells the server it was opened, so the PDF copy is logged
+ *  beside the CSV downloads. */
+export const markInvoicePrinted = (id: number) =>
+  api.post(`/invoices/${id}/printed`).then(() => undefined);
 
 // --- audit viewer, hardening ----------------------------------------------
 
-export interface LedgerGrants {
+interface LedgerGrants {
   checked: boolean;
   append_only?: boolean;
   update_refused?: boolean;
@@ -670,7 +942,7 @@ export interface LedgerGrants {
   grants?: string[];
 }
 
-export interface AuditSummary {
+interface AuditSummary {
   total: number;
   by_action: Record<string, number>;
   by_entity: Record<string, number>;

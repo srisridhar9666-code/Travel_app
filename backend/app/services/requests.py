@@ -28,13 +28,16 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.core import clock
 from app.core.enums import (
+    ACTIVE_TRAVELLER_STATUSES,
+    ADMIN_ROLES,
     AuditAction,
+    CabExtensionStatus,
+    CancellationStatus,
     NotificationChannel,
     NotificationStatus,
     RequestPriority,
     RequestStatus,
     RequestType,
-    Role,
     RoomSharingChoice,
     TicketStatus,
     TravellerStatus,
@@ -42,6 +45,7 @@ from app.core.enums import (
     is_editable,
 )
 from app.models.base import naive_utcnow
+from app.models.invoice import Invoice, InvoiceLine
 from app.models.project import Project
 from app.models.request import RequestRevision, RequestTraveller, TravelRequest
 from app.models.ticket import TicketDocument
@@ -82,6 +86,9 @@ FIELD_LABELS = {
     "hotel_city": "city",
     "check_in": "check-in",
     "check_out": "check-out",
+    "cab_type": "cab type",
+    "cab_trip": "local or outstation",
+    "cab_distance_km": "distance (km)",
     "notes": "notes",
     "travellers": "travellers",
 }
@@ -184,6 +191,52 @@ def assert_editable(request: TravelRequest) -> None:
             "Cancel it and raise a new one if the plan has changed."
         )
     raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
+#: Travellers a booked cab is actually carrying: approved, or booked. Only
+#: they are told about the car, and only while someone is can it be extended.
+RIDING = frozenset({TravellerStatus.APPROVED, TravellerStatus.BOOKED})
+
+
+def extension_refusal(request: TravelRequest, user: User | None) -> tuple[int, str] | None:
+    """Why this person may not ask to keep this cab one more day, or None if
+    they may.
+
+    The one statement of the rule: POST /cab-extension raises what it returns,
+    and the read model's `can_extend_cab` is "this returned None", so the
+    button is only offered when the ask would be accepted.
+    """
+    if request.request_type is not RequestType.LOCAL_CAB:
+        return status.HTTP_400_BAD_REQUEST, "Only a cab can be extended by a day."
+    on_it = user is not None and (
+        request.requester_id == user.id or any(t.user_id == user.id for t in request.travellers)
+    )
+    if not on_it:
+        return (
+            status.HTTP_403_FORBIDDEN,
+            "Only the person who raised this cab, or someone riding in it, can ask to extend it.",
+        )
+    if request.is_cancelled:
+        return status.HTTP_409_CONFLICT, "This request has been cancelled."
+    if request_is_editable(request):
+        # Until an admin acts, the requester can simply change the time.
+        return (
+            status.HTTP_409_CONFLICT,
+            "Edit the request's end time instead - it has not been decided yet.",
+        )
+    if request.end_at is None:
+        return (
+            status.HTTP_409_CONFLICT,
+            "This cab has no end time to extend. Raise a new cab request for the extra day.",
+        )
+    if not any(t.status in RIDING for t in request.travellers):
+        return (
+            status.HTTP_409_CONFLICT,
+            "Nobody on this cab is approved, so there is nothing to extend.",
+        )
+    if request.cab_extension_status is CabExtensionStatus.PENDING:
+        return status.HTTP_409_CONFLICT, "An extension is already waiting for an admin."
+    return None
 
 
 def resolve_project(
@@ -351,6 +404,53 @@ def check_costay(
     return [CoStayMatchRead(**vars(m)) for m in matches]
 
 
+def room_matches_for(db: Session, *, tenant_id: str, request: TravelRequest) -> dict[int, list[CoStayMatchRead]]:
+    """For an admin, per traveller on a live hotel stay: the same-gender
+    colleagues in that city on overlapping nights they could share a room with.
+
+    Travellers already in a confirmed shared room, or decided out of the trip,
+    are left out - there is nothing to allot for them.
+    """
+    if (
+        request.request_type is not RequestType.HOTEL
+        or request.is_draft
+        or request.is_cancelled
+        or request.check_in is None
+    ):
+        return {}
+    out: dict[int, list[CoStayMatchRead]] = {}
+    for traveller in request.travellers:
+        if traveller.user is None or traveller.status not in ACTIVE_TRAVELLER_STATUSES:
+            continue
+        if traveller.room_sharing is RoomSharingChoice.SHARE_EXISTING and traveller.share_confirmed_at:
+            continue
+        matches = costay.find_matches(
+            db,
+            tenant_id=tenant_id,
+            for_user=traveller.user,
+            city=request.hotel_city or "",
+            check_in=request.check_in,
+            check_out=request.check_out,
+            exclude_request_id=request.id,
+        )
+        if matches:
+            out[traveller.id] = [CoStayMatchRead(**vars(m)) for m in matches]
+    return out
+
+
+def confirmed_ticket_travellers(db: Session, request_id: int) -> set[int]:
+    """Travellers on this request with a confirmed ticket they can download."""
+    return set(
+        db.execute(
+            select(TicketDocument.traveller_id).where(
+                TicketDocument.request_id == request_id,
+                TicketDocument.status == TicketStatus.CONFIRMED,
+                TicketDocument.file_path.is_not(None),
+            )
+        ).scalars()
+    )
+
+
 def ticket_per_traveller(db: Session, request_id: int) -> dict[int, int]:
     """The ticket document to show beside each traveller on a request.
 
@@ -375,47 +475,136 @@ def ticket_per_traveller(db: Session, request_id: int) -> dict[int, int]:
     return {traveller_id: ticket_id for traveller_id, (_, ticket_id) in chosen.items()}
 
 
+def sees_review(reader: User | None, traveller: RequestTraveller) -> bool:
+    """Whether this reader may see a manager's recommendation and comment.
+
+    Admins, who weigh it, and the traveller's own manager, who wrote it. Not
+    the traveller or their colleagues on the request: it is advice to the
+    admin, not a message to them.
+    """
+    if reader is None or traveller.user is None:
+        return False
+    return reader.is_admin or traveller.user.manager_id == reader.id
+
+
+def invoices_for(db: Session, request: TravelRequest) -> dict[int, Invoice]:
+    """The invoice each traveller on this request is billed on, if any. One
+    query for the request; asked only when cost is being shown."""
+    ids = [t.id for t in request.travellers]
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(InvoiceLine.request_traveller_id, Invoice)
+        .join(Invoice, InvoiceLine.invoice_id == Invoice.id)
+        .where(InvoiceLine.request_traveller_id.in_(ids))
+    ).all()
+    return {traveller_id: invoice for traveller_id, invoice in rows}
+
+
+def _traveller_read(
+    t: RequestTraveller,
+    request: TravelRequest,
+    *,
+    show_cost: bool,
+    reader: User | None,
+    tickets: dict[int, int],
+    billed: dict[int, Invoice],
+    room_matches: dict[int, list[CoStayMatchRead]] | None = None,
+    confirmed: set[int] | None = None,
+) -> TravellerRead:
+    manager = t.user.active_manager if t.user else None
+    review = sees_review(reader, t)
+    invoice = billed.get(t.id) if show_cost else None
+    return TravellerRead(
+        id=t.id,
+        user_id=t.user_id,
+        full_name=t.user.full_name if t.user else "",
+        email=t.user.email if t.user else "",
+        designation=t.user.designation if t.user else None,
+        status=t.status,
+        is_requester=t.user_id == request.requester_id,
+        room_sharing=t.room_sharing,
+        share_with_user_id=t.share_with_user_id,
+        share_with_name=t.share_with.full_name if t.share_with else None,
+        share_confirmed=t.share_confirmed_at is not None,
+        room_matches=(room_matches or {}).get(t.id, []),
+        ticket_ready=t.id in (confirmed or set()),
+        decided_by_name=t.decided_by.full_name if t.decided_by else None,
+        decided_at=t.decided_at,
+        decision_reason=t.decision_reason,
+        booking_reference=t.booking_reference,
+        booking_details=t.booking_details,
+        ticket_id=tickets.get(t.id),
+        manager_id=manager.id if manager else None,
+        manager_name=manager.full_name if manager else None,
+        manager_recommendation=t.manager_recommendation if review else None,
+        manager_comment=t.manager_comment if review else None,
+        manager_reviewed_at=t.manager_reviewed_at if review else None,
+        manager_reviewed_by_name=(
+            t.manager_reviewed_by.full_name if review and t.manager_reviewed_by else None
+        ),
+        # Cost is admin-only. Ground staff seeing what a colleague's flight
+        # cost is a personnel problem nobody asked for, and nothing in
+        # section 6 needs it.
+        cost_amount=t.cost_amount if show_cost else None,
+        cost_currency=t.cost_currency if show_cost and t.cost_amount else None,
+        cost_note=t.cost_note if show_cost else None,
+        cost_entered_by_name=(
+            t.cost_entered_by.full_name if show_cost and t.cost_entered_by else None
+        ),
+        vendor_id=t.vendor_id if show_cost else None,
+        vendor_name=t.vendor.name if show_cost and t.vendor_id else None,
+        invoice_id=invoice.id if invoice else None,
+        invoice_number=invoice.number if invoice else None,
+        invoice_status=invoice.status if invoice else None,
+    )
+
+
+def _name(person: User | None) -> str | None:
+    return person.full_name if person is not None else None
+
+
 def to_read(
     db: Session,
     request: TravelRequest,
     *,
     tenant_id: str,
     viewer: User | None = None,
+    reader: User | None = None,
     with_conflicts: bool = False,
     with_costay: bool = True,
     with_tickets: bool = False,
 ) -> RequestRead:
+    """The response shape of one request.
+
+    `viewer` unlocks the admin extras - cost, and co-stay matches for them.
+    `reader` is who the response is for, when that is not the viewer: the
+    paged list leaves cost and matching out for everyone, but still has to
+    show an admin or a manager the recommendations they may see. A caller that
+    passes `viewer` need not pass `reader`.
+    """
     show_cost = viewer is not None and viewer.is_admin
+    reader = reader or viewer
     # Only the admin queue asks: ticket files are admin-only to fetch, and the
     # export and single reads have no use for the extra query per request.
     tickets = ticket_per_traveller(db, request.id) if with_tickets else {}
+    billed = invoices_for(db, request) if show_cost else {}
+    # Booked travellers with a ticket file they can download from My requests.
+    confirmed = (
+        confirmed_ticket_travellers(db, request.id)
+        if any(t.status is TravellerStatus.BOOKED for t in request.travellers)
+        else set()
+    )
+    # Who each hotel traveller could share a room with - the admin allots it.
+    rooms = (
+        room_matches_for(db, tenant_id=tenant_id, request=request)
+        if reader is not None and reader.is_admin
+        else {}
+    )
     travellers = [
-        TravellerRead(
-            id=t.id,
-            user_id=t.user_id,
-            full_name=t.user.full_name if t.user else "",
-            email=t.user.email if t.user else "",
-            designation=t.user.designation if t.user else None,
-            status=t.status,
-            is_requester=t.user_id == request.requester_id,
-            room_sharing=t.room_sharing,
-            share_with_user_id=t.share_with_user_id,
-            share_with_name=t.share_with.full_name if t.share_with else None,
-            share_confirmed=t.share_confirmed_at is not None,
-            decided_by_name=t.decided_by.full_name if t.decided_by else None,
-            decided_at=t.decided_at,
-            decision_reason=t.decision_reason,
-            booking_reference=t.booking_reference,
-            ticket_id=tickets.get(t.id),
-            # Cost is admin-only. Ground staff seeing what a colleague's flight
-            # cost is a personnel problem nobody asked for, and nothing in
-            # section 6 needs it.
-            cost_amount=t.cost_amount if show_cost else None,
-            cost_currency=t.cost_currency if show_cost and t.cost_amount else None,
-            cost_note=t.cost_note if show_cost else None,
-            cost_entered_by_name=(
-                t.cost_entered_by.full_name if show_cost and t.cost_entered_by else None
-            ),
+        _traveller_read(
+            t, request, show_cost=show_cost, reader=reader, tickets=tickets, billed=billed,
+            room_matches=rooms, confirmed=confirmed,
         )
         for t in request.travellers
     ]
@@ -443,6 +632,42 @@ def to_read(
         hotel_city=request.hotel_city,
         check_in=request.check_in,
         check_out=request.check_out,
+        cab_type=request.cab_type,
+        cab_trip=request.cab_trip,
+        cab_distance_km=request.cab_distance_km,
+        booked_cab_type=request.booked_cab_type,
+        cab_vehicle_number=request.cab_vehicle_number,
+        cab_driver_name=request.cab_driver_name,
+        cab_driver_phone=request.cab_driver_phone,
+        cab_booked_by_name=_name(request.cab_booked_by),
+        cab_booked_at=request.cab_booked_at,
+        cancellation_status=request.cancellation_status,
+        cancellation_reason=request.cancellation_reason,
+        cancellation_requested_by_name=_name(request.cancellation_requested_by),
+        cancellation_requested_at=request.cancellation_requested_at,
+        cancellation_decided_by_name=_name(request.cancellation_decided_by),
+        cancellation_decided_at=request.cancellation_decided_at,
+        cancellation_comment=request.cancellation_comment,
+        cancel_needs_approval=reader is not None and _cancel_needs_approval(request, reader),
+        can_decide_cancellation=(
+            reader is not None
+            and request.cancellation_status is CancellationStatus.PENDING
+            and not request.is_cancelled
+            and _may_decide_cancellation(request, reader)
+        ),
+        cancelled_by_name=_name(request.cancelled_by),
+        cab_extension_status=request.cab_extension_status,
+        cab_extension_reason=request.cab_extension_reason,
+        cab_extension_requested_by_name=_name(request.cab_extension_requested_by),
+        cab_extension_requested_at=request.cab_extension_requested_at,
+        cab_extension_decided_by_name=_name(request.cab_extension_decided_by),
+        cab_extension_decided_at=request.cab_extension_decided_at,
+        cab_extension_comment=request.cab_extension_comment,
+        cab_extended_days=request.cab_extended_days or 0,
+        can_extend_cab=(
+            request.request_type is RequestType.LOCAL_CAB
+            and extension_refusal(request, reader) is None
+        ),
         travel_reason=request.travel_reason,
         priority=request.priority or RequestPriority.MEDIUM,
         origin_state=request.origin_state,
@@ -517,10 +742,11 @@ def clear_stale_shares(request: TravelRequest, changes: dict) -> None:
 def record_submission(
     db: Session, *, request: TravelRequest, actor: User, tenant_id: str, http_request=None
 ) -> list[int]:
-    """Mark a request submitted, open its revision trail at 1, and tell the admins.
+    """Mark a request submitted, open its revision trail at 1, and tell the
+    admins and the travellers' managers.
 
-    Returns the ids of the admin emails it queued, for the caller to send once
-    the response is on its way (`notifications.deliver_queued`).
+    Returns the ids of the emails it queued, for the caller to send once the
+    response is on its way (`notifications.deliver_queued`).
     """
     request.is_draft = False
     request.submitted_at = naive_utcnow()
@@ -541,7 +767,21 @@ def record_submission(
         actor=actor,
         request=http_request,
     )
-    return notify_admins_of_submission(db, request=request, actor=actor, tenant_id=tenant_id)
+    return notify_admins_of_submission(
+        db, request=request, actor=actor, tenant_id=tenant_id
+    ) + notify_managers_of_submission(db, request=request, actor=actor, tenant_id=tenant_id)
+
+
+def _cancel_needs_approval(request: TravelRequest, reader: User) -> bool:
+    from app.services.cancellations import needs_approval  # cancellations imports this module
+
+    return needs_approval(request, reader)
+
+
+def _may_decide_cancellation(request: TravelRequest, reader: User) -> bool:
+    from app.services.cancellations import may_decide
+
+    return may_decide(request, reader)
 
 
 def trip_summary(request: TravelRequest) -> str:
@@ -553,8 +793,11 @@ def trip_summary(request: TravelRequest) -> str:
             when += f" to {request.check_out.strftime('%d %b %Y')}"
         return f"Hotel in {where}, {when}"
     kind = "Cab" if request.request_type is RequestType.LOCAL_CAB else str(request.mode or "Travel").title()
-    when = request.start_at.strftime("%d %b %Y, %H:%M") if request.start_at else "time to be set"
-    return f"{kind}: {request.route_label(' to ')}, {when}"
+    when = clock.time_label(request.start_at) if request.start_at else "time to be set"
+    line = f"{kind}: {request.route_label(' to ')}, {when}"
+    # The vendor is chosen by size and distance, so the admin reads them first.
+    asked = request.cab_asked_label if request.request_type is RequestType.LOCAL_CAB else None
+    return f"{line} ({asked})" if asked else line
 
 
 def notify_admins_of_submission(
@@ -569,7 +812,7 @@ def notify_admins_of_submission(
         db.execute(
             select(User).where(
                 User.tenant_id == tenant_id,
-                User.role.in_((Role.ADMIN, Role.SYSTEM_ADMIN)),
+                User.role.in_(ADMIN_ROLES),
                 User.is_active.is_(True),
                 User.id != actor.id,
             )
@@ -630,4 +873,158 @@ def notify_admins_of_submission(
             r.id for r in rows
             if r.channel == NotificationChannel.EMAIL and r.status == NotificationStatus.QUEUED
         ]
+    return queued
+
+
+def queued_emails(rows) -> list[int]:
+    """The ids of the email rows left QUEUED for an after-response send."""
+    return [
+        r.id for r in rows
+        if r.channel == NotificationChannel.EMAIL and r.status == NotificationStatus.QUEUED
+    ]
+
+
+def teams_on(request: TravelRequest) -> dict[int, tuple[User, list[RequestTraveller]]]:
+    """The travellers still pending on a request, grouped under the active
+    manager each reports to. Travellers with no manager are left out: there is
+    nobody to ask."""
+    teams: dict[int, tuple[User, list[RequestTraveller]]] = {}
+    for traveller in request.travellers:
+        manager = traveller.user.active_manager if traveller.user else None
+        if manager is None or traveller.status is not TravellerStatus.PENDING:
+            continue
+        teams.setdefault(manager.id, (manager, []))[1].append(traveller)
+    return teams
+
+
+def notify_managers_of_submission(
+    db: Session,
+    *,
+    request: TravelRequest,
+    actor: User,
+    tenant_id: str,
+    edited: bool = False,
+    only: set[int] | None = None,
+) -> list[int]:
+    """Ask each traveller's manager for their recommendation.
+
+    One notice per manager, naming only their own people. A manager who raised
+    the request themself is not told about it - they know, and can recommend
+    from Team approvals. `edited` says their earlier recommendation was cleared
+    by a change to the request, so they are being asked again; `only` limits
+    the notice to those managers.
+    """
+    summary = trip_summary(request)
+    link = f"{get_settings().frontend_base_url.rstrip('/')}/team-approvals"
+    campaign = f"{request.project.code} - {request.project.name}" if request.project else None
+    label = (request.priority or RequestPriority.MEDIUM).value.title()
+
+    queued: list[int] = []
+    for manager, members in teams_on(request).values():
+        if manager.id == actor.id or (only is not None and manager.id not in only):
+            continue
+        names = ", ".join(t.user.full_name for t in members)
+        whose = (
+            f"{actor.full_name}'s request"
+            if actor.manager_id == manager.id
+            else f"A request for {names}"
+        )
+        asked = "needs your recommendation again" if edited else "needs your recommendation"
+        title = f"{whose} {asked}"
+        lines = [
+            f"Hello {manager.full_name.split()[0] if manager.full_name else 'there'},",
+            "",
+            (
+                f"{actor.full_name} changed a travel request for your team, so your earlier "
+                "recommendation was cleared. Please look at it again."
+                if edited
+                else f"{actor.full_name} raised a travel request for your team."
+            ),
+            "",
+            summary,
+            f"Your team on it: {names}",
+        ]
+        if campaign:
+            lines.append(f"Campaign: {campaign}")
+        if request.travel_reason:
+            lines.append(f"Reason: {request.travel_reason}")
+        lines.append(f"Priority: {label}")
+        lines += [
+            "",
+            "Recommend it or not, with a comment. An admin makes the final decision "
+            "and sees what you said.",
+            f"Team approvals: {link}",
+        ]
+        queued += queued_emails(
+            notifications.notify(
+                db,
+                tenant_id=tenant_id,
+                user=manager,
+                kind="TEAM_REQUEST_SUBMITTED",
+                title=title[:200],
+                body=f"{summary} - for {names}. Priority: {label}.",
+                request_id=request.id,
+                email_subject=f"{title}: {summary}"[:255],
+                email_body="\n".join(lines),
+                deliver_now=False,
+            )
+        )
+    return queued
+
+
+def clear_recommendations(request: TravelRequest) -> list[RequestTraveller]:
+    """Forget what managers said about a request that has since changed.
+
+    A recommendation is advice about one version of a trip. Carried onto new
+    dates or a new route it would tell the admin the manager agreed to
+    something they never saw, so an edit wipes it and the manager is asked
+    again. The old advice stays in the activity log.
+    """
+    cleared = []
+    for traveller in request.travellers:
+        if traveller.manager_recommendation is None:
+            continue
+        traveller.manager_recommendation = None
+        traveller.manager_comment = None
+        traveller.manager_reviewed_by_id = None
+        traveller.manager_reviewed_at = None
+        cleared.append(traveller)
+    return cleared
+
+
+def ask_managers_after_edit(
+    db: Session,
+    *,
+    request: TravelRequest,
+    actor: User,
+    tenant_id: str,
+    cleared: list[RequestTraveller],
+    was_on: set[int],
+) -> list[int]:
+    """Who needs asking after a submitted request was changed.
+
+    Managers whose recommendation the edit cleared are asked again, and the
+    manager of anyone newly added is asked for the first time. A manager who
+    has not answered yet already has the request waiting for them, and is left
+    alone rather than told twice.
+    """
+    again = {
+        t.user.active_manager.id
+        for t in cleared
+        if t.user is not None and t.user.active_manager is not None
+    }
+    first_time = {
+        t.user.active_manager.id
+        for t in request.travellers
+        if t.user_id not in was_on and t.user is not None and t.user.active_manager is not None
+    } - again
+    queued: list[int] = []
+    if again:
+        queued += notify_managers_of_submission(
+            db, request=request, actor=actor, tenant_id=tenant_id, edited=True, only=again
+        )
+    if first_time:
+        queued += notify_managers_of_submission(
+            db, request=request, actor=actor, tenant_id=tenant_id, only=first_time
+        )
     return queued

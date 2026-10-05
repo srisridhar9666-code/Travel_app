@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
  *  scrolls past the first screen anyway - they type more. */
 const MAX_SHOWN = 80;
 
-export interface ComboboxAction {
+interface ComboboxAction {
   label: string;
   hint?: string;
   icon?: ReactNode;

@@ -1,4 +1,4 @@
-export const MIN_PASSWORD_LENGTH = 10;
+const MIN_PASSWORD_LENGTH = 10;
 
 /** Mirrors the server-side policy so the person is told before they submit.
  *  The server remains the authority - this is courtesy, not enforcement (it

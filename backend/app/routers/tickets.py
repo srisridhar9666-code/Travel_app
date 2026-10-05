@@ -23,7 +23,9 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, UploadFi
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.deps import AdminUser, DbSession
+from app.config import get_settings
+from app.core import clock
+from app.core.deps import AdminUser, CurrentUser, DbSession
 from app.core.enums import (
     AuditAction,
     NotificationChannel,
@@ -238,7 +240,7 @@ async def upload_ticket(
         entity_id=ticket.id,
         summary=(
             f"{actor.full_name} uploaded a ticket for "
-            f"{traveller.user.full_name} on request #{row.id}"
+            f"{traveller.user.full_name} on request {row.id}"
         ),
         changes={"file_name": ticket.file_name, "size": ticket.file_size},
         tenant_id=actor.tenant_id,
@@ -278,7 +280,7 @@ def _run_extraction(
             action=AuditAction.EXTRACT,
             entity_type="ticket_document",
             entity_id=ticket.id,
-            summary=f"Extraction failed for ticket #{ticket.id}: {ticket.extraction_error}",
+            summary=f"Extraction failed for ticket {ticket.id}: {ticket.extraction_error}",
             tenant_id=ticket.tenant_id,
             actor=actor,
             request=http_request,
@@ -299,7 +301,7 @@ def _run_extraction(
         entity_id=ticket.id,
         summary=(
             f"{result.model_id} proposed {result.fields.get('booking_reference') or 'no reference'} "
-            f"for ticket #{ticket.id} - awaiting review"
+            f"for ticket {ticket.id} - awaiting review"
         ),
         # The proposal is audited in full: a booking that turns out wrong has to
         # be traceable to what was actually suggested.
@@ -405,9 +407,69 @@ def download_ticket(ticket_id: int, actor: AdminUser, db: DbSession) -> Response
     )
 
 
+@router.get("/requests/{request_id}/travellers/{traveller_id}/ticket")
+def my_ticket(request_id: int, traveller_id: int, user: CurrentUser, db: DbSession) -> Response:
+    """A traveller's confirmed ticket, for the traveller themself.
+
+    Also for whoever raised the request (they often book for a group) and for
+    admins. Only a confirmed ticket - one an admin has checked and booked
+    against - is ever handed out; one still under review is not theirs yet.
+    """
+    row = db.get(TravelRequest, request_id)
+    traveller = (
+        next((t for t in row.travellers if t.id == traveller_id), None)
+        if row is not None and row.tenant_id == user.tenant_id
+        else None
+    )
+    allowed = traveller is not None and (
+        user.is_admin or user.id in (traveller.user_id, row.requester_id)
+    )
+    ticket = (
+        db.execute(
+            select(TicketDocument)
+            .where(
+                TicketDocument.request_id == request_id,
+                TicketDocument.traveller_id == traveller_id,
+                TicketDocument.status == TicketStatus.CONFIRMED,
+                TicketDocument.file_path.is_not(None),
+            )
+            .order_by(TicketDocument.id.desc())
+        ).scalars().first()
+        if allowed
+        else None
+    )
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No ticket to download yet.")
+    return Response(
+        content=storage.read(ticket.file_path),
+        media_type=ticket.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'inline; filename="{ticket.file_name or "ticket"}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Confirm - the only path to BOOKED
 # ---------------------------------------------------------------------------
+
+
+def details_from_ticket(ticket: TicketDocument) -> dict | None:
+    """The booking details a confirmed ticket gives, in the shape
+    RequestTraveller.booking_details keeps (see schemas.request.BookingDetails)."""
+    details = {
+        "carrier": ticket.carrier,
+        "service_number": ticket.service_number,
+        "depart_at": ticket.depart_at.isoformat() if ticket.depart_at else None,
+        "arrive_at": ticket.arrive_at.isoformat() if ticket.arrive_at else None,
+        "hotel_name": ticket.hotel_name,
+    }
+    if ticket.check_in or ticket.check_out:
+        stay = " to ".join(d.strftime("%d %b %Y") for d in (ticket.check_in, ticket.check_out) if d)
+        details["notes"] = f"Stay {stay}"
+    details = {k: v for k, v in details.items() if v}
+    return details or None
 
 
 @router.post("/tickets/{ticket_id}/confirm", response_model=TicketRead)
@@ -461,6 +523,9 @@ def confirm_ticket(
             traveller_id=traveller.id,
             to_status=TravellerStatus.BOOKED,
             booking_reference=reference,
+            # Every decision carries a reason now; here the ticket is the reason.
+            # Without one this endpoint refused every confirmation.
+            reason="Booked from the uploaded ticket",
         ),
         http_request=http_request,
         notify=False,   # the richer confirmation below replaces the generic notice
@@ -481,6 +546,9 @@ def confirm_ticket(
         ticket.carrier = payload.carrier.strip()
     if payload.service_number:
         ticket.service_number = payload.service_number.strip()
+    # The traveller's own record of the booking, so My requests can show it
+    # without anyone opening the ticket file.
+    traveller.booking_details = details_from_ticket(ticket) or traveller.booking_details
 
     corrected = (ticket.booking_reference or "") != reference
     audit.record(
@@ -489,7 +557,7 @@ def confirm_ticket(
         entity_type="ticket_document",
         entity_id=ticket.id,
         summary=(
-            f"{actor.full_name} confirmed ticket #{ticket.id} for "
+            f"{actor.full_name} confirmed ticket {ticket.id} for "
             f"{traveller.user.full_name} as {reference}"
             + (" (corrected from the extraction)" if corrected else "")
         ),
@@ -543,13 +611,19 @@ def _confirmation_body(ticket: TicketDocument, request: TravelRequest, name: str
             lines.append(f"  Service      {ticket.service_number}")
         lines.append(f"  Reference    {ticket.confirmed_reference}")
         if request.start_at:
-            lines.append(f"  Departs      {request.start_at.strftime('%d %b %Y, %H:%M')}")
+            lines.append(f"  Departs      {clock.time_label(request.start_at)}")
         if request.end_at:
-            lines.append(f"  Arrives      {request.end_at.strftime('%d %b %Y, %H:%M')}")
+            lines.append(f"  Arrives      {clock.time_label(request.end_at)}")
 
     if request.project:
         lines += ["", f"Campaign: {request.project.code} - {request.project.name}"]
-    lines += ["", "Carry photo ID that matches the name on the booking."]
+    link = f"{get_settings().frontend_base_url.rstrip('/')}/requests"
+    lines += [
+        "",
+        "Your ticket is attached to this email. You can also download it any time "
+        f"from My requests: {link}",
+        "Carry photo ID that matches the name on the booking.",
+    ]
     return "\n".join(lines)
 
 
@@ -585,6 +659,30 @@ def _send_confirmation(
         request_id=request.id,
         email_subject=f"Booking confirmed - {where}",
         email_body=_confirmation_body(ticket, request, person.full_name),
+        # The same Cc as every other decision on this traveller: their manager
+        # sees the booking land.
+        cc_users=[person.active_manager] if person.active_manager is not None else None,
+        attachment=(
+            notifications.AttachedFile(
+                path=ticket.file_path,
+                name=ticket.file_name or "ticket",
+                content_type=ticket.content_type,
+            )
+            if ticket.file_path
+            else None
+        ),
+    )
+
+    decisions.copy_manager(
+        db,
+        tenant_id=ticket.tenant_id,
+        person=person,
+        request=request,
+        title=f"{person.full_name}'s booking is confirmed",
+        body=(
+            f"{person.full_name}'s booking for {where} is confirmed. "
+            f"Reference {ticket.confirmed_reference}."
+        ),
     )
 
     mail = next((r for r in rows if r.channel is NotificationChannel.EMAIL), None)
@@ -629,7 +727,7 @@ def discard_ticket(
         action=AuditAction.DELETE,
         entity_type="ticket_document",
         entity_id=ticket.id,
-        summary=f"{actor.full_name} discarded ticket #{ticket.id}",
+        summary=f"{actor.full_name} discarded ticket {ticket.id}",
         tenant_id=actor.tenant_id,
         actor=actor,
         request=http_request,

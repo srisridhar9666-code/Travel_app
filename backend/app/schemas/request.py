@@ -4,12 +4,20 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.enums import (
+    CabExtensionStatus,
+    CabTrip,
+    CabType,
+    CancellationStatus,
     ConflictKind,
     ConflictSeverity,
     Designation,
+    InvoiceStatus,
+    LOCAL_CAB_MAX_KM,
+    MAX_CAB_DISTANCE_KM,
+    ManagerRecommendation,
     RequestPriority,
     RequestStatus,
     RequestType,
@@ -18,6 +26,7 @@ from app.core.enums import (
     TravellerStatus,
 )
 from app.schemas.common import UTCInstant
+from app.schemas.user import MobileNumber, PersonName
 
 #: Which fields each request type actually uses. Also the list the revision diff
 #: is taken over, so a field absent here is a field no one can amend.
@@ -39,6 +48,9 @@ EDITABLE_FIELDS = (
     "hotel_city",
     "check_in",
     "check_out",
+    "cab_type",
+    "cab_trip",
+    "cab_distance_km",
     "notes",
 )
 
@@ -74,6 +86,12 @@ class RequestBody(BaseModel):
     check_in: date | None = None
     check_out: date | None = None
 
+    #: A cab's size, local or outstation, and - outstation - roughly how far.
+    #: Defaulted for a cab and cleared for anything else by the validator.
+    cab_type: CabType | None = None
+    cab_trip: CabTrip | None = None
+    cab_distance_km: int | None = None
+
     #: Mandatory. An admin deciding on a trip needs to know what it is for,
     #: and "because I was asked to" in a free-text note was not reliably there.
     travel_reason: str = Field(min_length=5, max_length=500)
@@ -105,6 +123,7 @@ class RequestBody(BaseModel):
             self.origin_state = self.destination_state = None
             self.pickup_city = self.drop_city = None
             self.start_at = self.end_at = None
+            self.cab_type = self.cab_trip = self.cab_distance_km = None
         else:
             if not self.origin:
                 raise ValueError("A travel request needs a pickup or origin.")
@@ -120,10 +139,12 @@ class RequestBody(BaseModel):
                     raise ValueError("Pick the state and city the cab picks up in.")
                 if not (self.destination_state and self.drop_city):
                     raise ValueError("Pick the state and city the cab drops in.")
+                self._check_cab_distance()
             else:
                 if self.mode is None or self.mode is TravelMode.CAB:
                     raise ValueError("Choose flight, train or bus for a long-distance request.")
                 self.pickup_city = self.drop_city = None
+                self.cab_type = self.cab_trip = self.cab_distance_km = None
             self.hotel_city = self.hotel_state = None
             self.check_in = self.check_out = None
 
@@ -135,9 +156,50 @@ class RequestBody(BaseModel):
                 object.__setattr__(self, field, value.replace(tzinfo=None))
         return self
 
+    def _check_cab_distance(self) -> None:
+        """Local is within LOCAL_CAB_MAX_KM and needs no distance; outstation
+        needs the requester's estimate, so the admin can quote it to a vendor.
+
+        An unset size or trip means the common case - any car, in town - so an
+        older client that never sends them still raises a valid cab.
+        """
+        self.cab_type = self.cab_type or CabType.NO_PREFERENCE
+        self.cab_trip = self.cab_trip or CabTrip.LOCAL
+        km = self.cab_distance_km
+        if km is not None and km < 1:
+            raise ValueError("Enter the distance in whole kilometres, 1 or more.")
+        if self.cab_trip is CabTrip.LOCAL:
+            if km is not None and km >= LOCAL_CAB_MAX_KM:
+                raise ValueError(
+                    f"A local cab stays within {LOCAL_CAB_MAX_KM} km. "
+                    "Choose Outstation for a longer trip."
+                )
+        elif km is None or not LOCAL_CAB_MAX_KM <= km <= MAX_CAB_DISTANCE_KM:
+            raise ValueError(
+                f"An outstation cab needs the approximate distance: {LOCAL_CAB_MAX_KM} to "
+                f"{MAX_CAB_DISTANCE_KM} km. Under {LOCAL_CAB_MAX_KM} km, choose Local."
+            )
+
 
 class RequestCreate(RequestBody):
-    pass
+    #: Hotel only: the requester's own room choice, made in the form from the
+    #: colleagues offered there. SHARE_EXISTING is an ask an admin confirms.
+    room_sharing: RoomSharingChoice | None = None
+    share_with_user_id: int | None = None
+
+    @model_validator(mode="after")
+    def _room_choice_fits(self):
+        if self.room_sharing in (None, RoomSharingChoice.NOT_OFFERED):
+            self.room_sharing = None
+            self.share_with_user_id = None
+            return self
+        if self.request_type is not RequestType.HOTEL:
+            raise ValueError("A room choice only goes with a hotel request.")
+        if self.room_sharing is RoomSharingChoice.SHARE_EXISTING and self.share_with_user_id is None:
+            raise ValueError("Choosing to share needs the colleague to share with.")
+        if self.room_sharing is not RoomSharingChoice.SHARE_EXISTING:
+            self.share_with_user_id = None
+        return self
 
 
 class RequestEdit(RequestBody):
@@ -159,6 +221,13 @@ class RoomSharingChoicePayload(BaseModel):
         return self
 
 
+class RoomAllotPayload(BaseModel):
+    """An admin's room decision for one hotel traveller: share with this
+    colleague (both are paired and told), or `null` for a room of their own."""
+
+    share_with_user_id: int | None = None
+
+
 class CancelPayload(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
 
@@ -175,21 +244,46 @@ class TravellerRead(BaseModel):
     share_with_user_id: int | None = None
     share_with_name: str | None = None
     share_confirmed: bool = False
+    #: Admins only, on hotel stays: same-gender colleagues staying in the same
+    #: city on overlapping nights, who this traveller could be put in a room with.
+    room_matches: list["CoStayMatchRead"] = Field(default_factory=list)
+    #: A confirmed ticket file is there to download (My requests).
+    ticket_ready: bool = False
 
     # --- the decision, once one has been taken (Phase 4) -------------------
     decided_by_name: str | None = None
     decided_at: UTCInstant | None = None
     decision_reason: str | None = None
     booking_reference: str | None = None
+    booking_details: dict | None = None
     #: The uploaded ticket to open from this row (GET /tickets/{id}/file):
     #: the confirmed one, else the newest under review. On the admin queue list only.
     ticket_id: int | None = None
+
+    # --- the manager's view, before an admin decides (two-level approval) ----
+    #: Who this traveller reports to, if that manager's account is active.
+    #: Shown to anyone who can see the request.
+    manager_id: int | None = None
+    manager_name: str | None = None
+    #: What the manager said. Only an admin, or this traveller's own manager,
+    #: is shown it; everyone else - the traveller included - reads None.
+    manager_recommendation: ManagerRecommendation | None = None
+    manager_comment: str | None = None
+    manager_reviewed_at: UTCInstant | None = None
+    manager_reviewed_by_name: str | None = None
 
     # --- cost (SOW 2 and 6, addendum C1). Admin-only; see the router. -------
     cost_amount: Decimal | None = None
     cost_currency: str | None = None
     cost_note: str | None = None
     cost_entered_by_name: str | None = None
+    #: Who was paid for this person's trip, and the invoice it is billed on.
+    #: Admin-only, like cost. A cost on an approved invoice is locked.
+    vendor_id: int | None = None
+    vendor_name: str | None = None
+    invoice_id: int | None = None
+    invoice_number: str | None = None
+    invoice_status: InvoiceStatus | None = None
 
 
 class ConflictRead(BaseModel):
@@ -218,6 +312,10 @@ class CoStayMatchRead(BaseModel):
     check_out: date | None = None
     overlapping_nights: int
     status: str
+
+
+# TravellerRead lists these, and is declared first.
+TravellerRead.model_rebuild()
 
 
 class RevisionRead(BaseModel):
@@ -257,6 +355,44 @@ class RequestRead(BaseModel):
     hotel_city: str | None = None
     check_in: date | None = None
     check_out: date | None = None
+
+    # --- cab: asked for, sent, and extended. Null on anything but a cab. -----
+    cab_type: CabType | None = None
+    cab_trip: CabTrip | None = None
+    cab_distance_km: int | None = None
+    #: The car an admin recorded as sent, with its number and driver. Shown to
+    #: everyone who can see the request: the travellers need it to find the car.
+    booked_cab_type: CabType | None = None
+    cab_vehicle_number: str | None = None
+    cab_driver_name: str | None = None
+    cab_driver_phone: str | None = None
+    cab_booked_by_name: str | None = None
+    cab_booked_at: UTCInstant | None = None
+    #: An ask to cancel a trip already approved or booked, and its answer.
+    cancellation_status: CancellationStatus | None = None
+    cancellation_reason: str | None = None
+    cancellation_requested_by_name: str | None = None
+    cancellation_requested_at: UTCInstant | None = None
+    cancellation_decided_by_name: str | None = None
+    cancellation_decided_at: UTCInstant | None = None
+    cancellation_comment: str | None = None
+    #: Whether the reader's cancel goes straight through or becomes an ask, and
+    #: whether they may answer a pending ask - so the screen offers the right button.
+    cancel_needs_approval: bool = False
+    can_decide_cancellation: bool = False
+    cancelled_by_name: str | None = None
+    cab_extension_status: CabExtensionStatus | None = None
+    cab_extension_reason: str | None = None
+    cab_extension_requested_by_name: str | None = None
+    cab_extension_requested_at: UTCInstant | None = None
+    cab_extension_decided_by_name: str | None = None
+    cab_extension_decided_at: UTCInstant | None = None
+    cab_extension_comment: str | None = None
+    #: How many extra days have been approved; end_at already includes them.
+    cab_extended_days: int = 0
+    #: Whether the person reading may ask for one more day right now. Worked
+    #: out here so the screen and POST /cab-extension apply the same rule.
+    can_extend_cab: bool = False
 
     travel_reason: str | None = None
     priority: RequestPriority = RequestPriority.MEDIUM
@@ -302,9 +438,15 @@ class QueueExport(BaseModel):
 
 
 class ConflictCheckRequest(RequestBody):
-    """A dry run of the conflict and co-stay checks, before anything is saved."""
+    """A dry run of the conflict and co-stay checks, before anything is saved.
+
+    The reason plays no part in finding a clash, so a form checked before its
+    reason is typed is answered rather than refused. The real write still
+    insists on one.
+    """
 
     request_id: int | None = None
+    travel_reason: str = Field(default="", max_length=500)
 
 
 class ConflictCheckResponse(BaseModel):
@@ -329,6 +471,40 @@ class ColleagueRead(BaseModel):
 # --- Phase 4: admin decisions ---------------------------------------------
 
 
+class BookingDetails(BaseModel):
+    """What the traveller needs on the day, beside the booking reference. All
+    optional: a train has a coach and berth, a hotel an address, and an admin
+    fills what the ticket gives them."""
+
+    carrier: str | None = Field(default=None, max_length=120)          # airline, railway, bus operator
+    service_number: str | None = Field(default=None, max_length=60)    # 6E-4412, 12723, ...
+    depart_at: datetime | None = None
+    arrive_at: datetime | None = None
+    seat: str | None = Field(default=None, max_length=60)              # seat, coach / berth
+    hotel_name: str | None = Field(default=None, max_length=160)
+    hotel_address: str | None = Field(default=None, max_length=300)
+    notes: str | None = Field(default=None, max_length=300)            # check-in time, terminal, ...
+
+    @model_validator(mode="after")
+    def _tidy(self):
+        for name in ("carrier", "service_number", "seat", "hotel_name", "hotel_address", "notes"):
+            value = getattr(self, name)
+            setattr(self, name, " ".join(value.split()) or None if value else None)
+        for name in ("depart_at", "arrive_at"):
+            value = getattr(self, name)
+            if value is not None and value.tzinfo is not None:
+                # Trip times are India wall-clock time, like start_at.
+                setattr(self, name, value.replace(tzinfo=None))
+        if self.depart_at and self.arrive_at and self.arrive_at < self.depart_at:
+            raise ValueError("Arrival cannot be before departure.")
+        return self
+
+    def stored(self) -> dict | None:
+        """The non-empty fields, as the JSON column keeps them."""
+        data = {k: v for k, v in self.model_dump(mode="json").items() if v not in (None, "")}
+        return data or None
+
+
 class DecisionPayload(BaseModel):
     """One admin decision on one traveller.
 
@@ -349,13 +525,20 @@ class DecisionPayload(BaseModel):
     to_status: TravellerStatus
     reason: str | None = Field(default=None, max_length=500)
     booking_reference: str | None = Field(default=None, max_length=120)
+    #: Only when marking booked: flight/train/bus or hotel details.
+    booking_details: BookingDetails | None = None
     conflict_override_reason: str | None = Field(default=None, max_length=500)
     notify_employee: bool = True
+    #: Only when marking booked: the uploaded ticket the booking is from. It is
+    #: confirmed with the booking and attached to the traveller's email.
+    ticket_id: int | None = None
 
     @model_validator(mode="after")
     def _target_is_a_decision(self):
         if self.to_status is TravellerStatus.PENDING:
             raise ValueError("A decision cannot put a traveller back to pending.")
+        if self.to_status is not TravellerStatus.BOOKED:
+            self.ticket_id = None
         return self
 
 
@@ -372,6 +555,27 @@ class BatchDecisionPayload(BaseModel):
     """
 
     decisions: list[BatchDecisionItem] = Field(min_length=1)
+
+
+class RecommendationPayload(BaseModel):
+    """A manager's advice on their team members' part of one request.
+
+    `traveller_ids` are traveller rows on the request (the same ids decisions
+    use). Left out, it covers every member of the manager's team on the
+    request who is still pending - the usual case, one person on one trip.
+    """
+
+    recommendation: ManagerRecommendation
+    comment: str = Field(min_length=3, max_length=500)
+    traveller_ids: list[int] | None = None
+
+    @field_validator("comment")
+    @classmethod
+    def _tidy_comment(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if len(cleaned) < 3:
+            raise ValueError("Add a comment for the admin, in a few words.")
+        return cleaned
 
 
 class QueueCounts(BaseModel):
@@ -392,3 +596,105 @@ class QueueCounts(BaseModel):
     #: The same, split by tab, so the banner opens the one the work is on.
     high_priority_awaiting: int = 0
     high_priority_partial: int = 0
+    #: Requests still waiting on an admin where someone pending has a manager
+    #: who has not recommended yet. For a manager, only their own team counts -
+    #: so it is the number waiting on them.
+    awaiting_manager: int = 0
+    #: Cabs whose travellers asked to keep them one more day, still waiting on
+    #: an admin. For a manager, only their own team's cabs.
+    cab_extensions: int = 0
+    #: Decided trips whose requester asked to cancel, waiting on an answer.
+    cancellations: int = 0
+
+
+# --- Cabs: the car sent, and one more day ---------------------------------
+
+
+def _tidy_text(value: str) -> str:
+    return " ".join(value.split())
+
+
+class CabBookingPayload(BaseModel):
+    """The car an admin actually sent: which size, its number plate and driver.
+
+    `notify` is for the screen that records the cab while marking the
+    traveller booked: the booking notice then carries these details, so one
+    message reaches them rather than two.
+    """
+
+    booked_cab_type: CabType
+    vehicle_number: str = Field(min_length=4, max_length=20)
+    driver_name: PersonName = Field(min_length=2, max_length=120)
+    driver_phone: MobileNumber = Field(max_length=32)
+    notify: bool = True
+    #: The cab operator who was paid, recorded for everyone riding (approved
+    #: or booked). Left out, each keeps the vendor they had. Admin-only, like
+    #: cost: the travellers are never told it.
+    vendor_id: int | None = None
+
+    @field_validator("booked_cab_type")
+    @classmethod
+    def _a_real_car(cls, value: CabType) -> CabType:
+        if value is CabType.NO_PREFERENCE:
+            raise ValueError("Choose the cab that was sent: Dzire or Ertiga.")
+        return value
+
+    @field_validator("vehicle_number")
+    @classmethod
+    def _plate(cls, value: str) -> str:
+        """Upper case with single spaces - "ts 09  ea 1234" is "TS 09 EA 1234" -
+        and at least four letters or digits, so a stray dash is not a plate."""
+        cleaned = _tidy_text(value).upper()
+        if sum(ch.isalnum() for ch in cleaned) < 4:
+            raise ValueError("Enter the vehicle number as it is on the plate, e.g. TS 09 EA 1234.")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _phone_is_required(self):
+        if not self.driver_phone:
+            raise ValueError("Enter the driver's phone number.")
+        return self
+
+
+class CabExtensionAsk(BaseModel):
+    """A traveller asking to keep their cab one more day, and why."""
+
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def _tidy_reason(cls, value: str) -> str:
+        cleaned = _tidy_text(value)
+        if len(cleaned) < 3:
+            raise ValueError("Say why the cab is needed for another day.")
+        return cleaned
+
+
+class CancellationDecision(BaseModel):
+    """An admin's or manager's answer to an ask to cancel a decided trip. A
+    rejection needs a comment: the requester is shown why the trip stands."""
+
+    approve: bool
+    comment: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _reject_needs_comment(self):
+        self.comment = _tidy_text(self.comment or "") or None
+        if not self.approve and (self.comment is None or len(self.comment) < 3):
+            raise ValueError("Add a comment saying why - the requester is shown it.")
+        return self
+
+
+class CabExtensionDecision(BaseModel):
+    """An admin's answer to an extension. A rejection needs a comment: the
+    traveller is shown it, and "no" with no reason helps nobody plan."""
+
+    approve: bool
+    comment: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _reject_needs_comment(self):
+        self.comment = _tidy_text(self.comment or "") or None
+        if not self.approve and (self.comment is None or len(self.comment) < 3):
+            raise ValueError("Add a comment saying why - the traveller is shown it.")
+        return self

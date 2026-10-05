@@ -47,6 +47,7 @@ from datetime import date, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import clock
 from app.core.enums import (
     ACTIVE_TRAVELLER_STATUSES,
     ConflictKind,
@@ -177,7 +178,7 @@ def describe(trip: Itinerary) -> str:
     route = " to ".join(part for part in (trip.origin, trip.destination) if part) or "journey"
     if trip.start_at is None:
         return route
-    return f"{route}, {trip.start_at.strftime('%Y-%m-%d %H:%M')}"
+    return f"{route}, {clock.time_label(trip.start_at)}"
 
 
 def compare(candidate: Itinerary, existing: Itinerary) -> tuple[ConflictKind, str] | None:

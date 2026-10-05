@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
-import { CreatorCredit, Logo, LogoLockup } from '@/components/Logo';
+import { COMPANY_NAME, CompanyCredit, CompanyLogo, CreatorCredit, Logo, LogoLockup } from '@/components/Logo';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button, Field, Input } from '@/components/ui';
 import { errorMessage, forgotPassword, login } from '@/lib/api';
@@ -64,7 +64,7 @@ export default function LoginPage() {
   const shown = error ?? notice;
 
   return (
-    <div className="grid min-h-dvh lg:grid-cols-[1fr_1.1fr]">
+    <div className="grid min-h-dvh lg:grid-cols-[1fr_1.1fr] portrait:min-h-[52rem]">
       {/* Form side */}
       <div className="flex flex-col px-6 py-8 sm:px-12">
         <div className="flex items-center justify-between">
@@ -149,7 +149,8 @@ export default function LoginPage() {
         </div>
 
         {/* Under the form rather than on the brand panel, which phones never see. */}
-        <CreatorCredit className="pt-6 text-center" />
+        <CompanyCredit className="justify-center pt-6" />
+        <CreatorCredit className="pt-1 text-center" />
       </div>
 
       {/* Brand side. Hidden on small screens - ground staff sign in from phones,
@@ -170,7 +171,7 @@ export default function LoginPage() {
         />
 
         <div className="relative flex h-full flex-col justify-between p-12">
-          <Logo className="h-32 w-auto self-start" />
+          <Logo className="h-60 w-auto self-start" />
 
           <div className="max-w-md">
             <Plane size={22} className="mb-5 text-brand" strokeWidth={2} />
@@ -179,13 +180,18 @@ export default function LoginPage() {
               what, and when.
             </p>
             <p className="mt-4 text-sm leading-relaxed text-text-muted">
-              Field Logistics &amp; Travel Management
+              Travel, cabs and stays for field teams
             </p>
           </div>
 
-          <p className="text-2xs uppercase tracking-widest text-text-subtle">
-            DesignBoxed Innovations Pvt. Ltd.
-          </p>
+          <div className="flex items-end gap-4">
+            <CompanyLogo className="h-28 w-auto" />
+            <p className="pb-1 text-2xs uppercase leading-relaxed tracking-widest text-text-subtle">
+              A product of
+              <br />
+              {COMPANY_NAME}
+            </p>
+          </div>
         </div>
       </div>
     </div>

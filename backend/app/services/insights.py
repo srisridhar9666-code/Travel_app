@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core import clock
 from app.core.enums import RequestStatus, RequestType, TravellerStatus, UserStatus
+from app.models.department import Department
 from app.models.project import Project
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
@@ -48,6 +49,9 @@ class Filters:
     until: date | None = None
     user_id: int | None = None
     project_id: int | None = None
+    #: The traveller's department as it stands now - people move, and "how much
+    #: does Sales travel" is asked of today's Sales. 0 is "no department".
+    department_id: int | None = None
     request_type: RequestType | None = None
     statuses: tuple[TravellerStatus, ...] | None = None
     #: The destination state and city: where the trip goes, not where it starts.
@@ -131,6 +135,14 @@ def load(db: Session, tenant_id: str, filters: Filters) -> list[RequestTraveller
         stmt = stmt.where(RequestTraveller.user_id == filters.user_id)
     if filters.project_id is not None:
         stmt = stmt.where(TravelRequest.project_id == filters.project_id)
+    if filters.department_id is not None:
+        members = select(User.id).where(User.tenant_id == tenant_id)
+        members = members.where(
+            User.department_id.is_(None)
+            if filters.department_id == 0
+            else User.department_id == filters.department_id
+        )
+        stmt = stmt.where(RequestTraveller.user_id.in_(members))
     if filters.request_type is not None:
         stmt = stmt.where(TravelRequest.request_type == filters.request_type)
     if filters.statuses:
@@ -390,6 +402,7 @@ def dashboard(db: Session, tenant_id: str, filters: Filters) -> dict:
             until=filters.until,
             user_id=filters.user_id,
             project_id=filters.project_id,
+            department_id=filters.department_id,
             request_type=filters.request_type,
             statuses=filters.statuses,
             state=filters.state,
@@ -415,6 +428,7 @@ def dashboard(db: Session, tenant_id: str, filters: Filters) -> dict:
     dest_states: Counter = Counter()
     dest_places: Counter = Counter()
     campaigns: dict[int, dict] = {}
+    departments: dict[int, dict] = {}
     travellers: dict[int, dict] = {}
 
     spent = committed = Decimal("0.00")
@@ -494,6 +508,22 @@ def dashboard(db: Session, tenant_id: str, filters: Filters) -> dict:
             if is_spent:
                 entry["spent"] += cost
 
+        # Keyed 0 for people with no department, like the filter.
+        department_id = (row.user.department_id if row.user else None) or 0
+        team = departments.setdefault(
+            department_id,
+            {"department_id": department_id,
+             "name": (row.user.department_name if row.user else None) or "No department",
+             "count": 0, "people": set(), "nights": 0, "pending": 0, "spent": Decimal("0.00")},
+        )
+        team["count"] += 1
+        team["people"].add(row.user_id)
+        team["nights"] += _nights(request) or 0
+        if status is TravellerStatus.PENDING:
+            team["pending"] += 1
+        if is_spent:
+            team["spent"] += cost
+
         person = travellers.setdefault(
             row.user_id,
             {"user_id": row.user_id, "full_name": row.user.full_name if row.user else "Unknown",
@@ -512,6 +542,18 @@ def dashboard(db: Session, tenant_id: str, filters: Filters) -> dict:
                 trend[key]["people"].add(row.user_id)
                 if is_spent:
                     trend[key]["spent"] += cost
+
+    # Unsliced by person or department, every department is accounted for:
+    # one that did not travel reads 0 rather than going missing.
+    if filters.department_id is None and filters.user_id is None:
+        for department_id, name in db.execute(
+            select(Department.id, Department.name).where(Department.tenant_id == tenant_id)
+        ).all():
+            departments.setdefault(
+                department_id,
+                {"department_id": department_id, "name": name, "count": 0, "people": set(),
+                 "nights": 0, "pending": 0, "spent": Decimal("0.00")},
+            )
 
     # One conflict check per awaiting request, not per row: tens at most.
     clashing = sum(
@@ -571,6 +613,14 @@ def dashboard(db: Session, tenant_id: str, filters: Filters) -> dict:
             ),
             key=lambda c: (-c["count"], c["code"]),
         )[:10],
+        # Every department that travelled, busiest first; "No department" last.
+        "by_department": sorted(
+            (
+                {**d, "people": len(d["people"]), "spent": str(d["spent"])}
+                for d in departments.values()
+            ),
+            key=lambda d: (d["department_id"] == 0, -d["count"], d["name"].lower()),
+        ),
         "top_travellers": sorted(
             ({**p, "spent": str(p["spent"])} for p in travellers.values()),
             key=lambda p: (-p["count"], p["full_name"]),
@@ -587,7 +637,8 @@ def _person_status(status: UserStatus | None, is_active: bool) -> str:
 
 
 def filter_options(db: Session, tenant_id: str) -> dict:
-    """What the filter dropdowns offer: campaigns, people, and places in use.
+    """What the filter dropdowns offer: campaigns, departments, people (with
+    their department, so picking one narrows the other) and places in use.
 
     Places are destinations only, matching what the state and city filters
     match, and only from submitted requests: a state that appears only in
@@ -600,9 +651,17 @@ def filter_options(db: Session, tenant_id: str) -> dict:
         .order_by(Project.code)
     ).all()
     people = db.execute(
-        select(User.id, User.full_name, User.employee_code, User.is_active, User.status)
+        select(
+            User.id, User.full_name, User.employee_code, User.is_active, User.status,
+            User.department_id,
+        )
         .where(User.tenant_id == tenant_id)
         .order_by(User.full_name)
+    ).all()
+    departments = db.execute(
+        select(Department.id, Department.name)
+        .where(Department.tenant_id == tenant_id)
+        .order_by(Department.name)
     ).all()
 
     used_states: set[str] = set()
@@ -636,9 +695,11 @@ def filter_options(db: Session, tenant_id: str) -> dict:
         ],
         "people": [
             {"id": u.id, "full_name": u.full_name, "employee_code": u.employee_code,
-             "is_active": u.is_active, "status": _person_status(u.status, u.is_active)}
+             "is_active": u.is_active, "status": _person_status(u.status, u.is_active),
+             "department_id": u.department_id}
             for u in people
         ],
+        "departments": [{"id": d.id, "name": d.name} for d in departments],
         "states": sorted(used_states),
         "cities": [
             {"state": state, "city": city}

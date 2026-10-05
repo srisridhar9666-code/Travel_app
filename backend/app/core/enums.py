@@ -12,9 +12,44 @@ from enum import StrEnum
 class Role(StrEnum):
     """What a user may do. Orthogonal to Designation."""
 
+    SUPER_ADMIN = "SUPER_ADMIN"     # everything a system admin can; approves invoices
     SYSTEM_ADMIN = "SYSTEM_ADMIN"   # user management, settings, audit log
     ADMIN = "ADMIN"                 # fulfilment: approve, book, upload tickets
+    MANAGER = "MANAGER"             # their own team: members (admin-approved), campaigns
     GROUND_STAFF = "GROUND_STAFF"   # raise and edit own requests
+
+
+#: Seniority. Someone may grant, or manage the account of, only a role at or
+#: below their own - so no admin can promote themselves past the tier that
+#: governs accounts, and nobody below the top can touch the top.
+ROLE_RANK: dict[Role, int] = {
+    Role.GROUND_STAFF: 0,
+    Role.MANAGER: 1,
+    Role.ADMIN: 2,
+    Role.SYSTEM_ADMIN: 3,
+    Role.SUPER_ADMIN: 4,
+}
+
+#: Who works the queue and sees everything, costs included.
+ADMIN_ROLES = frozenset({Role.ADMIN, Role.SYSTEM_ADMIN, Role.SUPER_ADMIN})
+
+#: Who manages accounts at the top tier. The last active one is protected.
+ACCOUNT_ROLES = frozenset({Role.SYSTEM_ADMIN, Role.SUPER_ADMIN})
+
+
+class TeamChangeKind(StrEnum):
+    """What a manager asked to do to their team. An admin approves each one."""
+
+    ADD = "ADD"
+    EDIT = "EDIT"
+    REMOVE = "REMOVE"
+
+
+class TeamChangeStatus(StrEnum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"   # withdrawn by the manager before a decision
 
 
 class Designation(StrEnum):
@@ -72,6 +107,67 @@ class TravelMode(StrEnum):
     TRAIN = "TRAIN"
     BUS = "BUS"
     CAB = "CAB"
+
+
+class CabType(StrEnum):
+    """The car a cab request asks for, and the one an admin records as sent.
+
+    Named by size rather than model so a vendor swapping a Dzire for an Aura
+    does not need a new value; the label carries the model staff know.
+    NO_PREFERENCE is only ever asked for - an admin always records a real car.
+    """
+
+    NO_PREFERENCE = "NO_PREFERENCE"
+    SEDAN = "SEDAN"   # Dzire, 4 seats
+    SUV = "SUV"       # Ertiga, 7 seats
+
+
+CAB_TYPE_LABELS: dict[CabType, str] = {
+    CabType.NO_PREFERENCE: "No preference",
+    CabType.SEDAN: "Dzire (4 seats)",
+    CabType.SUV: "Ertiga (7 seats)",
+}
+
+
+class CabTrip(StrEnum):
+    """How far a cab goes. Vendors price local and outstation trips differently,
+    so the admin booking it needs to know which this is before calling one."""
+
+    LOCAL = "LOCAL"
+    OUTSTATION = "OUTSTATION"
+
+
+#: The one place the local/outstation line is drawn. A trip under this many
+#: kilometres is local; at or over it, outstation, with a distance the
+#: requester estimates.
+LOCAL_CAB_MAX_KM = 80
+
+#: Further than any road trip in the country. A typo beyond it ("25000") is a
+#: slip, not a journey.
+MAX_CAB_DISTANCE_KM = 5000
+
+CAB_TRIP_LABELS: dict[CabTrip, str] = {
+    CabTrip.LOCAL: f"Local (within {LOCAL_CAB_MAX_KM} km)",
+    CabTrip.OUTSTATION: "Outstation",
+}
+
+
+class CancellationStatus(StrEnum):
+    """An ask to cancel a trip someone has already approved or booked. Until
+    an admin or the requester's manager approves it, the trip stands."""
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class CabExtensionStatus(StrEnum):
+    """Where an ask to keep a booked cab one more day stands. One at a time per
+    request; after a decision the traveller may ask again for another day."""
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
 
 
 class RequestPriority(StrEnum):
@@ -140,6 +236,19 @@ ACTIVE_TRAVELLER_STATUSES = {
 }
 
 
+class ManagerRecommendation(StrEnum):
+    """What a traveller's manager said about their trip, before an admin decides.
+
+    Advice, not a decision: the admin is the final authority and may decide
+    before the manager answers, or against what they said. Held per traveller,
+    like status, because on a group request each person may have a different
+    manager.
+    """
+
+    RECOMMENDED = "RECOMMENDED"
+    NOT_RECOMMENDED = "NOT_RECOMMENDED"
+
+
 class RoomSharingChoice(StrEnum):
     """What the requester picked when the system offered a co-stay."""
 
@@ -179,7 +288,39 @@ class AuditAction(StrEnum):
     EXTRACT = "EXTRACT"
     NOTIFY = "NOTIFY"
     OVERRIDE_CONFLICT = "OVERRIDE_CONFLICT"
+    RECOMMEND = "RECOMMEND"             # a manager's advice on a team member's trip
     VIEW_SENSITIVE = "VIEW_SENSITIVE"   # ID proof opened - PII access trail
+    EXPORT = "EXPORT"                   # a document left the system, e.g. an invoice CSV
+
+
+class VendorKind(StrEnum):
+    """Who an organisation pays for travel. Reporting only: any vendor can be
+    recorded against any trip, because a travel agent books hotels too."""
+
+    TRAVEL_AGENT = "TRAVEL_AGENT"
+    CAB = "CAB"
+    HOTEL = "HOTEL"
+    OTHER = "OTHER"
+
+
+class InvoiceStatus(StrEnum):
+    """Where a vendor's invoice stands. Admins prepare it (DRAFT), send it for
+    approval (SUBMITTED), and only a super admin decides it. A rejected one goes
+    back to the admins to fix and send again; an approved one never changes.
+    """
+
+    DRAFT = "DRAFT"
+    SUBMITTED = "SUBMITTED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+#: Invoice states an admin may still edit. Everything but approved: editing a
+#: rejected one is how it gets fixed, and editing a submitted one is allowed
+#: (the super admins are told it changed) rather than forcing a reject first.
+EDITABLE_INVOICE_STATUSES = frozenset(
+    {InvoiceStatus.DRAFT, InvoiceStatus.SUBMITTED, InvoiceStatus.REJECTED}
+)
 
 
 class IdProofType(StrEnum):
@@ -229,7 +370,7 @@ class NotificationCategory(StrEnum):
     BOOKINGS = "BOOKINGS"         # tickets confirmed, references issued
     ROOM_SHARING = "ROOM_SHARING"  # a colleague asked to share your room
     REMINDERS = "REMINDERS"       # nudges: travel coming up, requests going stale
-    NEW_REQUESTS = "NEW_REQUESTS"  # admins: someone raised a request to decide
+    NEW_REQUESTS = "NEW_REQUESTS"  # admins and managers: a request needs their answer
 
 
 #: Which category each notification kind belongs to. A kind that is missing here
@@ -242,9 +383,33 @@ NOTIFICATION_CATEGORIES: dict[str, NotificationCategory] = {
     "REQUEST_BOOKED": NotificationCategory.BOOKINGS,
     "BOOKING_CONFIRMED": NotificationCategory.BOOKINGS,
     "COSTAY_REQUESTED": NotificationCategory.ROOM_SHARING,
+    # A confirmed shared room is a decision about where someone sleeps.
+    "COSTAY_CONFIRMED": NotificationCategory.DECISIONS,
     "TRAVEL_REMINDER": NotificationCategory.REMINDERS,
     "REQUEST_STALE": NotificationCategory.REMINDERS,
     "REQUEST_SUBMITTED": NotificationCategory.NEW_REQUESTS,
+    "TEAM_REQUEST_SUBMITTED": NotificationCategory.NEW_REQUESTS,
+    "MANAGER_RECOMMENDED": NotificationCategory.NEW_REQUESTS,
+    # A manager's in-app copy of a decision on a team member's trip. The email
+    # itself reaches them as a Cc on the traveller's, so this never mails.
+    "DECISION_COPY": NotificationCategory.DECISIONS,
+    "TEAM_CHANGE_REQUESTED": NotificationCategory.NEW_REQUESTS,
+    "CANCELLATION_REQUESTED": NotificationCategory.NEW_REQUESTS,
+    "CANCELLATION_APPROVED": NotificationCategory.DECISIONS,
+    "CANCELLATION_REJECTED": NotificationCategory.DECISIONS,
+    "TEAM_CHANGE_APPROVED": NotificationCategory.DECISIONS,
+    "TEAM_CHANGE_REJECTED": NotificationCategory.DECISIONS,
+    # The car, its number and the driver's phone: what a booking is for a cab.
+    "CAB_DETAILS": NotificationCategory.BOOKINGS,
+    "CAB_EXTENSION_REQUESTED": NotificationCategory.NEW_REQUESTS,
+    "CAB_EXTENSION_APPROVED": NotificationCategory.DECISIONS,
+    "CAB_EXTENSION_REJECTED": NotificationCategory.DECISIONS,
+    # Vendor invoices: the super admins are asked to approve one, and told when
+    # one waiting on them changes; whoever prepared it hears the decision.
+    "INVOICE_SUBMITTED": NotificationCategory.NEW_REQUESTS,
+    "INVOICE_CHANGED": NotificationCategory.NEW_REQUESTS,
+    "INVOICE_APPROVED": NotificationCategory.DECISIONS,
+    "INVOICE_REJECTED": NotificationCategory.DECISIONS,
 }
 
 
@@ -262,8 +427,10 @@ OPTIONAL_CATEGORIES = {
     NotificationCategory.NEW_REQUESTS,
 }
 
-#: Categories only an admin receives, so only an admin is offered the switch.
-ADMIN_CATEGORIES = {NotificationCategory.NEW_REQUESTS}
+#: Categories only someone who answers requests receives - admins deciding
+#: them, managers recommending their team's - so only they are offered the
+#: switch.
+APPROVER_CATEGORIES = {NotificationCategory.NEW_REQUESTS}
 
 
 class NotificationStatus(StrEnum):

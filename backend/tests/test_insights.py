@@ -21,6 +21,7 @@ from app.core.enums import (
     TravellerStatus,
     UserStatus,
 )
+from app.models.department import Department
 from app.models.project import Project
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
@@ -241,6 +242,59 @@ class TestDashboard:
         by_state = self.board(db, state="Tamil Nadu", **window)
         assert by_state["top_states"] == [{"label": "Tamil Nadu", "count": 1}]
         assert by_state["top_places"] == [{"label": "Chennai", "count": 1}]
+
+    def test_by_department_counts_each_team_and_filters_to_one(self, db, project, people):
+        ravi, priya = people
+        sales = Department(tenant_id=TENANT, name="Sales")
+        ops = Department(tenant_id=TENANT, name="Field Ops")
+        db.add_all([sales, ops])
+        db.flush()
+        ravi.department_id = ops.id
+        priya.department_id = sales.id
+        loner = User(tenant_id=TENANT, email="sam@designboxed.com", full_name="Sam Rao",
+                     role=Role.GROUND_STAFF, password_hash="x")
+        db.add(loner)
+        db.commit()
+        trip(db, project, [ravi], start=datetime(2026, 8, 5, 9), cost=Decimal("2500"))
+        trip(db, project, [ravi], start=datetime(2026, 8, 9, 9), status=TravellerStatus.PENDING)
+        trip(db, project, [priya], start=datetime(2026, 8, 6, 9), cost=Decimal("1000"))
+        trip(db, project, [priya], start=datetime(2026, 8, 7, 9), status=TravellerStatus.REJECTED)
+        trip(db, project, [loner], kind=RequestType.HOTEL, check_in=date(2026, 8, 10),
+             check_out=date(2026, 8, 12), hotel_city="Pune", hotel_state="Maharashtra")
+
+        idle = Department(tenant_id=TENANT, name="Accounts")
+        db.add(idle)
+        db.commit()
+
+        window = {"since": date(2026, 8, 1), "until": date(2026, 8, 31)}
+        rows = {d["name"]: d for d in self.board(db, **window)["by_department"]}
+        # Busiest first; a department that did not travel still has its row;
+        # "No department" last.
+        assert list(rows) == ["Field Ops", "Sales", "Accounts", "No department"]
+        assert rows["Accounts"]["count"] == 0 and rows["Accounts"]["spent"] == "0.00"
+        assert rows["Field Ops"]["count"] == 2 and rows["Field Ops"]["pending"] == 1
+        assert rows["Field Ops"]["spent"] == "2500.00"
+        assert rows["Sales"]["count"] == 1        # the rejected trip did not travel
+        assert rows["No department"]["department_id"] == 0
+        assert rows["No department"]["nights"] == 2
+
+        sales_only = self.board(db, department_id=sales.id, **window)
+        assert sales_only["kpis"]["people"] == 1 and sales_only["kpis"]["spent"] == "1000.00"
+        assert [d["name"] for d in sales_only["by_department"]] == ["Sales"]
+        assert self.board(db, department_id=0, **window)["kpis"]["nights"] == 2
+        # The travel log and cost pages read the same rows, so they slice the same way.
+        rows = insights.load(db, TENANT, insights.Filters(department_id=ops.id, **window))
+        assert [r.user_id for r in rows] == [ravi.id, ravi.id]
+
+        # One person's view lists only their own department.
+        assert [d["name"] for d in self.board(db, user_id=priya.id, **window)["by_department"]] == [
+            "Sales"]
+
+        options = insights.filter_options(db, TENANT)
+        assert options["departments"] == [{"id": idle.id, "name": "Accounts"},
+                                          {"id": ops.id, "name": "Field Ops"},
+                                          {"id": sales.id, "name": "Sales"}]
+        assert {p["full_name"]: p["department_id"] for p in options["people"]}["Priya Kumar"] == sales.id
 
     def test_filter_options_list_campaigns_people_and_destinations_in_use(self, db, project, people):
         ravi, priya = people

@@ -34,28 +34,28 @@ import { formatInstant, formatInstantDate, todayInIndia } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import type { AuditRow } from '@/types';
 
+// Sign-ins, sign-outs and failed sign-ins are recorded but not listed here.
 const ACTIONS = [
-  'CREATE', 'UPDATE', 'DELETE', 'LOGIN', 'LOGIN_FAILED', 'LOGOUT',
+  'CREATE', 'UPDATE', 'DELETE',
   'SUBMIT', 'APPROVE', 'REJECT', 'CANCEL', 'BOOK', 'UPLOAD',
-  'EXTRACT', 'NOTIFY', 'OVERRIDE_CONFLICT', 'VIEW_SENSITIVE',
+  'EXTRACT', 'NOTIFY', 'OVERRIDE_CONFLICT', 'RECOMMEND', 'VIEW_SENSITIVE', 'EXPORT',
 ];
 
 function actionTone(action: string) {
-  if (action === 'LOGIN_FAILED' || action === 'REJECT' || action === 'DELETE') return 'danger';
+  if (action === 'REJECT' || action === 'DELETE') return 'danger';
   if (action === 'APPROVE' || action === 'BOOK' || action === 'CREATE') return 'success';
-  if (action === 'OVERRIDE_CONFLICT' || action === 'VIEW_SENSITIVE') return 'warning';
+  if (action === 'OVERRIDE_CONFLICT' || action === 'VIEW_SENSITIVE' || action === 'EXPORT') return 'warning';
   return 'neutral';
 }
 
 function timestamp(iso: string) {
-  // 24-hour, so the seconds an audit trail needs still fit the column.
+  // With seconds, which an audit trail needs; 12-hour like every other time.
   return formatInstant(iso, {
     day: '2-digit',
     month: 'short',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    hourCycle: 'h23',
   });
 }
 
@@ -79,7 +79,7 @@ function Row({ entry }: { entry: AuditRow }) {
           <p className="mt-0.5 text-2xs text-text-subtle">
             {entry.actor_name ?? 'System'}
             {entry.actor_email ? ` · ${entry.actor_email}` : ''}
-            {` · ${entry.entity_type}${entry.entity_id ? ` #${entry.entity_id}` : ''}`}
+            {` · ${entry.entity_type.replace(/_/g, ' ')}${entry.entity_id ? ` ${entry.entity_id}` : ''}`}
           </p>
 
           {open && hasDetail && (
@@ -250,8 +250,8 @@ export default function AuditPage() {
           title={`${total} ${total === 1 ? 'entry' : 'entries'}`}
           description={
             summary.data?.oldest
-              ? `Covering ${formatInstantDate(summary.data.oldest)} to today. Times are India time (IST).`
-              : 'Times are India time (IST).'
+              ? `Covering ${formatInstantDate(summary.data.oldest)} to today. Sign-ins are not listed. Times are India time (IST).`
+              : 'Sign-ins are not listed. Times are India time (IST).'
           }
           action={
             <div className="flex gap-2">

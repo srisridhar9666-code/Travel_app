@@ -17,7 +17,7 @@ function cell(value: CsvCell): string {
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-export function toCsv(header: string[], rows: CsvCell[][]): string {
+function toCsv(header: string[], rows: CsvCell[][]): string {
   return [header, ...rows].map((row) => row.map(cell).join(',')).join('\r\n');
 }
 

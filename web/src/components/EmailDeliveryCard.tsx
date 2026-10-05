@@ -86,11 +86,14 @@ function Warnings({ settings, problem }: { settings: EmailSettings; problem: str
       )}
       {settings.allowlist.length > 0 && (
         <Notice tone="warning">
-          <p className="font-semibold">Only {settings.allowlist.length === 1 ? 'one address' : `${settings.allowlist.length} addresses`} can receive email.</p>
+          <p className="font-semibold">
+            Email is set up - but only {settings.allowlist.length === 1 ? 'one address' : `${settings.allowlist.length} addresses`} can receive it.
+          </p>
           <p>
-            EMAIL_ALLOWLIST is set to {settings.allowlist.join(', ')}. Email to anyone else is
-            recorded as &ldquo;Not sent&rdquo; and never retried. Empty it in backend/.env and
-            restart the API to email everyone.
+            EMAIL_ALLOWLIST is set to {settings.allowlist.join(', ')}, a safety rail for testing with
+            made-up people. Email to anyone else is recorded as &ldquo;Not sent&rdquo; and never
+            retried. When real employees use the app, delete the EMAIL_ALLOWLIST line from
+            backend/.env and restart the API.
           </p>
         </Notice>
       )}
@@ -303,7 +306,7 @@ export function EmailProblemBanner() {
     : settings.restart_needed
       ? 'Email settings were changed after the API started. Restart the API to use them.'
       : settings.allowlist.length > 0
-        ? `Email only reaches ${settings.allowlist.join(', ')} (EMAIL_ALLOWLIST). Everyone else is not emailed.`
+        ? `Email is set up, but only ${settings.allowlist.join(', ')} receives it: EMAIL_ALLOWLIST in backend/.env holds back everyone else. Remove that line and restart the API to email all employees.`
         : null;
   if (!message) return null;
 

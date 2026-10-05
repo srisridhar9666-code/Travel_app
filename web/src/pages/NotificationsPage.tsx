@@ -44,6 +44,7 @@ import {
   NOTIFICATION_STATUS_LABELS,
   type NotificationCategory,
   type NotificationStatus,
+  isAdminRole,
 } from '@/types';
 
 const STATUS_TONE: Record<NotificationStatus, 'neutral' | 'success' | 'danger' | 'warning'> = {
@@ -413,6 +414,9 @@ function Ledger() {
                       {row.to_address && (
                         <div className="text-2xs text-text-subtle">{row.to_address}</div>
                       )}
+                      {row.cc_addresses && (
+                        <div className="text-2xs text-text-subtle">Cc {row.cc_addresses}</div>
+                      )}
                     </td>
                     <td className="px-5 py-2.5">
                       <div className="text-xs">{row.subject ?? row.title}</div>
@@ -452,7 +456,7 @@ function Ledger() {
 
 export default function NotificationsPage() {
   const user = useAuth((s) => s.user);
-  const isAdmin = user?.role === 'ADMIN' || user?.role === 'SYSTEM_ADMIN';
+  const isAdmin = isAdminRole(user?.role);
   // The tab is in the address, so "Notifications > Delivery ledger" can be
   // linked to directly.
   const [params, setParams] = useSearchParams();

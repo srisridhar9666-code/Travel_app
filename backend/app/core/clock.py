@@ -96,3 +96,12 @@ def to_utc_naive(value: datetime) -> datetime:
         return value
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
+
+def time_label(value: datetime, date_format: str = "%d %b %Y") -> str:
+    """"14 Oct 2026, 6:00 AM" - a time as people read it, 12-hour, like the app.
+
+    Takes the value as given: trip times are stored as India wall-clock time
+    already, and a recorded instant should go through `to_local` first.
+    """
+    hour = value.strftime("%I:%M %p").lstrip("0")
+    return f"{value.strftime(date_format)}, {hour}" if date_format else hour

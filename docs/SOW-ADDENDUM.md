@@ -1,6 +1,6 @@
 # SOW Addendum — Field Logistics & Travel Management System
 
-Companion to `Scope of Work_ Field Logistics & Travel Management System.pdf` (2 pages, 7 sections).
+Companion to the original Scope of Work, `docs/sow/Scope of Work_ Field Logistics & Travel Management System.pdf` (2 pages, 7 sections).
 This document records gaps found during the pre-build review, the decisions taken against them,
 and the items still open. Where this addendum and the PDF disagree, **this document wins**.
 
@@ -274,7 +274,7 @@ reset. MFA and Google SSO are V2.
 
 | Finding | Detail | Action taken |
 |---|---|---|
-| Dark-mode logo had a pink halo | `db_logo_white.png` stored pink in its fully transparent pixels. Correct renderers ignore RGB at alpha 0, but every bilinear scaler interpolates it, producing a visible fringe. **84,888 pixels affected.** | Cleaned to `web/public/brand/logo-dark.png`. `db_logo_black.png` was already clean (0 affected). |
+| Dark-mode logo had a pink halo | The supplied white logo stored pink in its fully transparent pixels. Correct renderers ignore RGB at alpha 0, but every bilinear scaler interpolates it, producing a visible fringe. **84,888 pixels affected.** | Cleaned to `web/public/brand/logo-dark.png`. The black one was already clean (0 affected). |
 | Brand red fails AA as body text on light | `#FE0024` on white is about **4.0:1**, under the 4.5:1 AA bar. On near-black it is about **4.9:1** and passes. | `--brand` (`#FE0024`) for fills and the logo; `--brand-strong` (`#D70021`, **5.4:1**) for brand-coloured text in light mode, `#FF4D63` (**6.1:1**) in dark. |
 | Brand red collides with destructive red | The product's main verbs are Approve and Reject. Brand red and danger red being the same colour makes every screen read as an alarm. | **Red is given to destructive.** The interactive primary is ink — near-black on light, near-white on dark. Brand red is reserved for the logo, the nav rail and active indicators. |
 | No icon-only asset | Neither file works at favicon size; both are portrait (roughly 1:1.5) and awkward in a horizontal header. | Generated `mark.png` (512), `apple-touch-icon.png` (180) and `favicon.png` (64) from the red mark, with the TM badge dropped — its clipped arc read as an artefact at small sizes. |

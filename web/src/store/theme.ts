@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 export type ThemePreference = 'light' | 'dark' | 'system';
-export type ResolvedTheme = 'light' | 'dark';
+type ResolvedTheme = 'light' | 'dark';
 
 const STORAGE_KEY = 'travel-ops-theme';
 
@@ -14,15 +14,20 @@ function resolve(preference: ThemePreference): ResolvedTheme {
   return preference === 'system' ? systemTheme() : preference;
 }
 
-/** Paint the resolved theme onto <html>, suppressing the colour transition on
- *  the very first application so the page does not animate on load. */
-function apply(resolved: ResolvedTheme, animate: boolean) {
+/** Paint the resolved theme onto <html> - at once. A cross-fade used to run on
+ *  every element, which on a phone held the switch up for seconds; the hover
+ *  fades a few buttons carry are switched off for the one frame too, so
+ *  nothing animates and the new colours land in a single paint. */
+function apply(resolved: ResolvedTheme) {
   const root = document.documentElement;
-  if (animate) {
-    root.classList.add('theme-transition');
-    window.setTimeout(() => root.classList.remove('theme-transition'), 200);
-  }
+  if (root.dataset.theme === resolved) return;
+  const still = document.createElement('style');
+  still.textContent = '*,*::before,*::after{transition:none!important}';
+  document.head.appendChild(still);
   root.dataset.theme = resolved;
+  // Read a style so the switch is applied while transitions are off.
+  void window.getComputedStyle(root).color;
+  window.requestAnimationFrame(() => still.remove());
 }
 
 interface ThemeState {
@@ -42,7 +47,7 @@ export const useTheme = create<ThemeState>()(
 
       setPreference(preference) {
         const resolved = resolve(preference);
-        apply(resolved, true);
+        apply(resolved);
         set({ preference, resolved });
       },
 
@@ -55,7 +60,7 @@ export const useTheme = create<ThemeState>()(
       syncFromSystem() {
         if (get().preference !== 'system') return;
         const resolved = systemTheme();
-        apply(resolved, true);
+        apply(resolved);
         set({ resolved });
       },
     }),
@@ -67,7 +72,7 @@ export const useTheme = create<ThemeState>()(
       onRehydrateStorage: () => (state) => {
         if (!state) return;
         const resolved = resolve(state.preference);
-        apply(resolved, false);
+        apply(resolved);
         state.resolved = resolved;
       },
     },

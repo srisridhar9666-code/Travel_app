@@ -17,7 +17,7 @@ from app.core.enums import Designation, Gender, Role, UserStatus
 from app.models.department import Department
 from app.models.user import User
 from app.schemas.bulk import IMPORT_COLUMNS, REQUIRED_COLUMNS, ImportPreview, ImportRow
-from app.schemas.user import tidy_phone
+from app.schemas.user import tidy_mobile
 from app.services import locations
 
 #: Deliberately permissive - the authority on an address is the invite that
@@ -112,6 +112,18 @@ def parse(raw: bytes, db: Session, tenant_id: str) -> ImportPreview:
     }
     new_departments: set[str] = set()
     seen_in_file: set[str] = set()
+    # Mobile numbers are unique across employees, like addresses.
+    phones_taken = {
+        phone: name
+        for phone, name in db.execute(
+            select(User.phone, User.full_name).where(
+                User.tenant_id == tenant_id,
+                User.phone.is_not(None),
+                User.status != UserStatus.DELETED,
+            )
+        ).all()
+    }
+    phones_in_file: set[str] = set()
 
     rows: list[ImportRow] = []
     for index, raw_row in enumerate(reader, start=2):  # line 1 is the header
@@ -159,9 +171,16 @@ def parse(raw: bytes, db: Session, tenant_id: str) -> ImportPreview:
         row.gender = _gender_or_error(clean.get("gender", ""), row)
 
         try:
-            row.phone = tidy_phone(clean.get("phone"))
+            row.phone = tidy_mobile(clean.get("phone"))
         except ValueError as exc:
             row.errors.append(f"phone: {exc}")
+        else:
+            if row.phone in phones_taken:
+                row.errors.append(f"phone {row.phone} is already {phones_taken[row.phone]}'s number")
+            elif row.phone and row.phone in phones_in_file:
+                row.errors.append(f"phone {row.phone} appears more than once in this file")
+            elif row.phone:
+                phones_in_file.add(row.phone)
         row.employee_code = clean.get("employee_code") or None
 
         # Matched against the place list, as the form does: "hyd" is Hyderabad.
@@ -186,7 +205,9 @@ def parse(raw: bytes, db: Session, tenant_id: str) -> ImportPreview:
                     new_departments.add(key)
                     row.warnings.append(f"Department “{department}” will be created")
 
-        if row.role in (Role.ADMIN, Role.SYSTEM_ADMIN):
+        if row.role is Role.SYSTEM_ADMIN:
+            row.errors.append("role SYSTEM_ADMIN is no longer used - use ADMIN or SUPER_ADMIN")
+        elif row.role is not Role.GROUND_STAFF:
             row.warnings.append(f"This row grants {row.role} access")
 
         rows.append(row)

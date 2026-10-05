@@ -10,7 +10,7 @@ interface Routed {
 
 /** "Banjara Hills, Hyderabad" - a cab's address with the city it is in,
  *  unless the address already names it. */
-export function withCity(place: string | null | undefined, city: string | null | undefined): string {
+function withCity(place: string | null | undefined, city: string | null | undefined): string {
   const address = (place ?? '').trim();
   const town = (city ?? '').trim();
   if (!town || address.toLowerCase().includes(town.toLowerCase())) return address || town;
