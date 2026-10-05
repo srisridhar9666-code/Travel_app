@@ -182,7 +182,24 @@ class RequestBody(BaseModel):
 
 
 class RequestCreate(RequestBody):
-    pass
+    #: Hotel only: the requester's own room choice, made in the form from the
+    #: colleagues offered there. SHARE_EXISTING is an ask an admin confirms.
+    room_sharing: RoomSharingChoice | None = None
+    share_with_user_id: int | None = None
+
+    @model_validator(mode="after")
+    def _room_choice_fits(self):
+        if self.room_sharing in (None, RoomSharingChoice.NOT_OFFERED):
+            self.room_sharing = None
+            self.share_with_user_id = None
+            return self
+        if self.request_type is not RequestType.HOTEL:
+            raise ValueError("A room choice only goes with a hotel request.")
+        if self.room_sharing is RoomSharingChoice.SHARE_EXISTING and self.share_with_user_id is None:
+            raise ValueError("Choosing to share needs the colleague to share with.")
+        if self.room_sharing is not RoomSharingChoice.SHARE_EXISTING:
+            self.share_with_user_id = None
+        return self
 
 
 class RequestEdit(RequestBody):
@@ -204,6 +221,13 @@ class RoomSharingChoicePayload(BaseModel):
         return self
 
 
+class RoomAllotPayload(BaseModel):
+    """An admin's room decision for one hotel traveller: share with this
+    colleague (both are paired and told), or `null` for a room of their own."""
+
+    share_with_user_id: int | None = None
+
+
 class CancelPayload(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
 
@@ -220,6 +244,11 @@ class TravellerRead(BaseModel):
     share_with_user_id: int | None = None
     share_with_name: str | None = None
     share_confirmed: bool = False
+    #: Admins only, on hotel stays: same-gender colleagues staying in the same
+    #: city on overlapping nights, who this traveller could be put in a room with.
+    room_matches: list["CoStayMatchRead"] = Field(default_factory=list)
+    #: A confirmed ticket file is there to download (My requests).
+    ticket_ready: bool = False
 
     # --- the decision, once one has been taken (Phase 4) -------------------
     decided_by_name: str | None = None
@@ -283,6 +312,10 @@ class CoStayMatchRead(BaseModel):
     check_out: date | None = None
     overlapping_nights: int
     status: str
+
+
+# TravellerRead lists these, and is declared first.
+TravellerRead.model_rebuild()
 
 
 class RevisionRead(BaseModel):
@@ -405,9 +438,15 @@ class QueueExport(BaseModel):
 
 
 class ConflictCheckRequest(RequestBody):
-    """A dry run of the conflict and co-stay checks, before anything is saved."""
+    """A dry run of the conflict and co-stay checks, before anything is saved.
+
+    The reason plays no part in finding a clash, so a form checked before its
+    reason is typed is answered rather than refused. The real write still
+    insists on one.
+    """
 
     request_id: int | None = None
+    travel_reason: str = Field(default="", max_length=500)
 
 
 class ConflictCheckResponse(BaseModel):

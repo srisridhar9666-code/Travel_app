@@ -276,6 +276,12 @@ class TestRaisingAndEditingACab:
         assert r.status_code == 422
         assert "approximate distance" in r.text
 
+    def test_the_dry_run_check_does_not_wait_for_the_reason(self, client, org):
+        body = cab_body(org)
+        body.pop("travel_reason", None)
+        r = client.post("/requests/check", headers=auth(org["ravi"]), json=body)
+        assert r.status_code == 200, r.text
+
     def test_an_edit_is_a_revision_with_readable_labels(self, client, db, org):
         made = raise_cab(client, org)
         body = cab_body(org, cab_type="SEDAN", cab_trip="LOCAL", cab_distance_km=40)

@@ -6,6 +6,7 @@ import {
   Car,
   CheckCircle2,
   ChevronDown,
+  Download,
   History,
   Pencil,
   Plane,
@@ -37,6 +38,7 @@ import {
   askCabExtension,
   cancelRequest,
   errorMessage,
+  fetchMyTicket,
   fetchNotifications,
   fetchRequest,
   fetchRequests,
@@ -44,6 +46,7 @@ import {
   setRoomSharing,
   submitRequest,
 } from '@/lib/api';
+import { openFileTab, showFile } from '@/lib/files';
 import { routeLabel } from '@/lib/places';
 import { cabAsked, campaignLabel, revisionField, revisionValue } from '@/lib/requests';
 import { formatInstant } from '@/lib/time';
@@ -175,6 +178,13 @@ export default function RequestsPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<TravelRequest | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
+
+  // The tab opens inside the click; the file follows once it has arrived.
+  const downloadTicket = useMutation({
+    mutationFn: (vars: { requestId: number; travellerId: number; tab: Window | null }) =>
+      showFile(vars.tab, () => fetchMyTicket(vars.requestId, vars.travellerId), 'ticket'),
+    meta: { errorFallback: 'Could not download the ticket.' },
+  });
   const [cancelling, setCancelling] = useState<TravelRequest | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [extending, setExtending] = useState<TravelRequest | null>(null);
@@ -457,16 +467,46 @@ export default function RequestsPage() {
                         ))}
                       </div>
 
-                      {/* Not for cabs: the cab sent is shown in its own block. */}
+                      {/* Not for cabs: the cab sent is shown in its own block. A
+                          ticket is offered to its traveller and to whoever asked
+                          for the trip - the people the server will hand it to. */}
                       {request.request_type !== 'LOCAL_CAB' &&
                         request.travellers
-                          .filter((t) => t.status === 'BOOKED' && (t.booking_reference || t.booking_details))
+                          .filter(
+                            (t) =>
+                              t.status === 'BOOKED' &&
+                              (t.booking_reference || t.booking_details || t.ticket_ready),
+                          )
                           .map((t) => (
                             <BookingSummary
                               key={t.id}
                               reference={t.booking_reference}
                               details={t.booking_details}
                               title={t.user_id === me?.id ? 'Your booking' : `${t.full_name}'s booking`}
+                              action={
+                                t.ticket_ready &&
+                                (isOwner || t.user_id === me?.id) && (
+                                  <Button
+                                    size="sm"
+                                    variant="link"
+                                    className="h-7 px-0"
+                                    loading={
+                                      downloadTicket.isPending &&
+                                      downloadTicket.variables?.travellerId === t.id
+                                    }
+                                    onClick={() =>
+                                      downloadTicket.mutate({
+                                        requestId: request.id,
+                                        travellerId: t.id,
+                                        tab: openFileTab(),
+                                      })
+                                    }
+                                  >
+                                    <Download size={13} />
+                                    Download ticket
+                                  </Button>
+                                )
+                              }
                             />
                           ))}
 

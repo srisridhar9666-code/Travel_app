@@ -1,4 +1,5 @@
 import { BedDouble, Plane } from 'lucide-react';
+import type { ReactNode } from 'react';
 
 import { Field, Input } from '@/components/ui';
 import { dayTime } from '@/lib/requests';
@@ -130,12 +131,15 @@ export function BookingSummary({
   reference,
   details,
   title = 'Your booking',
+  action,
 }: {
   reference: string | null;
   details: BookingDetails | null;
   title?: string;
+  /** Beside the title - the traveller's "Download ticket". */
+  action?: ReactNode;
 }) {
-  if (!reference && !details) return null;
+  if (!reference && !details && !action) return null;
   const d = details ?? {};
   const hotel = Boolean(d.hotel_name || d.hotel_address);
   const rows: [string, string | null | undefined][] = hotel
@@ -156,9 +160,12 @@ export function BookingSummary({
   const Icon = hotel ? BedDouble : Plane;
   return (
     <div className="mt-2 rounded-md border border-border bg-surface-sunken px-3 py-2">
-      <p className="mb-1 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-text-subtle">
-        <Icon size={12} /> {title}
-      </p>
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2">
+        <p className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-text-subtle">
+          <Icon size={12} /> {title}
+        </p>
+        {action}
+      </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
         {rows
           .filter(([, value]) => value)

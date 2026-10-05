@@ -469,6 +469,11 @@ export interface RequestTraveller {
   /** On the admin queue list only: the uploaded ticket to open from this row - the
    *  confirmed one, else the newest still under review. */
   ticket_id?: number | null;
+  /** The traveller's confirmed ticket can be downloaded from My requests. */
+  ticket_ready?: boolean;
+  /** Admins only, on a hotel stay: colleagues of the same gender staying in the
+   *  same city on overlapping nights - who could be put in one room. */
+  room_matches?: CoStayMatch[];
 
   /** Two-level approval. Who this traveller reports to, if that manager is
    *  active - shown to anyone who can see the request. */
@@ -1165,6 +1170,8 @@ export interface InsightFilters {
   until?: string;
   user_id?: number;
   project_id?: number;
+  /** The traveller's department as it is now; 0 is "no department". */
+  department_id?: number;
   request_type?: RequestType;
   state?: string;
   city?: string;
@@ -1276,16 +1283,29 @@ export interface Insights {
     nights: number;
     spent: string;
   }[];
+  /** Every department that travelled in this slice, busiest first, with
+   *  "No department" (id 0) last. Trips are travelled movements. */
+  by_department: {
+    department_id: number;
+    name: string;
+    count: number;
+    people: number;
+    nights: number;
+    pending: number;
+    spent: string;
+  }[];
 }
 
 export interface FilterOptions {
   projects: { id: number; code: string; name: string; status: ProjectStatus }[];
+  departments: { id: number; name: string }[];
   people: {
     id: number;
     full_name: string;
     employee_code: string | null;
     is_active: boolean;
     status: UserStatus;
+    department_id: number | null;
   }[];
   /** Destination states in use. */
   states: string[];

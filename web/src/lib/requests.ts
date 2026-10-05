@@ -27,14 +27,17 @@ export const dayTime = (iso: string) =>
     minute: '2-digit',
   });
 
+/** A stay's nights as dates: "14 Oct – 16 Oct", or the check-in alone. */
+export const stayDates = (stay: { check_in: string; check_out: string | null }) =>
+  stay.check_out
+    ? `${dayMonth(stay.check_in)} – ${dayMonth(stay.check_out)}`
+    : dayMonth(stay.check_in);
+
 /** Where and when, in one line: "Pune · 14 Oct – 16 Oct", or a route with its
  *  departure. */
 export function itinerary(request: TravelRequest): string {
   if (request.request_type === 'HOTEL') {
-    const nights = request.check_out
-      ? `${dayMonth(request.check_in!)} – ${dayMonth(request.check_out)}`
-      : dayMonth(request.check_in!);
-    return `${request.hotel_city} · ${nights}`;
+    return `${request.hotel_city} · ${stayDates({ check_in: request.check_in!, check_out: request.check_out })}`;
   }
   return `${routeLabel(request)} · ${request.start_at ? dayTime(request.start_at) : ''}`;
 }

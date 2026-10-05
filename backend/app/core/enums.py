@@ -383,6 +383,8 @@ NOTIFICATION_CATEGORIES: dict[str, NotificationCategory] = {
     "REQUEST_BOOKED": NotificationCategory.BOOKINGS,
     "BOOKING_CONFIRMED": NotificationCategory.BOOKINGS,
     "COSTAY_REQUESTED": NotificationCategory.ROOM_SHARING,
+    # A confirmed shared room is a decision about where someone sleeps.
+    "COSTAY_CONFIRMED": NotificationCategory.DECISIONS,
     "TRAVEL_REMINDER": NotificationCategory.REMINDERS,
     "REQUEST_STALE": NotificationCategory.REMINDERS,
     "REQUEST_SUBMITTED": NotificationCategory.NEW_REQUESTS,

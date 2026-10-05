@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.core import clock
 from app.core.enums import (
+    ACTIVE_TRAVELLER_STATUSES,
     ADMIN_ROLES,
     AuditAction,
     CabExtensionStatus,
@@ -403,6 +404,53 @@ def check_costay(
     return [CoStayMatchRead(**vars(m)) for m in matches]
 
 
+def room_matches_for(db: Session, *, tenant_id: str, request: TravelRequest) -> dict[int, list[CoStayMatchRead]]:
+    """For an admin, per traveller on a live hotel stay: the same-gender
+    colleagues in that city on overlapping nights they could share a room with.
+
+    Travellers already in a confirmed shared room, or decided out of the trip,
+    are left out - there is nothing to allot for them.
+    """
+    if (
+        request.request_type is not RequestType.HOTEL
+        or request.is_draft
+        or request.is_cancelled
+        or request.check_in is None
+    ):
+        return {}
+    out: dict[int, list[CoStayMatchRead]] = {}
+    for traveller in request.travellers:
+        if traveller.user is None or traveller.status not in ACTIVE_TRAVELLER_STATUSES:
+            continue
+        if traveller.room_sharing is RoomSharingChoice.SHARE_EXISTING and traveller.share_confirmed_at:
+            continue
+        matches = costay.find_matches(
+            db,
+            tenant_id=tenant_id,
+            for_user=traveller.user,
+            city=request.hotel_city or "",
+            check_in=request.check_in,
+            check_out=request.check_out,
+            exclude_request_id=request.id,
+        )
+        if matches:
+            out[traveller.id] = [CoStayMatchRead(**vars(m)) for m in matches]
+    return out
+
+
+def confirmed_ticket_travellers(db: Session, request_id: int) -> set[int]:
+    """Travellers on this request with a confirmed ticket they can download."""
+    return set(
+        db.execute(
+            select(TicketDocument.traveller_id).where(
+                TicketDocument.request_id == request_id,
+                TicketDocument.status == TicketStatus.CONFIRMED,
+                TicketDocument.file_path.is_not(None),
+            )
+        ).scalars()
+    )
+
+
 def ticket_per_traveller(db: Session, request_id: int) -> dict[int, int]:
     """The ticket document to show beside each traveller on a request.
 
@@ -461,6 +509,8 @@ def _traveller_read(
     reader: User | None,
     tickets: dict[int, int],
     billed: dict[int, Invoice],
+    room_matches: dict[int, list[CoStayMatchRead]] | None = None,
+    confirmed: set[int] | None = None,
 ) -> TravellerRead:
     manager = t.user.active_manager if t.user else None
     review = sees_review(reader, t)
@@ -477,6 +527,8 @@ def _traveller_read(
         share_with_user_id=t.share_with_user_id,
         share_with_name=t.share_with.full_name if t.share_with else None,
         share_confirmed=t.share_confirmed_at is not None,
+        room_matches=(room_matches or {}).get(t.id, []),
+        ticket_ready=t.id in (confirmed or set()),
         decided_by_name=t.decided_by.full_name if t.decided_by else None,
         decided_at=t.decided_at,
         decision_reason=t.decision_reason,
@@ -537,9 +589,22 @@ def to_read(
     # export and single reads have no use for the extra query per request.
     tickets = ticket_per_traveller(db, request.id) if with_tickets else {}
     billed = invoices_for(db, request) if show_cost else {}
+    # Booked travellers with a ticket file they can download from My requests.
+    confirmed = (
+        confirmed_ticket_travellers(db, request.id)
+        if any(t.status is TravellerStatus.BOOKED for t in request.travellers)
+        else set()
+    )
+    # Who each hotel traveller could share a room with - the admin allots it.
+    rooms = (
+        room_matches_for(db, tenant_id=tenant_id, request=request)
+        if reader is not None and reader.is_admin
+        else {}
+    )
     travellers = [
         _traveller_read(
-            t, request, show_cost=show_cost, reader=reader, tickets=tickets, billed=billed
+            t, request, show_cost=show_cost, reader=reader, tickets=tickets, billed=billed,
+            room_matches=rooms, confirmed=confirmed,
         )
         for t in request.travellers
     ]

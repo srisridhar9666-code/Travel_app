@@ -1,9 +1,16 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { AlertTriangle, BedDouble, Car, Plane, Search, Users } from 'lucide-react';
+import { AlertTriangle, BedDouble, Car, Plane, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { PlacePicker } from '@/components/PlacePicker';
+import {
+  NO_ROOM_PICK,
+  RoomChoice,
+  roomPayload,
+  useRoomMatches,
+  type RoomPick,
+} from '@/components/RoomSharing';
 import { Button, Field, Input, Select } from '@/components/ui';
 import {
   checkRequest,
@@ -25,7 +32,6 @@ import {
   TRAVEL_MODE_LABELS,
   type CabTrip,
   type CabType,
-  type CoStayMatch,
   type Project,
   type RequestConflict,
   type RequestPriority,
@@ -291,6 +297,7 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
     if (!open) return;
     setError(null);
     setForm(editing ? fromRequest(editing) : BLANK);
+    setRoomPick(NO_ROOM_PICK);
   }, [open, editing]);
 
   // Default to the only campaign if there is one, so the common case is one
@@ -326,28 +333,40 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
   // Check as the form is typed, debounced, so the warning appears while there
   // is still time to act on it. Failures are swallowed: a dry run that cannot
   // reach the server must not look like a validation error.
-  const [live, setLive] = useState<{ conflicts: RequestConflict[]; costay: CoStayMatch[] }>({
-    conflicts: [],
-    costay: [],
-  });
+  const [conflicts, setConflicts] = useState<RequestConflict[]>([]);
 
   useEffect(() => {
     if (!open || !worthChecking(form)) {
-      setLive({ conflicts: [], costay: [] });
+      setConflicts([]);
       return;
     }
     const handle = setTimeout(() => {
       checkRequest({ ...payload, request_id: editing?.id })
-        .then((result) => setLive({ conflicts: result.conflicts, costay: result.costay_matches }))
-        .catch(() => setLive({ conflicts: [], costay: [] }));
+        .then((result) => setConflicts(result.conflicts))
+        .catch(() => setConflicts([]));
     }, 400);
     return () => clearTimeout(handle);
   }, [open, payload, editing?.id, form]);
 
+  // Who of the requester's gender is staying in the hotel's city - offered from
+  // the moment the city is picked, before any dates.
+  const [roomPick, setRoomPick] = useState<RoomPick>(NO_ROOM_PICK);
+  const roomMatches = useRoomMatches({
+    enabled: open && form.request_type === 'HOTEL',
+    city: form.hotel_city,
+    checkIn: form.check_in,
+    checkOut: form.check_out,
+    requestId: editing?.id,
+  });
+  const staying = form.request_type === 'HOTEL' && form.hotel_city ? (roomMatches.data ?? []) : [];
+
   const save = useMutation({
     mutationFn: (asDraft: boolean) => {
       const body = toPayload(form, asDraft);
-      return editing ? editRequest(editing.id, body) : createRequest(body);
+      if (editing) return editRequest(editing.id, body);
+      return createRequest(
+        body.request_type === 'HOTEL' ? { ...body, ...roomPayload(roomPick, staying) } : body,
+      );
     },
     onSuccess: onSaved,
     // The global toast and the inline box say the same thing.
@@ -548,7 +567,7 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
               className="sm:col-span-2"
               state={form.hotel_state}
               city={form.hotel_city}
-              hint="Colleagues staying in the same place are offered a shared room."
+              hint="Colleagues of your gender staying in this city are shown below, to share a room."
               onChange={({ state, city }) =>
                 setForm({ ...form, hotel_state: state, hotel_city: city })
               }
@@ -570,6 +589,14 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
                 onChange={(e) => setForm({ ...form, check_out: e.target.value })}
               />
             </Field>
+            <RoomChoice
+              city={form.hotel_city}
+              hasDates={Boolean(form.check_in)}
+              editing={Boolean(editing)}
+              matches={staying}
+              pick={roomPick}
+              onPick={setRoomPick}
+            />
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2">
@@ -867,32 +894,7 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
           />
         </Field>
 
-        <ConflictList conflicts={live.conflicts} />
-
-        {isHotel && live.costay.length > 0 && (
-          <div className="rounded-md border border-info/40 bg-info-soft px-3 py-2.5">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-info">
-              <Users size={13} />
-              {live.costay.length === 1
-                ? 'A colleague is already staying there'
-                : `${live.costay.length} colleagues are already staying there`}
-            </div>
-            <ul className="mt-1.5 space-y-1">
-              {live.costay.map((match) => (
-                <li key={match.user_id} className="text-xs leading-relaxed text-text-muted">
-                  <span className="font-medium text-text">{match.full_name}</span>
-                  {match.designation && ` · ${DESIGNATION_LABELS[match.designation]}`} —{' '}
-                  {match.overlapping_nights}{' '}
-                  {match.overlapping_nights === 1 ? 'night' : 'nights'} in common
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2 text-2xs text-text-subtle">
-              Save this request first, then choose whether to share a room. An admin confirms any
-              shared room before it is booked.
-            </p>
-          </div>
-        )}
+        <ConflictList conflicts={conflicts} />
 
         {editing && !editing.is_draft && (
           <p className="text-2xs text-text-subtle">

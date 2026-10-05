@@ -2,6 +2,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
   ArrowRight,
+  Building2,
   CalendarCheck,
   CheckSquare,
   Clock,
@@ -16,7 +17,12 @@ import { Link } from 'react-router-dom';
 
 import type { RangePreset } from '@/components/DateRangePicker';
 import { EmailProblemBanner } from '@/components/EmailDeliveryCard';
-import { ReportFilterBar, stateChange, useReportFilters } from '@/components/ReportFilters';
+import {
+  ReportFilterBar,
+  departmentChange,
+  stateChange,
+  useReportFilters,
+} from '@/components/ReportFilters';
 import { TravelHistoryPanel } from '@/components/TravelHistoryPanel';
 import { Columns, HorizontalBars, StatTile, formatMoney } from '@/components/charts';
 import { Button, Card, CardHeader, PageHeader, Skeleton } from '@/components/ui';
@@ -88,6 +94,97 @@ const DASHBOARD_PRESETS: RangePreset[] = [
   'custom',
 ];
 
+/**
+ * Trips, people, nights, pending decisions and booked spend for each
+ * department, as it is now. A row filters the whole dashboard to that
+ * department; clicking it again clears the filter.
+ */
+function DepartmentBreakdown({
+  rows,
+  selected,
+  onSelect,
+}: {
+  rows: Insights['by_department'] | undefined;
+  selected: number | undefined;
+  onSelect: (id: number) => void;
+}) {
+  const busiest = Math.max(1, ...(rows ?? []).map((row) => row.count));
+  return (
+    <Card>
+      <CardHeader
+        title="By department"
+        description="Trips, people and booked spend for each department in this window. Click one to filter the dashboard."
+      />
+      {rows ? (
+        rows.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-text-muted">
+                  <th className="px-4 py-2.5 font-medium sm:px-5">Department</th>
+                  <th className="px-4 py-2.5 text-right font-medium">Trips</th>
+                  <th className="hidden px-4 py-2.5 text-right font-medium sm:table-cell">People</th>
+                  <th className="hidden px-4 py-2.5 text-right font-medium md:table-cell">Nights</th>
+                  <th className="hidden px-4 py-2.5 text-right font-medium sm:table-cell">Pending</th>
+                  <th className="px-4 py-2.5 text-right font-medium sm:px-5">Spend</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {rows.map((row) => (
+                  <tr
+                    key={row.department_id}
+                    className={cn(
+                      'cursor-pointer hover:bg-surface-sunken/60',
+                      selected === row.department_id && 'bg-surface-sunken',
+                    )}
+                    onClick={() => onSelect(row.department_id)}
+                  >
+                    <td className="px-4 py-3 sm:px-5">
+                      <span
+                        className={cn(
+                          'flex items-center gap-1.5 font-medium',
+                          row.department_id === 0 && 'text-text-muted',
+                        )}
+                      >
+                        <Building2 size={13} className="shrink-0 text-text-subtle" />
+                        {row.name}
+                      </span>
+                      <span className="mt-1.5 block h-1.5 w-full max-w-60 overflow-hidden rounded-sm bg-surface-sunken">
+                        <span
+                          className="block h-full rounded-r-[3px] bg-chart-1"
+                          style={{ width: `${(row.count / busiest) * 100}%` }}
+                        />
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums">{row.count}</td>
+                    <td className="hidden px-4 py-3 text-right tabular-nums sm:table-cell">{row.people}</td>
+                    <td className="hidden px-4 py-3 text-right tabular-nums md:table-cell">{row.nights}</td>
+                    <td
+                      className={cn(
+                        'hidden px-4 py-3 text-right tabular-nums sm:table-cell',
+                        row.pending > 0 && 'font-medium text-warning',
+                      )}
+                    >
+                      {row.pending}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums sm:px-5">{formatMoney(row.spent)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="px-5 py-8 text-center text-xs text-text-subtle">No travel in this period.</p>
+        )
+      ) : (
+        <div className="p-5">
+          <Skeleton className="h-32 w-full" />
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function AdminDashboard() {
   const f = useReportFilters('last_30_next_30');
   const [trendMetric, setTrendMetric] = useState<'movements' | 'spent'>('movements');
@@ -121,6 +218,8 @@ function AdminDashboard() {
     : undefined;
   const toggleState = (label: string) =>
     f.update(stateChange(options.data, f.city, f.state === label ? '' : label));
+  const toggleDepartment = (id: number) =>
+    f.update(departmentChange(options.data, f.userId, f.departmentId === id ? '' : String(id)));
 
   return (
     <div className="space-y-6">
@@ -228,6 +327,12 @@ function AdminDashboard() {
           </div>
         </Card>
       </div>
+
+      <DepartmentBreakdown
+        rows={data?.by_department}
+        selected={f.departmentId}
+        onSelect={toggleDepartment}
+      />
 
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
         <Card>

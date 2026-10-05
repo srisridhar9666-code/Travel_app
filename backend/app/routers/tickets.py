@@ -23,8 +23,9 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, UploadFi
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.core import clock
-from app.core.deps import AdminUser, DbSession
+from app.core.deps import AdminUser, CurrentUser, DbSession
 from app.core.enums import (
     AuditAction,
     NotificationChannel,
@@ -406,6 +407,49 @@ def download_ticket(ticket_id: int, actor: AdminUser, db: DbSession) -> Response
     )
 
 
+@router.get("/requests/{request_id}/travellers/{traveller_id}/ticket")
+def my_ticket(request_id: int, traveller_id: int, user: CurrentUser, db: DbSession) -> Response:
+    """A traveller's confirmed ticket, for the traveller themself.
+
+    Also for whoever raised the request (they often book for a group) and for
+    admins. Only a confirmed ticket - one an admin has checked and booked
+    against - is ever handed out; one still under review is not theirs yet.
+    """
+    row = db.get(TravelRequest, request_id)
+    traveller = (
+        next((t for t in row.travellers if t.id == traveller_id), None)
+        if row is not None and row.tenant_id == user.tenant_id
+        else None
+    )
+    allowed = traveller is not None and (
+        user.is_admin or user.id in (traveller.user_id, row.requester_id)
+    )
+    ticket = (
+        db.execute(
+            select(TicketDocument)
+            .where(
+                TicketDocument.request_id == request_id,
+                TicketDocument.traveller_id == traveller_id,
+                TicketDocument.status == TicketStatus.CONFIRMED,
+                TicketDocument.file_path.is_not(None),
+            )
+            .order_by(TicketDocument.id.desc())
+        ).scalars().first()
+        if allowed
+        else None
+    )
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No ticket to download yet.")
+    return Response(
+        content=storage.read(ticket.file_path),
+        media_type=ticket.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'inline; filename="{ticket.file_name or "ticket"}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Confirm - the only path to BOOKED
 # ---------------------------------------------------------------------------
@@ -573,7 +617,12 @@ def _confirmation_body(ticket: TicketDocument, request: TravelRequest, name: str
 
     if request.project:
         lines += ["", f"Campaign: {request.project.code} - {request.project.name}"]
-    lines += ["", "Carry photo ID that matches the name on the booking."]
+    link = f"{get_settings().frontend_base_url.rstrip('/')}/requests"
+    lines += [
+        "",
+        f"Your ticket is on My requests - open the trip and choose Download ticket: {link}",
+        "Carry photo ID that matches the name on the booking.",
+    ]
     return "\n".join(lines)
 
 

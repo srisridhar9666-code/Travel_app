@@ -17,14 +17,17 @@ Two things shape this module:
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.core import clock
 from app.core.deps import AdminOrManager, AdminUser, CurrentUser, DbSession, ManagerUser
 from app.core.enums import (
+    ACTIVE_TRAVELLER_STATUSES,
     AuditAction,
     CabExtensionStatus,
     CancellationStatus,
@@ -45,6 +48,7 @@ from app.schemas.request import (
     CabExtensionDecision,
     CancelPayload,
     CancellationDecision,
+    CoStayMatchRead,
     ColleagueRead,
     ConflictCheckRequest,
     ConflictCheckResponse,
@@ -57,6 +61,7 @@ from app.schemas.request import (
     RequestListResponse,
     RequestRead,
     RevisionRead,
+    RoomAllotPayload,
     RoomSharingChoicePayload,
 )
 from app.services import (
@@ -171,6 +176,93 @@ def check(payload: ConflictCheckRequest, user: CurrentUser, db: DbSession) -> Co
             db, tenant_id=user.tenant_id, request=probe, for_user=user
         ),
     )
+
+
+@router.get("/room-matches", response_model=list[CoStayMatchRead])
+def room_matches(
+    user: CurrentUser,
+    db: DbSession,
+    city: Annotated[str, Query(min_length=1, max_length=120)],
+    check_in: Annotated[date | None, Query()] = None,
+    check_out: Annotated[date | None, Query()] = None,
+    request_id: Annotated[int | None, Query()] = None,
+) -> list[CoStayMatchRead]:
+    """Colleagues of the caller's gender staying in this city, for the hotel form.
+
+    Answers as soon as a city is picked: with dates, those whose stay overlaps
+    (most nights in common first); without, everyone with a stay there still to
+    come, so the dates can be lined up. Same rules as the offer on a saved
+    request - the gender policy filters before anything is returned.
+    """
+    matches = costay.find_matches(
+        db,
+        tenant_id=user.tenant_id,
+        for_user=user,
+        city=city,
+        check_in=check_in,
+        check_out=check_out,
+        exclude_request_id=request_id,
+        upcoming_from=None if check_in else clock.local_today(),
+    )
+    return [CoStayMatchRead(**vars(m)) for m in matches]
+
+
+def _choose_room(
+    db: Session,
+    *,
+    row: TravelRequest,
+    user: User,
+    choice: RoomSharingChoice,
+    share_with_user_id: int | None,
+) -> None:
+    """Record the requester's room choice from the form on their own traveller
+    row. Sharing is checked against the live offer, so only a colleague who
+    could actually be offered is accepted; it stays an ask until an admin
+    confirms it."""
+    mine = next((t for t in row.travellers if t.user_id == user.id), None)
+    if mine is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A room choice is for your own stay - you are not on this one.",
+        )
+    if choice is RoomSharingChoice.SHARE_EXISTING:
+        offered = {
+            m.user_id
+            for m in costay.find_matches(
+                db,
+                tenant_id=user.tenant_id,
+                for_user=user,
+                city=row.hotel_city or "",
+                check_in=row.check_in,
+                check_out=row.check_out,
+                exclude_request_id=row.id,
+            )
+        }
+        if share_with_user_id not in offered:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="That colleague is not staying there on those nights, so a shared room cannot be asked for.",
+            )
+    mine.room_sharing = choice
+    mine.share_with_user_id = share_with_user_id
+
+
+def _tell_share_colleague(db: Session, row: TravelRequest, user: User) -> None:
+    """Once the request is visible, tell the colleague an ask to share was made."""
+    mine = next((t for t in row.travellers if t.user_id == user.id), None)
+    if (
+        mine is not None
+        and mine.room_sharing is RoomSharingChoice.SHARE_EXISTING
+        and mine.share_with_user_id
+        and mine.share_confirmed_at is None
+    ):
+        costay.notify_share_request(
+            db,
+            tenant_id=user.tenant_id,
+            colleague_id=mine.share_with_user_id,
+            requester=user,
+            request=row,
+        )
 
 
 def _matching(
@@ -394,6 +486,11 @@ def create_request(
     ]
     db.add(row)
     db.flush()
+    if payload.room_sharing is not None:
+        _choose_room(
+            db, row=row, user=user, choice=payload.room_sharing,
+            share_with_user_id=payload.share_with_user_id,
+        )
 
     if payload.is_draft:
         audit.record(
@@ -410,6 +507,7 @@ def create_request(
         queued = svc.record_submission(
             db, request=row, actor=user, tenant_id=user.tenant_id, http_request=http_request
         )
+        _tell_share_colleague(db, row, user)
         background.add_task(notifications.deliver_queued, queued)
 
     db.commit()
@@ -689,6 +787,7 @@ def submit_request(
     queued = svc.record_submission(
         db, request=row, actor=user, tenant_id=user.tenant_id, http_request=http_request
     )
+    _tell_share_colleague(db, row, user)
     background.add_task(notifications.deliver_queued, queued)
     db.commit()
     db.refresh(row)
@@ -900,6 +999,150 @@ def confirm_share(
     db.commit()
     db.refresh(row)
     return svc.to_read(db, row, tenant_id=actor.tenant_id, viewer=actor)
+
+
+@router.post("/{request_id}/travellers/{traveller_id}/room", response_model=RequestRead)
+def allot_room(
+    request_id: int,
+    traveller_id: int,
+    payload: RoomAllotPayload,
+    actor: AdminUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """An admin decides where a hotel traveller sleeps.
+
+    With a colleague: the two are put in one room - each traveller row points at
+    the other and is confirmed - provided they may share (same stated gender)
+    and the colleague really is staying in that city on overlapping nights.
+    Both are told. With `null`: a room of their own, undoing any pairing on
+    both sides.
+    """
+    row = _load(db, request_id, actor)
+    if row.request_type is not RequestType.HOTEL or row.is_cancelled or row.is_draft:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Rooms are allotted on a submitted hotel request that is not cancelled.",
+        )
+    traveller = _traveller_or_404(row, traveller_id)
+    if traveller.status not in ACTIVE_TRAVELLER_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{traveller.user.full_name} is no longer on this stay.",
+        )
+    before = {
+        "room_sharing": str(traveller.room_sharing),
+        "share_with": traveller.share_with.full_name if traveller.share_with else None,
+    }
+
+    def release(person: RequestTraveller) -> None:
+        """Undo the other half of a pairing this traveller was in."""
+        partner_id = person.share_with_user_id
+        if not partner_id:
+            return
+        for other in db.execute(
+            select(RequestTraveller)
+            .join(TravelRequest, TravelRequest.id == RequestTraveller.request_id)
+            .where(
+                TravelRequest.tenant_id == actor.tenant_id,
+                RequestTraveller.user_id == partner_id,
+                RequestTraveller.share_with_user_id == person.user_id,
+            )
+        ).scalars():
+            costay.clear_share(other)
+            other.room_sharing = RoomSharingChoice.SEPARATE_ROOM
+
+    queued: list[int] = []
+    if payload.share_with_user_id is None:
+        release(traveller)
+        costay.clear_share(traveller)
+        traveller.room_sharing = RoomSharingChoice.SEPARATE_ROOM
+        summary = f"{actor.full_name} gave {traveller.user.full_name} a room of their own on request {row.id}"
+    else:
+        colleague = db.get(User, payload.share_with_user_id)
+        if colleague is None or colleague.tenant_id != actor.tenant_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="That colleague was not found.")
+        if not costay.may_share_room(traveller.user.gender, colleague.gender):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="These two travellers cannot share a room - shared rooms are for the same gender only.",
+            )
+        match = next(
+            (
+                m
+                for m in costay.find_matches(
+                    db,
+                    tenant_id=actor.tenant_id,
+                    for_user=traveller.user,
+                    city=row.hotel_city or "",
+                    check_in=row.check_in,
+                    check_out=row.check_out,
+                    exclude_request_id=row.id,
+                )
+                if m.user_id == colleague.id
+            ),
+            None,
+        )
+        if match is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{colleague.full_name} is not staying in {row.hotel_city} on any of these nights.",
+            )
+        other = costay.live_stay(db, user_id=colleague.id, request_id=match.request_id)
+        if other is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{colleague.full_name}'s stay is no longer live.",
+            )
+        if (
+            other.room_sharing is RoomSharingChoice.SHARE_EXISTING
+            and other.share_confirmed_at is not None
+            and other.share_with_user_id not in (None, traveller.user_id)
+        ):
+            busy = db.get(User, other.share_with_user_id)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{colleague.full_name} already shares a room with {busy.full_name if busy else 'someone else'}.",
+            )
+        if traveller.share_with_user_id not in (None, colleague.id):
+            release(traveller)
+        costay.pair(traveller, other, confirmed_by=actor)
+        db.flush()
+        for person, partner in ((traveller, colleague), (other, traveller.user)):
+            stay = row if person is traveller else db.get(TravelRequest, match.request_id)
+            queued += svc.queued_emails(
+                costay.notify_shared_room(
+                    db, tenant_id=actor.tenant_id, traveller=person, partner=partner,
+                    request=stay, admin=actor,
+                )
+            )
+        summary = (
+            f"{actor.full_name} put {traveller.user.full_name} and {colleague.full_name} "
+            f"in one room in {row.hotel_city} (requests {row.id} and {match.request_id})"
+        )
+
+    audit.record(
+        db,
+        action=AuditAction.UPDATE,
+        entity_type="request_traveller",
+        entity_id=traveller.id,
+        summary=summary,
+        changes={
+            "room_sharing": {"from": before["room_sharing"], "to": str(traveller.room_sharing)},
+            "share_with": {
+                "from": before["share_with"],
+                "to": traveller.share_with.full_name if traveller.share_with else None,
+            },
+        },
+        tenant_id=actor.tenant_id,
+        actor=actor,
+        request=http_request,
+    )
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, actor)
 
 
 # ---------------------------------------------------------------------------

@@ -90,21 +90,31 @@ def find_matches(
     tenant_id: str,
     for_user: User,
     city: str,
-    check_in: date,
+    check_in: date | None,
     check_out: date | None,
     exclude_request_id: int | None = None,
+    upcoming_from: date | None = None,
 ) -> list[CoStayMatch]:
     """Colleagues this person could be offered a shared room with.
 
     Already filtered by the gender policy, so the caller never sees a candidate
     it must then reject - and never learns that one existed.
+
+    Without dates yet, `upcoming_from` lists everyone of the same gender with a
+    stay in that city still to come (or under way) - so the form can say who is
+    there as soon as a city is picked, and the dates can be lined up. Those
+    carry no nights in common until dates are given.
     """
-    if not city or check_in is None:
+    if not city:
+        return []
+    if check_in is None and upcoming_from is None:
         return []
 
-    out = check_out or date.fromordinal(check_in.toordinal() + 1)
-    if out <= check_in:
-        out = date.fromordinal(check_in.toordinal() + 1)
+    out = None
+    if check_in is not None:
+        out = check_out or date.fromordinal(check_in.toordinal() + 1)
+        if out <= check_in:
+            out = date.fromordinal(check_in.toordinal() + 1)
 
     rows = db.execute(
         select(RequestTraveller, TravelRequest, User)
@@ -141,9 +151,15 @@ def find_matches(
         if their_out <= their_in:
             their_out = date.fromordinal(their_in.toordinal() + 1)
 
-        nights = _overlap_nights(check_in, out, their_in, their_out)
-        if nights <= 0:
-            continue
+        if check_in is None:
+            # No dates yet: anyone still to check out counts, nights unknown.
+            if their_out <= upcoming_from:
+                continue
+            nights = 0
+        else:
+            nights = _overlap_nights(check_in, out, their_in, their_out)
+            if nights <= 0:
+                continue
 
         seen.add(colleague.id)
         matches.append(
@@ -161,7 +177,8 @@ def find_matches(
         )
 
     # Most nights in common first: that is the pairing worth the admin's time.
-    matches.sort(key=lambda m: (-m.overlapping_nights, m.full_name))
+    # Without dates, the soonest stay first.
+    matches.sort(key=lambda m: (-m.overlapping_nights, m.check_in, m.full_name))
     return matches
 
 
@@ -222,3 +239,58 @@ def clear_share(traveller: RequestTraveller) -> None:
     traveller.share_with_user_id = None
     traveller.share_confirmed_by_id = None
     traveller.share_confirmed_at = None
+
+
+def live_stay(db: Session, *, user_id: int, request_id: int) -> RequestTraveller | None:
+    """That person's live traveller row on that hotel request, if any."""
+    return db.execute(
+        select(RequestTraveller).where(
+            RequestTraveller.request_id == request_id,
+            RequestTraveller.user_id == user_id,
+            RequestTraveller.status.in_(ACTIVE_TRAVELLER_STATUSES),
+        )
+    ).scalars().first()
+
+
+def pair(a: RequestTraveller, b: RequestTraveller, *, confirmed_by: User | None) -> None:
+    """Put two travellers in one room, each pointing at the other.
+
+    With `confirmed_by`, the pairing is signed off (an admin allotting it);
+    without, it is a requester's ask that still waits for an admin.
+    """
+    from app.models.base import naive_utcnow
+
+    for mine, theirs in ((a, b), (b, a)):
+        mine.room_sharing = RoomSharingChoice.SHARE_EXISTING
+        mine.share_with_user_id = theirs.user_id
+        mine.share_confirmed_by_id = confirmed_by.id if confirmed_by else None
+        mine.share_confirmed_at = naive_utcnow() if confirmed_by else None
+
+
+def notify_shared_room(
+    db: Session, *, tenant_id: str, traveller: RequestTraveller, partner: User,
+    request: TravelRequest, admin: User,
+) -> list:
+    """Tell one traveller who they will share a room with. Returns the rows."""
+    person = traveller.user
+    if person is None:
+        return []
+    where = request.hotel_city or "the hotel"
+    when = f"{request.check_in:%d %b} to {request.check_out:%d %b %Y}" if request.check_out else f"from {request.check_in:%d %b %Y}"
+    short = (
+        f"You will share a room with {partner.full_name} in {where}, {when}. "
+        f"Arranged by {admin.full_name}."
+    )
+    return notifications.notify(
+        db,
+        tenant_id=tenant_id,
+        user=person,
+        kind="COSTAY_CONFIRMED",
+        title=f"Shared room with {partner.full_name}",
+        body=short,
+        request_id=request.id,
+        email_subject=f"Room sharing confirmed - {where}",
+        email_body=f"Hello {person.full_name.split()[0]},\n\n{short}\n\nTell your admin if this does not work for you.",
+        deliver_now=False,
+    )
+

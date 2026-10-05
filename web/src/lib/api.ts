@@ -72,7 +72,7 @@ import type {
  * shell compares it with what /health reports, to tell an admin when the API
  * process is older than this page.
  */
-export const API_VERSION = '0.14.0';
+export const API_VERSION = '0.15.0';
 
 /** Negative when `a` is older than `b`, by dotted number. */
 export function compareVersions(a: string, b: string): number {
@@ -571,6 +571,10 @@ export interface RequestPayload {
   priority?: RequestPriority;
   notes?: string | null;
   is_draft?: boolean;
+  /** A new hotel request only: the requester's own room. Left out, the admin
+   *  decides; a shared room is an ask until an admin confirms it. */
+  room_sharing?: RoomSharingChoice | null;
+  share_with_user_id?: number | null;
 }
 
 export const fetchRequests = (params: RequestQuery) =>
@@ -599,6 +603,24 @@ export const fetchRevisions = (id: number) =>
 export const checkRequest = (payload: RequestPayload & { request_id?: number }) =>
   api
     .post<{ conflicts: RequestConflict[]; costay_matches: CoStayMatch[] }>('/requests/check', payload)
+    .then((r) => r.data);
+
+/** Colleagues of the caller's gender staying in a city, from the moment the city
+ *  is picked: with dates, the stays that overlap; without, every stay to come. */
+export const fetchRoomMatches = (params: {
+  city: string;
+  check_in?: string;
+  check_out?: string;
+  request_id?: number;
+}) => api.get<CoStayMatch[]>('/requests/room-matches', { params }).then((r) => r.data);
+
+/** An admin puts a hotel traveller in one room with a colleague, or - with
+ *  null - in a room of their own. Both sides of a pairing are updated. */
+export const allotRoom = (requestId: number, travellerId: number, shareWithUserId: number | null) =>
+  api
+    .post<TravelRequest>(`/requests/${requestId}/travellers/${travellerId}/room`, {
+      share_with_user_id: shareWithUserId,
+    })
     .then((r) => r.data);
 
 export const setRoomSharing = (
@@ -744,6 +766,13 @@ export const discardTicket = (ticketId: number) =>
  *  the document carries a PNR and a passenger name. */
 export const fetchTicketFile = (ticketId: number) =>
   api.get(`/tickets/${ticketId}/file`, { responseType: 'blob' }).then((r) => r.data as Blob);
+
+/** A traveller's own confirmed ticket, for them (or the person who asked for
+ *  the trip) to keep. */
+export const fetchMyTicket = (requestId: number, travellerId: number) =>
+  api
+    .get(`/requests/${requestId}/travellers/${travellerId}/ticket`, { responseType: 'blob' })
+    .then((r) => r.data as Blob);
 
 // --- the notification ledger ----------------------------------------------
 

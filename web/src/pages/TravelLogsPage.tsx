@@ -22,7 +22,14 @@ import toast from 'react-hot-toast';
 import { useSearchParams } from 'react-router-dom';
 
 import { Combobox } from '@/components/Combobox';
-import { CityField, peopleChoices, stateChange } from '@/components/ReportFilters';
+import {
+  CityField,
+  DepartmentSelect,
+  departmentChange,
+  departmentParam,
+  peopleChoices,
+  stateChange,
+} from '@/components/ReportFilters';
 import {
   DateRangePicker,
   PRESET_LABELS,
@@ -221,6 +228,7 @@ export default function TravelLogsPage() {
       : rangeFor(PRESET_LABELS[preset] ? preset : 'last_month');
   const userId = params.get('user') ? Number(params.get('user')) : undefined;
   const projectId = params.get('campaign') ? Number(params.get('campaign')) : undefined;
+  const departmentId = departmentParam(params.get('department'));
   const requestType = (params.get('type') as RequestType) || undefined;
   const state = params.get('state') || '';
   const city = params.get('city') || '';
@@ -255,13 +263,14 @@ export default function TravelLogsPage() {
 
   const options = useQuery({ queryKey: ['filter-options'], queryFn: fetchFilterOptions });
 
-  const person = peopleChoices(options.data, userId);
+  const person = peopleChoices(options.data, userId, departmentId);
 
   const filters = {
     since: range.since || undefined,
     until: range.until || undefined,
     user_id: userId,
     project_id: projectId,
+    department_id: departmentId,
     request_type: requestType,
     state: state || undefined,
     city: city || undefined,
@@ -283,9 +292,16 @@ export default function TravelLogsPage() {
     placeholderData: keepPreviousData,
   });
 
-  const activeCount = [userId, projectId, requestType, state, city, search, statusKey !== DEFAULT_STATUS].filter(
-    Boolean,
-  ).length;
+  const activeCount = [
+    userId,
+    projectId,
+    departmentId !== undefined,
+    requestType,
+    state,
+    city,
+    search,
+    statusKey !== DEFAULT_STATUS,
+  ].filter(Boolean).length;
   const filtersActive = activeCount > 0;
   const rangeLabel = describeRange(range);
   const heading = person.name ? `${person.name} · ${rangeLabel}` : rangeLabel;
@@ -391,6 +407,14 @@ export default function TravelLogsPage() {
                 </option>
               ))}
             </Select>
+          </Field>
+          <Field label="Department" htmlFor="log-department">
+            <DepartmentSelect
+              id="log-department"
+              options={options.data}
+              value={departmentId}
+              onChange={(next) => update(departmentChange(options.data, userId, next))}
+            />
           </Field>
           <Field label="Search" htmlFor="log-search">
             <form

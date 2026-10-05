@@ -44,6 +44,7 @@ import { CancellationAsks } from '@/components/CancellationAsks';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
 import { ConflictList } from '@/components/RequestForm';
+import { RoomAllotment } from '@/components/RoomSharing';
 import CostPanel from '@/components/CostPanel';
 import TicketPanel from '@/components/TicketPanel';
 import { VendorSelect, sharedVendor } from '@/components/VendorSelect';
@@ -1235,6 +1236,15 @@ export default function ApprovalsPage() {
                         {(traveller.manager_recommendation || traveller.manager_name) && (
                           <div className="order-last basis-full">
                             <ManagerReview traveller={traveller} />
+                          </div>
+                        )}
+                        {request.request_type === 'HOTEL' && (
+                          <div className="order-last basis-full empty:hidden">
+                            <RoomAllotment
+                              request={request}
+                              traveller={traveller}
+                              onChanged={refresh}
+                            />
                           </div>
                         )}
 
