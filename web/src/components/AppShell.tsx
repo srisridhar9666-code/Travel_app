@@ -23,7 +23,7 @@ import {
   UsersRound,
   X,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 
@@ -124,11 +124,35 @@ function badgeText(count: number) {
   return count > 99 ? '99+' : String(count);
 }
 
+/**
+ * Mirrors the theme choice to the server so it follows the user to another
+ * device. A component of its own, so a theme switch re-renders only this and
+ * the toggle - never the page under the shell, which on a phone held the new
+ * colours up. The saved user is not written back for the same reason; the next
+ * profile read brings it. Failure is silent - the local choice still applies.
+ */
+function ThemeSync() {
+  const preference = useTheme((s) => s.preference);
+  const saved = useAuth((s) => s.user?.theme_preference);
+  // What the server holds, as far as this tab knows.
+  const onServer = useRef(saved);
+  useEffect(() => {
+    onServer.current = saved;
+  }, [saved]);
+  useEffect(() => {
+    if (saved === undefined || preference === onServer.current) return;
+    onServer.current = preference;
+    saveThemePreference(preference).catch(() => {
+      onServer.current = undefined;
+    });
+  }, [preference, saved]);
+  return null;
+}
+
 export default function AppShell() {
   const location = useLocation();
   const user = useAuth((s) => s.user);
   const signOut = useAuth((s) => s.signOut);
-  const preference = useTheme((s) => s.preference);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Desktop only: the sidebar folded down to an icon rail.
   const [rail, setRail] = useState(() => readPref(RAIL_KEY) === '1');
@@ -169,16 +193,6 @@ export default function AppShell() {
       document.body.style.overflow = previous;
     };
   }, [drawerOpen]);
-
-  // Mirror the theme choice to the server so it follows the user to another
-  // device. Failure here is deliberately silent - the local choice still applies.
-  useEffect(() => {
-    if (!user) return;
-    if (user.theme_preference === preference) return;
-    saveThemePreference(preference)
-      .then((updated) => useAuth.getState().setUser(updated))
-      .catch(() => undefined);
-  }, [preference, user]);
 
   // The copy of the user saved at sign-in goes stale: an admin may rename
   // them, change their role or department, or switch the account off. Reading
@@ -462,6 +476,7 @@ export default function AppShell() {
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
             <NotificationBell />
             <ThemeToggle />
+            <ThemeSync />
           </div>
         </header>
 

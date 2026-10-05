@@ -36,10 +36,13 @@ from app.core.enums import (
     ALLOWED_TRAVELLER_TRANSITIONS,
     AuditAction,
     RequestType,
+    TicketStatus,
     TravellerStatus,
 )
+from app.config import get_settings
 from app.models.base import naive_utcnow
 from app.models.request import RequestTraveller, TravelRequest
+from app.models.ticket import TicketDocument
 from app.models.user import User
 from app.services import audit, conflicts, notifications, recommendations
 from app.services.requests import RIDING
@@ -70,6 +73,9 @@ class Decision:
     booking_reference: str | None = None
     booking_details: dict | None = None
     conflict_override_reason: str | None = None
+    #: Booking only: the uploaded ticket this booking is from. It is confirmed
+    #: with the booking and goes to the traveller attached to their email.
+    ticket_id: int | None = None
 
 
 #: How each booking detail reads in an email, in order.
@@ -88,8 +94,10 @@ _DETAIL_LABELS = (
 def booking_lines(traveller: RequestTraveller) -> list[str]:
     """The traveller's booking as lines for an email: reference first."""
     lines = []
+    # One column for every label, the longest included, so values line up.
+    width = max(len(label) for _, label in _DETAIL_LABELS) + 2
     if traveller.booking_reference:
-        lines.append(f"  Booking reference   {traveller.booking_reference}")
+        lines.append(f"  {'Booking reference':<{width}}{traveller.booking_reference}")
     for key, label in _DETAIL_LABELS:
         value = (traveller.booking_details or {}).get(key)
         if not value:
@@ -99,7 +107,7 @@ def booking_lines(traveller: RequestTraveller) -> list[str]:
                 value = clock.time_label(datetime.fromisoformat(value))
             except ValueError:
                 pass
-        lines.append(f"  {label:<20}{value}")
+        lines.append(f"  {label:<{width}}{value}")
     return lines
 
 
@@ -160,6 +168,7 @@ def _notify(
     target: TravellerStatus,
     reason: str | None,
     actor: User | None = None,
+    attachment: notifications.AttachedFile | None = None,
 ) -> None:
     """Tell the traveller what happened to them, with their manager copied.
 
@@ -192,7 +201,8 @@ def _notify(
     if car:
         short += f" Your cab: {car}."
     if reason:
-        short += f" Reason: {reason}"
+        # A booking's sentence is a note from the desk, not a justification.
+        short += f" Note: {reason}" if target is TravellerStatus.BOOKED else f" Reason: {reason}"
 
     greeting = person.full_name.split()[0] if person.full_name else "there"
     detail = [f"Hello {greeting},", "", short]
@@ -212,6 +222,13 @@ def _notify(
         booked = booking_lines(traveller)
         if booked:
             detail += ["", "Your booking:", *booked]
+        if attachment is not None:
+            link = f"{get_settings().frontend_base_url.rstrip('/')}/requests"
+            detail += [
+                "",
+                "Your ticket is attached to this email. You can also download it "
+                f"any time from My requests: {link}",
+            ]
     if request.project:
         detail += ["", f"Campaign: {request.project.code} - {request.project.name}"]
     if manager is not None:
@@ -228,12 +245,13 @@ def _notify(
         email_subject=f"Travel request {_VERB[target]} - {where}",
         email_body="\n".join(detail),
         cc_users=[manager] if manager is not None else None,
+        attachment=attachment,
     )
 
     by = f" by {actor.full_name}" if actor is not None else ""
     copy = f"{person.full_name}'s {kind_of_trip} request for {where} was {_VERB[target]}{by}."
     if reason:
-        copy += f" Reason: {reason}"
+        copy += f" Note: {reason}" if target is TravellerStatus.BOOKED else f" Reason: {reason}"
     copy_manager(
         db,
         tenant_id=tenant_id,
@@ -286,6 +304,13 @@ def apply(
     target = decision.to_status
     previous = traveller.status
     assert_transition(previous, target)
+    # Checked before anything about the traveller changes.
+    ticket = (
+        ticket_for_booking(db, decision.ticket_id, request=request, traveller=traveller,
+                           tenant_id=tenant_id)
+        if target is TravellerStatus.BOOKED and decision.ticket_id is not None
+        else None
+    )
 
     # Every decision costs a sentence, not just a rejection. An approval with no
     # reason is the one someone asks about six months later, and the answer
@@ -341,10 +366,16 @@ def apply(
     traveller.decided_by_id = actor.id
     traveller.decided_at = naive_utcnow()
     traveller.decision_reason = (decision.reason or "").strip() or None
+    attachment = None
     if target is TravellerStatus.BOOKED:
         traveller.booking_reference = decision.booking_reference.strip()
         if decision.booking_details:
             traveller.booking_details = decision.booking_details
+        if ticket is not None:
+            attachment = confirm_ticket_for_booking(
+                db, ticket, traveller=traveller, actor=actor, tenant_id=tenant_id,
+                http_request=http_request,
+            )
 
     audit.record(
         db,
@@ -373,6 +404,92 @@ def apply(
             target=target,
             reason=traveller.decision_reason,
             actor=actor,
+            attachment=attachment,
         )
     db.flush()
     return traveller
+
+
+def ticket_for_booking(
+    db: Session,
+    ticket_id: int,
+    *,
+    request: TravelRequest,
+    traveller: RequestTraveller,
+    tenant_id: str,
+) -> TicketDocument:
+    """The uploaded ticket a booking is to be made from: this traveller's, on
+    this request, and not thrown away."""
+    ticket = db.get(TicketDocument, ticket_id)
+    if (
+        ticket is None
+        or ticket.tenant_id != tenant_id
+        or ticket.request_id != request.id
+        or ticket.traveller_id != traveller.id
+    ):
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"That ticket is not one uploaded for {traveller.user.full_name} on this request.",
+        )
+    if ticket.status is TicketStatus.DISCARDED:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="That ticket was discarded. Upload it again to book with it.",
+        )
+    return ticket
+
+
+def confirm_ticket_for_booking(
+    db: Session,
+    ticket: TicketDocument,
+    *,
+    traveller: RequestTraveller,
+    actor: User,
+    tenant_id: str,
+    http_request=None,
+) -> notifications.AttachedFile | None:
+    """Confirm the ticket a booking was made from, and return it as the file to
+    send with the traveller's email.
+
+    The admin's reference and details are the final word: the model proposed,
+    a person checked. What the model read is kept beside them on the ticket, so
+    a later question can tell a misread from a correction. Confirmed, the ticket
+    is the one the traveller downloads from My requests.
+    """
+    reference = traveller.booking_reference or ""
+    details = traveller.booking_details or {}
+    ticket.status = TicketStatus.CONFIRMED
+    ticket.confirmed_by_id = actor.id
+    ticket.confirmed_at = naive_utcnow()
+    ticket.confirmed_reference = reference
+    if details.get("carrier"):
+        ticket.carrier = str(details["carrier"])[:120]
+    if details.get("service_number"):
+        ticket.service_number = str(details["service_number"])[:60]
+
+    corrected = (ticket.booking_reference or "") != reference
+    audit.record(
+        db,
+        action=AuditAction.BOOK,
+        entity_type="ticket_document",
+        entity_id=ticket.id,
+        summary=(
+            f"{actor.full_name} booked {traveller.user.full_name} with ticket {ticket.id} "
+            f"as {reference}" + (" (corrected from the extraction)" if corrected else "")
+        ),
+        changes={
+            "proposed_reference": ticket.booking_reference,
+            "confirmed_reference": reference,
+            "corrected_by_hand": corrected,
+        },
+        tenant_id=tenant_id,
+        actor=actor,
+        request=http_request,
+    )
+    if not ticket.file_path:
+        return None
+    return notifications.AttachedFile(
+        path=ticket.file_path,
+        name=ticket.file_name or "ticket",
+        content_type=ticket.content_type,
+    )

@@ -620,7 +620,8 @@ def _confirmation_body(ticket: TicketDocument, request: TravelRequest, name: str
     link = f"{get_settings().frontend_base_url.rstrip('/')}/requests"
     lines += [
         "",
-        f"Your ticket is on My requests - open the trip and choose Download ticket: {link}",
+        "Your ticket is attached to this email. You can also download it any time "
+        f"from My requests: {link}",
         "Carry photo ID that matches the name on the booking.",
     ]
     return "\n".join(lines)
@@ -661,6 +662,15 @@ def _send_confirmation(
         # The same Cc as every other decision on this traveller: their manager
         # sees the booking land.
         cc_users=[person.active_manager] if person.active_manager is not None else None,
+        attachment=(
+            notifications.AttachedFile(
+                path=ticket.file_path,
+                name=ticket.file_name or "ticket",
+                content_type=ticket.content_type,
+            )
+            if ticket.file_path
+            else None
+        ),
     )
 
     decisions.copy_manager(

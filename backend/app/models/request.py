@@ -514,6 +514,11 @@ class Notification(Base):
     #: on a decision. Resolved when the row is written, like `to_address`.
     cc_addresses: Mapped[str | None] = mapped_column(String(500), nullable=True)
     subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: A file sent with the email - the traveller's ticket - kept as its storage
+    #: path and read when the message goes, so a retry sends it too.
+    attachment_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    attachment_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attachment_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     #: Why it did not go. Truncated: an SMTP refusal can be paragraphs long.

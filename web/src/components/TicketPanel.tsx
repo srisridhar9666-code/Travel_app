@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
-  CheckCircle2,
   Eye,
   FileWarning,
   RefreshCw,
   Sparkles,
+  Ticket as TicketIcon,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -13,9 +13,8 @@ import { useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { Badge, Button, Field, Input, Skeleton } from '@/components/ui';
+import { Badge, Button, Skeleton } from '@/components/ui';
 import {
-  confirmTicket,
   discardTicket,
   fetchTicketFile,
   fetchTickets,
@@ -112,9 +111,16 @@ function ExtractedFields({ ticket }: { ticket: Ticket }) {
   );
 }
 
-function TicketCard({ ticket, onChanged }: { ticket: Ticket; onChanged: () => void }) {
-  const [reference, setReference] = useState(ticket.booking_reference ?? '');
-  const [notify, setNotify] = useState(true);
+function TicketCard({
+  ticket,
+  onChanged,
+  onBook,
+}: {
+  ticket: Ticket;
+  onChanged: () => void;
+  /** Opens the booking window with this ticket - for an approved traveller. */
+  onBook?: () => void;
+}) {
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
 
   // Through the API rather than a link: the document carries a PNR and a
@@ -123,20 +129,6 @@ function TicketCard({ ticket, onChanged }: { ticket: Ticket; onChanged: () => vo
     mutationFn: (tab: Window | null) =>
       showFile(tab, () => fetchTicketFile(ticket.id), ticket.file_name ?? 'ticket'),
     meta: { errorFallback: 'Could not open the ticket.' },
-  });
-
-  const confirm = useMutation({
-    mutationFn: () =>
-      confirmTicket(ticket.id, {
-        booking_reference: reference.trim(),
-        carrier: ticket.carrier,
-        service_number: ticket.service_number,
-        notify,
-      }),
-    onSuccess: () => {
-      toast.success(notify ? 'Booked — the traveller has been told' : 'Booked, no notice sent');
-      onChanged();
-    },
   });
 
   const reread = useMutation({
@@ -197,7 +189,7 @@ function TicketCard({ ticket, onChanged }: { ticket: Ticket; onChanged: () => vo
           </p>
           <p className="mt-1 text-2xs text-text-muted">{ticket.extraction_error}</p>
           <p className="mt-1.5 text-2xs text-text-subtle">
-            Read it again, or discard it and mark the booking by hand from the traveller row.
+            Read it again, or use Mark booked and type the details - the file is still sent to the traveller.
           </p>
         </div>
       )}
@@ -224,75 +216,23 @@ function TicketCard({ ticket, onChanged }: { ticket: Ticket; onChanged: () => vo
           {ticket.needs_review.length > 0 && ticket.status === 'EXTRACTED' && (
             <p className="mt-2 text-2xs text-warning">
               The model was unsure about{' '}
-              {ticket.needs_review.map((f) => TICKET_FIELD_LABELS[f] ?? f).join(', ')}. Read the
-              document before confirming.
+              {ticket.needs_review.map((f) => TICKET_FIELD_LABELS[f] ?? f).join(', ')}. Check them
+              against the document when you mark the booking.
             </p>
           )}
         </div>
       )}
 
-      {ticket.status === 'EXTRACTED' && (
-        <div className="mt-3 border-t border-border pt-3">
-          {/* Addendum B3: the extraction pre-fills this, it does not save it.
-              A person types or accepts the reference that gets booked. */}
-          <Field
-            label="Confirm the reference to book"
-            htmlFor={`ref-${ticket.id}`}
-            required
-            hint="Pre-filled from the document. Correct it if the model misread."
-          >
-            <Input
-              id={`ref-${ticket.id}`}
-              value={reference}
-              onChange={(e) => setReference(e.target.value)}
-              className="font-mono"
-            />
-          </Field>
-
-          <label className="mt-2 flex items-center gap-2 text-2xs text-text-muted">
-            <input
-              type="checkbox"
-              checked={notify}
-              onChange={(e) => setNotify(e.target.checked)}
-              className="h-3.5 w-3.5 accent-[rgb(var(--primary))]"
-            />
-            Email the traveller their confirmation
-          </label>
-
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              loading={confirm.isPending}
-              disabled={reference.trim().length < 2}
-              onClick={() => confirm.mutate()}
-            >
-              <CheckCircle2 size={13} />
-              Confirm and book
+      {(ticket.status === 'EXTRACTED' || ticket.status === 'FAILED') && (
+        <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
+          {/* One way to book: the booking window, where the admin checks the
+              details this ticket gives and the traveller is emailed with it. */}
+          {onBook && (
+            <Button size="sm" onClick={onBook}>
+              <TicketIcon size={13} />
+              Mark booked with this ticket
             </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              loading={reread.isPending}
-              onClick={() => reread.mutate()}
-            >
-              <RefreshCw size={13} />
-              Read again
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              loading={discard.isPending}
-              onClick={() => setConfirmingDiscard(true)}
-            >
-              <Trash2 size={13} />
-              Discard
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {ticket.status === 'FAILED' && (
-        <div className="mt-3 flex flex-wrap gap-2">
+          )}
           <Button size="sm" variant="secondary" loading={reread.isPending} onClick={() => reread.mutate()}>
             <RefreshCw size={13} />
             Read again
@@ -342,10 +282,13 @@ export default function TicketPanel({
   requestId,
   travellers,
   onChanged,
+  onBook,
 }: {
   requestId: number;
   travellers: RequestTraveller[];
   onChanged: () => void;
+  /** Opens the booking window for a traveller, with their ticket. */
+  onBook?: (traveller: RequestTraveller) => void;
 }) {
   const queryClient = useQueryClient();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -370,7 +313,7 @@ export default function TicketPanel({
       if (ticket.status === 'FAILED') {
         toast.error('Uploaded, but the ticket could not be read — enter the details by hand');
       } else {
-        toast.success('Uploaded and read — check the fields before confirming');
+        toast.success('Uploaded and read — use Mark booked to check the details and book');
       }
       refresh();
     },
@@ -432,7 +375,16 @@ export default function TicketPanel({
         rows.map((ticket) => (
           <div key={ticket.id}>
             <p className="mb-1 text-2xs text-text-subtle">{ticket.traveller_name}</p>
-            <TicketCard ticket={ticket} onChanged={refresh} />
+            <TicketCard
+              ticket={ticket}
+              onChanged={refresh}
+              onBook={(() => {
+                const traveller = travellers.find((t) => t.id === ticket.traveller_id);
+                return onBook && traveller?.status === 'APPROVED'
+                  ? () => onBook(traveller)
+                  : undefined;
+              })()}
+            />
           </div>
         ))
       )}

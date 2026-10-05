@@ -32,19 +32,10 @@ export const EMPTY_BOOKING: BookingDraft = {
 const localInput = (iso: string | null | undefined) => (iso ? iso.slice(0, 16) : '');
 
 /**
- * The newest ticket uploaded for this traveller - confirmed first, else the
- * latest one read - as a draft, with the reference it carries. What the admin
- * types over it wins; this only saves retyping what the ticket already says.
+ * What an uploaded ticket says, as a booking draft with its reference. The
+ * admin checks it before saving; it only saves retyping what the ticket shows.
  */
-export function draftFromTicket(
-  tickets: Ticket[],
-  travellerId: number,
-): { draft: BookingDraft; reference: string } | null {
-  const mine = tickets.filter((t) => t.traveller_id === travellerId && t.status !== 'DISCARDED');
-  const ticket =
-    mine.find((t) => t.status === 'CONFIRMED') ??
-    [...mine].sort((a, b) => b.id - a.id).find((t) => t.booking_reference || t.carrier || t.hotel_name);
-  if (!ticket) return null;
+export function draftOfTicket(ticket: Ticket): { draft: BookingDraft; reference: string } {
   const stay = [ticket.check_in, ticket.check_out].filter(Boolean).join(' to ');
   return {
     reference: ticket.booking_reference ?? '',
@@ -58,6 +49,26 @@ export function draftFromTicket(
       notes: stay ? `Stay ${stay}` : '',
     },
   };
+}
+
+/** The ticket to book a traveller with: the newest one uploaded for them that
+ *  has not been thrown away. */
+export function ticketToBookWith(tickets: Ticket[], travellerId: number): Ticket | null {
+  return (
+    [...tickets]
+      .filter((t) => t.traveller_id === travellerId && t.status !== 'DISCARDED')
+      .sort((a, b) => b.id - a.id)[0] ?? null
+  );
+}
+
+/** A draft with every field the ticket read laid over it: an admin who has
+ *  just uploaded a ticket wants what it says. */
+export function withTicket(current: BookingDraft, fromTicket: BookingDraft): BookingDraft {
+  const next = { ...current };
+  for (const [key, value] of Object.entries(fromTicket) as [keyof BookingDraft, string][]) {
+    if (value.trim()) next[key] = value;
+  }
+  return next;
 }
 
 /** The draft as the API takes it: blanks dropped, nothing at all as null. */

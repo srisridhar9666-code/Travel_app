@@ -72,7 +72,7 @@ import type {
  * shell compares it with what /health reports, to tell an admin when the API
  * process is older than this page.
  */
-export const API_VERSION = '0.15.0';
+export const API_VERSION = '0.16.0';
 
 /** Negative when `a` is older than `b`, by dotted number. */
 export function compareVersions(a: string, b: string): number {
@@ -754,11 +754,6 @@ export const reextractTicket = (ticketId: number) =>
   api.post<Ticket>(`/tickets/${ticketId}/extract`, null, { timeout: 120_000 }).then((r) => r.data);
 
 /** The only path to BOOKED. Nothing reaches a traveller before this. */
-export const confirmTicket = (
-  ticketId: number,
-  body: { booking_reference: string; carrier?: string | null; service_number?: string | null; notify?: boolean },
-) => api.post<Ticket>(`/tickets/${ticketId}/confirm`, body).then((r) => r.data);
-
 export const discardTicket = (ticketId: number) =>
   api.post<Ticket>(`/tickets/${ticketId}/discard`).then((r) => r.data);
 

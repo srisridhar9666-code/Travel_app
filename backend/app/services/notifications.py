@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import timedelta
 
 from sqlalchemy import and_, or_, select
@@ -46,7 +47,7 @@ from app.models.base import naive_utcnow
 from app.models.preference import NotificationPreference
 from app.models.request import Notification
 from app.models.user import User
-from app.services import email
+from app.services import email, storage
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +60,21 @@ MAX_ATTEMPTS = 3
 STRANDED_AFTER = timedelta(minutes=5)
 
 
+@dataclass(frozen=True)
+class AttachedFile:
+    """A stored file to send with an email - a traveller's ticket."""
+
+    path: str
+    name: str
+    content_type: str | None = None
+
+
 def _send_email(
-    to_address: str, subject: str, body: str, cc: list[str] | None = None
+    to_address: str,
+    subject: str,
+    body: str,
+    cc: list[str] | None = None,
+    attachments: list[email.Attachment] | None = None,
 ) -> email.Sent:
     """Late-bound on purpose.
 
@@ -70,12 +84,15 @@ def _send_email(
     would silently ignore the swap, which is exactly the kind of bug that lets a
     test suite send real mail.
 
-    `cc` is passed only when there is someone to copy, so a stand-in transport
-    written for the plain three-argument call keeps working.
+    `cc` and `attachments` are passed only when there is something to pass, so
+    a stand-in transport written for the plain three-argument call keeps working.
     """
+    extra: dict = {}
     if cc:
-        return email.send(to_address, subject, body, cc=cc)
-    return email.send(to_address, subject, body)
+        extra["cc"] = cc
+    if attachments:
+        extra["attachments"] = attachments
+    return email.send(to_address, subject, body, **extra)
 
 
 #: Channel -> transport. The one place to add SMS. Each takes the address,
@@ -125,6 +142,7 @@ def notify(
     dedupe_key: str | None = None,
     deliver_now: bool = True,
     cc_users: list[User] | None = None,
+    attachment: AttachedFile | None = None,
 ) -> list[Notification]:
     """Record a notice and try to deliver it.
 
@@ -144,6 +162,9 @@ def notify(
     Only active people with an address are copied, and only on a message that
     goes at all: the email is the recipient's, so their preferences decide it.
     Anything the people copied should see in the app is the caller's to write.
+
+    `attachment` goes with the email only - a ticket file, read from storage
+    when the message is sent.
     """
     category = category_of(kind)
 
@@ -192,6 +213,9 @@ def notify(
             cc_addresses=_cc_line(user, cc_users),
             subject=(email_subject or title)[:255],
             dedupe_key=dedupe_key,
+            attachment_path=attachment.path if attachment else None,
+            attachment_name=(attachment.name[:255] if attachment else None),
+            attachment_type=(attachment.content_type if attachment else None),
         )
         db.add(mail)
         db.flush()
@@ -256,12 +280,27 @@ def deliver(notification: Notification) -> Notification:
         return notification   # in-app, or a channel with no transport yet
 
     notification.attempts += 1
-    result = sender(
+    body = notification.body
+    files: list[email.Attachment] = []
+    if notification.attachment_path:
+        try:
+            files.append(
+                email.Attachment(
+                    name=notification.attachment_name or "attachment",
+                    content_type=notification.attachment_type or "application/octet-stream",
+                    data=storage.read(notification.attachment_path),
+                )
+            )
+        except Exception:   # a missing file must not stop the message itself
+            logger.warning("Attachment for notification %s could not be read", notification.id)
+            body += "\n\n(The file could not be attached - it is on My requests in the app.)"
+    args = (
         notification.to_address or "",
         notification.subject or notification.title,
-        f"{notification.body}{_signature()}",
+        f"{body}{_signature()}",
         cc_list(notification),
     )
+    result = sender(*args, attachments=files) if files else sender(*args)
 
     if result.ok:
         notification.status = NotificationStatus.SENT

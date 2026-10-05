@@ -61,6 +61,15 @@ class Sent:
     detail: str | None = None
 
 
+@dataclass(frozen=True)
+class Attachment:
+    """A file sent with a message - a traveller's ticket."""
+
+    name: str
+    content_type: str
+    data: bytes
+
+
 @dataclass
 class Outbox:
     """Captured messages, for tests and for the dev console."""
@@ -96,7 +105,11 @@ def _may_send_to(address: str) -> bool:
 
 
 def build(
-    to_address: str, subject: str, body: str, cc: list[str] | None = None
+    to_address: str,
+    subject: str,
+    body: str,
+    cc: list[str] | None = None,
+    attachments: list[Attachment] | None = None,
 ) -> EmailMessage:
     settings = get_settings()
     message = EmailMessage()
@@ -108,6 +121,14 @@ def build(
         # is the whole of what copying someone takes.
         message["Cc"] = ", ".join(cc)
     message.set_content(body)
+    for item in attachments or []:
+        maintype, _, subtype = (item.content_type or "application/octet-stream").partition("/")
+        message.add_attachment(
+            item.data,
+            maintype=maintype or "application",
+            subtype=subtype or "octet-stream",
+            filename=item.name,
+        )
     return message
 
 
@@ -125,7 +146,14 @@ def _usable_copies(to_address: str, cc: list[str] | None) -> list[str]:
     return kept
 
 
-def send(to_address: str, subject: str, body: str, *, cc: list[str] | None = None) -> Sent:
+def send(
+    to_address: str,
+    subject: str,
+    body: str,
+    *,
+    cc: list[str] | None = None,
+    attachments: list[Attachment] | None = None,
+) -> Sent:
     """Deliver one message, or record precisely why it was not delivered.
 
     `cc` copies others in - a traveller's manager on a decision. The message
@@ -142,7 +170,8 @@ def send(to_address: str, subject: str, body: str, *, cc: list[str] | None = Non
 
     if _outbox is not None:
         _outbox.messages.append(
-            {"to": to_address, "cc": copies, "subject": subject, "body": body}
+            {"to": to_address, "cc": copies, "subject": subject, "body": body,
+             "attachments": [item.name for item in attachments or []]}
         )
         return Sent(ok=True)
 
@@ -177,7 +206,9 @@ def send(to_address: str, subject: str, body: str, *, cc: list[str] | None = Non
     try:
         with _connect(settings) as smtp:
             smtp.login(settings.smtp_username, settings.smtp_app_password)
-            smtp.send_message(build(to_address, subject, body, cc=copies))
+            smtp.send_message(
+                build(to_address, subject, body, cc=copies, attachments=attachments)
+            )
         logger.info(
             "Mail sent to %s%s: %s",
             to_address, f" (cc {', '.join(copies)})" if copies else "", subject,

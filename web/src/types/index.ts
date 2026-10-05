@@ -750,6 +750,9 @@ interface DecisionBody {
   booking_reference?: string | null;
   /** Only when marking booked. */
   booking_details?: BookingDetails | null;
+  /** Only when marking booked: the uploaded ticket the booking is from. It is
+   *  confirmed with the booking and attached to the traveller's email. */
+  ticket_id?: number | null;
   /** Mandatory when approving someone with a live clash — addendum B6. */
   conflict_override_reason?: string | null;
   /** Suppresses the email only. The in-app notice and the ledger entry are

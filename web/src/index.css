@@ -196,11 +196,3 @@
     }
   }
 }
-
-@layer utilities {
-  /* Theme swaps would otherwise flash every transitioning property at once. */
-  .theme-transition,
-  .theme-transition * {
-    transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
-  }
-}

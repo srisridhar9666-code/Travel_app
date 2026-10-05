@@ -529,11 +529,16 @@ class DecisionPayload(BaseModel):
     booking_details: BookingDetails | None = None
     conflict_override_reason: str | None = Field(default=None, max_length=500)
     notify_employee: bool = True
+    #: Only when marking booked: the uploaded ticket the booking is from. It is
+    #: confirmed with the booking and attached to the traveller's email.
+    ticket_id: int | None = None
 
     @model_validator(mode="after")
     def _target_is_a_decision(self):
         if self.to_status is TravellerStatus.PENDING:
             raise ValueError("A decision cannot put a traveller back to pending.")
+        if self.to_status is not TravellerStatus.BOOKED:
+            self.ticket_id = None
         return self
 
 
